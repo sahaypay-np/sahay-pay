@@ -39,6 +39,13 @@
   to = "/.netlify/functions/api/uploads/public/:splat"
   status = 200
 
+# Shareable OG pages (/share/*) come from the Express function too — the
+# SPA fallback would serve index.html without OG meta for crawlers.
+[[redirects]]
+  from = "/share/*"
+  to = "/.netlify/functions/api/share/:splat"
+  status = 200
+
 # Everything else is the SPA (hash-routed; static files in public/ are
 # served directly before this rule).
 [[redirects]]

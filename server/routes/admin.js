@@ -12,6 +12,7 @@
 'use strict';
 
 const express = require('express');
+const crypto = require('crypto');
 const db = require('../db');
 const { logAudit, nowIso } = require('../lib/audit');
 const {
@@ -1236,6 +1237,128 @@ router.put('/featured-brand', async (req, res, next) => {
     await db.setSetting('featured_brand_week', weekKey);
     await logAudit('admin', 'owner', 'featured_brand_set', 'settings', 'featured_brand_id', { brandProfileId, weekKey });
     res.json({ ok: true, brandProfileId, week: weekKey });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Brand verification (items 506/507) ---
+// Manual owner check of the brand's public registration details — no
+// licence or permission is involved.
+router.post('/brand-profiles/:id/verify', async (req, res, next) => {
+  try {
+    const bp = await db.get('SELECT * FROM brand_profiles WHERE id = $1', [req.params.id]);
+    if (!bp || bp.status !== 'approved') {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Only an approved brand profile can be verified.' } });
+    }
+    await db.run(
+      'UPDATE brand_profiles SET verified = 1, updated_at = $1 WHERE id = $2',
+      [nowIso(), bp.id]
+    );
+    await createNotification(
+      bp.owner_id, 'brand_verified', 'Your brand is verified',
+      `${bp.name} now shows the verified badge in the directory.`, `#/brand-directory/${bp.id}`
+    );
+    await logAudit('admin', 'owner', 'brand_verified', 'brand_profile', bp.id, {});
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Sponsored drops (items 539–543) ---
+
+router.get('/drops', async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT d.*, (SELECT COUNT(*) FROM drop_entries e WHERE e.drop_id = d.id) AS entries
+       FROM drops d ORDER BY d.created_at DESC LIMIT 100`
+    );
+    res.json({
+      drops: rows.map((r) => ({
+        id: r.id, brandProfileId: r.brand_profile_id, brandName: r.brand_name,
+        title: r.title, product: r.product, quantity: r.quantity,
+        eligibility: r.eligibility, status: r.status,
+        winnerUserId: r.winner_user_id, entries: Number(r.entries || 0),
+        createdAt: r.created_at, drawnAt: r.drawn_at,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/drops', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const title = cleanStr(body.title, 200);
+    const product = cleanStr(body.product, 300);
+    if (title.length < 3 || product.length < 2) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Title and product are required.' } });
+    }
+    const brandName = cleanStr(body.brandName, 120);
+    if (brandName.length < 2) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Brand name is required.' } });
+    }
+    let brandProfileId = null;
+    if (body.brandProfileId) {
+      const bp = await db.get('SELECT id FROM brand_profiles WHERE id = $1', [cleanStr(body.brandProfileId, 64)]);
+      if (!bp) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Brand profile not found.' } });
+      brandProfileId = bp.id;
+    }
+    const id = crypto.randomUUID();
+    await db.run(
+      `INSERT INTO drops (id, brand_profile_id, brand_name, title, product, quantity, eligibility, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8)`,
+      [
+        id, brandProfileId, brandName, title, product,
+        Math.max(1, parseInt(body.quantity, 10) || 1),
+        cleanStr(body.eligibility || '', 1000), nowIso(),
+      ]
+    );
+    await logAudit('admin', 'owner', 'drop_created', 'drop', id, { brandName, title });
+    res.status(201).json({ ok: true, dropId: id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /admin/drops/:id/draw — random draw, winner displayed by published
+// rules (item 542). Winner is picked from entries; ties/quantity > 1
+// are handled by drawing additional winners in the response.
+router.post('/drops/:id/draw', async (req, res, next) => {
+  try {
+    const drop = await db.get('SELECT * FROM drops WHERE id = $1', [req.params.id]);
+    if (!drop) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Drop not found.' } });
+    if (drop.status !== 'open') {
+      return res.status(409).json({ error: { code: 'INVALID_STATE', message: `This drop is ${drop.status}, not open.` } });
+    }
+    const { rows } = await db.query('SELECT user_id FROM drop_entries WHERE drop_id = $1', [drop.id]);
+    if (!rows.length) {
+      return res.status(409).json({ error: { code: 'INVALID_STATE', message: 'No entries yet — nothing to draw.' } });
+    }
+    // Fisher–Yates with crypto randomness; winner is the first of the
+    // shuffled entries. Multiple quantity → additional winners listed.
+    const pool = rows.map((r) => r.user_id);
+    for (let i = pool.length - 1; i > 0; i -= 1) {
+      const j = crypto.randomInt(0, i + 1);
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const winnerCount = Math.min(drop.quantity, pool.length);
+    const winners = pool.slice(0, winnerCount);
+    await db.run(
+      `UPDATE drops SET status = 'drawn', winner_user_id = $1, drawn_at = $2 WHERE id = $3`,
+      [winners[0], nowIso(), drop.id]
+    );
+    for (const winnerId of winners) {
+      await createNotification(
+        winnerId, 'drop_won', `You won the ${drop.title} drop`,
+        `You won ${drop.product} from ${drop.brandName}. The brand will contact you.`,
+        `#/drops`
+      );
+    }
+    await logAudit('admin', 'owner', 'drop_drawn', 'drop', drop.id, { winners, entries: rows.length });
+    res.json({ ok: true, winners, entries: rows.length });
   } catch (err) {
     next(err);
   }
