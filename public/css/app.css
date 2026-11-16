@@ -194,6 +194,9 @@ body.has-chrome .offline-banner{top:var(--topbar-h)}
 table.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
 .tbl th,.tbl td{padding:8px 6px;text-align:left;border-bottom:1px solid var(--border2);vertical-align:top}
 .tbl th{color:var(--ink3);font-size:12px;text-transform:uppercase}
+table.cookie-table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}
+.cookie-table th,.cookie-table td{padding:8px 6px;text-align:left;border-bottom:1px solid var(--border2);vertical-align:top}
+.cookie-table th{color:var(--ink3);font-size:12px;text-transform:uppercase}
 details.help-topic{margin-bottom:10px}
 details.help-topic summary{cursor:pointer;font-weight:700;padding:4px 0}
 /* site footer */
