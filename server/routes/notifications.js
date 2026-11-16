@@ -12,6 +12,7 @@ const express = require('express');
 const db = require('../db');
 const { requireAuth } = require('../lib/auth');
 const { nowIso } = require('../lib/audit');
+const { createNotification } = require('../lib/notify');
 
 const router = express.Router();
 
@@ -91,8 +92,86 @@ router.get('/', requireAuth, async (req, res, next) => {
 
 router.post('/read-all', requireAuth, async (req, res, next) => {
   try {
-    await db.run('UPDATE notifications SET is_read = 1 WHERE user_id = $1', [req.user.id]);
+    await db.run(
+      `UPDATE notifications SET is_read = 1 WHERE user_id = $1 AND (deliver_at IS NULL OR deliver_at <= $2)`,
+      [req.user.id, nowIso()]
+    );
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/notifications/reminders — items 659/661/664: lazy reminders,
+// computed on read (no scheduler exists). The My Bills screen calls this
+// once per session; each reminder is deduplicated by kind+link so it is
+// only created once per bill/gift. Returns the reminders so the UI can
+// show them inline as well as in the notification list.
+router.post('/reminders', requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const now = Date.now();
+    const reminders = [];
+    async function maybeRemind(kind, title, body, link) {
+      const existing = await db.get(
+        `SELECT id FROM notifications WHERE user_id = $1 AND kind = $2 AND link = $3
+         AND created_at >= $4 LIMIT 1`,
+        [userId, kind, link, new Date(now - 7 * 24 * 3600000).toISOString()]
+      );
+      if (existing) {
+        reminders.push({ kind, title, body, link, created: false });
+        return;
+      }
+      const id = await createNotification(userId, kind, title, body, link);
+      reminders.push({ kind, title, body, link, created: Boolean(id) });
+    }
+    // 659: own approved bill, expiring within 7 days, under half funded.
+    const { rows: expiring } = await db.query(
+      `SELECT * FROM bills WHERE user_id = $1 AND status = 'approved'
+       AND expires_at IS NOT NULL AND expires_at > $2 AND expires_at < $3`,
+      [userId, nowIso(), new Date(now + 7 * 24 * 3600000).toISOString()]
+    );
+    for (const b of expiring) {
+      const pct = Number(b.amount_minor) > 0 ? (Number(b.covered_minor) / Number(b.amount_minor)) * 100 : 100;
+      if (pct < 50) {
+        await maybeRemind(
+          'deadline_reminder',
+          'Your bill ends soon',
+          `"${b.title}" ends soon and is under half funded — share it while there is still time.`,
+          `#/bill/${b.id}`
+        );
+      }
+    }
+    // 661: a gift on my bill was reported sent 24h+ ago and I have not
+    // confirmed it yet.
+    const { rows: unconfirmed } = await db.query(
+      `SELECT g.*, b.title AS bill_title FROM gifts g JOIN bills b ON b.id = g.bill_id
+       WHERE b.user_id = $1 AND g.status = 'donor_reported_sent' AND g.created_at < $2`,
+      [userId, new Date(now - 24 * 3600000).toISOString()]
+    );
+    for (const g of unconfirmed) {
+      await maybeRemind(
+        'confirm_reminder',
+        'Did the money arrive?',
+        `Someone says they sent help for "${g.bill_title}" — please confirm so the helper gets thanked.`,
+        `#/mybills`
+      );
+    }
+    // 664: my bill is fully funded — say thank you.
+    const { rows: funded } = await db.query(
+      `SELECT * FROM bills WHERE user_id = $1 AND status = 'completed'
+       AND completed_at >= $2 ORDER BY completed_at DESC LIMIT 5`,
+      [userId, new Date(now - 30 * 24 * 3600000).toISOString()]
+    );
+    for (const b of funded) {
+      await maybeRemind(
+        'thank_you_reminder',
+        'Say thank you',
+        `"${b.title}" is fully funded — say thank you to your helpers.`,
+        `#/bill/${b.id}`
+      );
+    }
+    res.json({ ok: true, reminders });
   } catch (err) {
     next(err);
   }
