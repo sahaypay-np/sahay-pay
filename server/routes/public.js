@@ -12,7 +12,7 @@ const { feeModelSentence } = require('../lib/fees');
 const { TERMS_VERSION, PRIVACY_VERSION, POLICY_EFFECTIVE_DATE } = require('../lib/policy');
 const { CITIES, findCity, haversineKm } = require('../lib/cities');
 const { askTypeOf, expiryOf, isExpired } = require('./bills');
-const { tierForCount, computeStreak, listAchievements } = require('../lib/achievements');
+const { tierForCount, computeStreak, listAchievements, weekKeyOf } = require('../lib/achievements');
 
 const router = express.Router();
 
@@ -551,19 +551,50 @@ router.get('/leaders', async (req, res, next) => {
     const periodRaw = req.query.period === '7' ? '7d' : req.query.period === '30' ? '30d' : req.query.period;
     const period = ['7d', '30d', 'all'].includes(periodRaw) ? periodRaw : '7d';
     const scope = ['NP', 'IN', 'all'].includes(req.query.scope) ? req.query.scope : 'all';
-    const since = period === 'all'
-      ? null
-      : new Date(Date.now() - (period === '7d' ? 7 : 30) * 24 * 3600000).toISOString();
+    // Weekly archive (item 496): ?week=YYYY-Www freezes one past ISO week.
+    // Bounds: Monday 00:00 UTC of that week to the next Monday.
+    function weekBounds(key) {
+      const m = /^(\d{4})-W(\d{2})$/.exec(key || '');
+      if (!m) return null;
+      const year = Number(m[1]), week = Number(m[2]);
+      if (week < 1 || week > 53) return null;
+      const jan4 = new Date(Date.UTC(year, 0, 4));
+      const monday1 = new Date(jan4.getTime() - ((jan4.getUTCDay() + 6) % 7) * 86400000);
+      const start = new Date(monday1.getTime() + (week - 1) * 7 * 86400000);
+      const end = new Date(start.getTime() + 7 * 86400000);
+      if (start.getTime() > Date.now()) return null; // no future weeks
+      return { start: start.toISOString(), end: end.toISOString() };
+    }
+    const archiveWeek = weekBounds(req.query.week) ? req.query.week : null;
+    const archiveBounds = archiveWeek ? weekBounds(archiveWeek) : null;
+    // Last 4 completed ISO weeks (excluding the current week), newest first.
+    const archiveWeeks = [];
+    {
+      let cursor = new Date(Date.now() - 7 * 86400000);
+      while (archiveWeeks.length < 4) {
+        const k = weekKeyOf(cursor);
+        if (!archiveWeeks.includes(k)) archiveWeeks.push(k);
+        cursor = new Date(cursor.getTime() - 7 * 86400000);
+      }
+    }
+    const since = archiveBounds
+      ? archiveBounds.start
+      : period === 'all'
+        ? null
+        : new Date(Date.now() - (period === '7d' ? 7 : 30) * 24 * 3600000).toISOString();
+    const until = archiveBounds ? archiveBounds.end : null;
 
     const params = [];
     // Gifts on removed bills never count (item 406).
     let where = `g.status = 'confirmed' AND b.status != 'removed'`;
     if (since) { params.push(since); where += ` AND g.confirmed_at >= $${params.length}`; }
+    if (until) { params.push(until); where += ` AND g.confirmed_at < $${params.length}`; }
     if (scope !== 'all') { params.push(scope); where += ` AND b.country = $${params.length}`; }
 
     // Rank change (item 475): ranks in the previous equal-length period.
+    // Archive weeks are frozen snapshots — no rank change.
     async function previousRanks() {
-      if (period === 'all') return new Map();
+      if (period === 'all' || archiveBounds) return new Map();
       const spanMs = (period === '7d' ? 7 : 30) * 24 * 3600000;
       const prevEnd = new Date(Date.now() - spanMs).toISOString();
       const prevStart = new Date(Date.now() - 2 * spanMs).toISOString();
@@ -599,7 +630,7 @@ router.get('/leaders', async (req, res, next) => {
                 COALESCE(SUM(bills_helped), 0) AS bills_helped FROM anon_stats GROUP BY currency`
       );
       return res.json({
-        tab, period, scope,
+        tab, period, scope, archiveWeek, archiveWeeks,
         leaders: rows.map((r, i) => {
           const anonymous = Number(r.all_anonymous) === 1;
           const tier = tierForCount(Number(r.lifetime_gifts || 0)).tier;
@@ -636,7 +667,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope,
+        tab, period, scope, archiveWeek, archiveWeeks,
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
           photoUrl: r.photo_url, country: r.country, totalMinor: Number(r.total_minor),
@@ -658,7 +689,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope,
+        tab, period, scope, archiveWeek, archiveWeeks,
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, title: r.title, amountMinor: r.amount_minor,
           coveredMinor: r.covered_minor, currency: r.currency, country: r.country,
@@ -680,7 +711,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope,
+        tab, period, scope, archiveWeek, archiveWeeks,
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
           photoUrl: r.photo_url, country: r.country, billsPaid: Number(r.bills_paid),
@@ -705,7 +736,7 @@ router.get('/leaders', async (req, res, next) => {
       }
       streaks.sort((a, b) => b.weeks - a.weeks);
       return res.json({
-        tab, period, scope,
+        tab, period, scope, archiveWeek, archiveWeeks,
         leaders: streaks.slice(0, 50).map((r, i) => ({
           rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
           photoUrl: r.photo_url, country: r.country, streakWeeks: r.weeks,
@@ -719,6 +750,7 @@ router.get('/leaders', async (req, res, next) => {
       const tParams = [];
       let tWhere = `t.status = 'approved'`;
       if (since) { tParams.push(since); tWhere += ` AND t.created_at >= $${tParams.length}`; }
+      if (until) { tParams.push(until); tWhere += ` AND t.created_at < $${tParams.length}`; }
       if (scope !== 'all') { tParams.push(scope); tWhere += ` AND b.country = $${tParams.length}`; }
       const { rows } = await db.query(
         `SELECT t.giver_id AS id, u.display_name AS display_name, u.username, u.photo_url, u.country,
@@ -730,7 +762,7 @@ router.get('/leaders', async (req, res, next) => {
         tParams
       );
       return res.json({
-        tab, period, scope,
+        tab, period, scope, archiveWeek, archiveWeeks,
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
           photoUrl: r.photo_url, country: r.country, thanks: Number(r.thanks),
@@ -744,6 +776,7 @@ router.get('/leaders', async (req, res, next) => {
     const respParams = [];
     let respondedWhere = `bc.status = 'connected'`;
     if (since) { respParams.push(since); respondedWhere += ` AND bc.created_at >= $${respParams.length}`; }
+    if (until) { respParams.push(until); respondedWhere += ` AND bc.created_at < $${respParams.length}`; }
     const responded = await db.query(
       `SELECT bc.brand_name AS name, COUNT(*) AS responses, COUNT(DISTINCT br.country) AS countries
        FROM brand_connects bc JOIN brands br ON br.id = bc.brand_id
@@ -754,13 +787,14 @@ router.get('/leaders', async (req, res, next) => {
     const askedParams = [];
     let askedWhere = `status = 'approved'`;
     if (since) { askedParams.push(since); askedWhere += ` AND created_at >= $${askedParams.length}`; }
+    if (until) { askedParams.push(until); askedWhere += ` AND created_at < $${askedParams.length}`; }
     const asked = await db.query(
       `SELECT name, COUNT(*) AS asks FROM brands WHERE ${askedWhere}
        GROUP BY name ORDER BY asks DESC LIMIT 50`,
       askedParams
     );
     return res.json({
-      tab, period, scope,
+      tab, period, scope, archiveWeek, archiveWeeks,
       mostResponded: responded.rows.map((r, i) => ({ rank: i + 1, name: r.name, responses: Number(r.responses), countries: Number(r.countries) })),
       mostAsked: asked.rows.map((r, i) => ({ rank: i + 1, name: r.name, asks: Number(r.asks) })),
       emptyMessage: responded.rows.length === 0 && asked.rows.length === 0

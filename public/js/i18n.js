@@ -1681,6 +1681,16 @@ en: {
   your_story:"Your story",
   // Items 356/457
   guidelines_enforcement:"Posts that break these guidelines may be removed, and accounts may be suspended. If you are unsure, ask in the Help Centre before posting.",
+  // Items 322/496/497
+  archive_week_label:"Archived week",
+  back_to_current:"Back to current rankings",
+  current:"Current",
+  hof_rule:"Hall of Fame entries are earned by real help only — never by request, nomination or payment.",
+  leaders_archive:"Archive",
+  photo_quality_body:"A clearer photo is more likely to be approved. You can choose another photo, or continue with this one.",
+  photo_quality_lowres:"This photo is low resolution — a clearer photo helps reviewers.",
+  photo_quality_title:"Photo may be hard to read",
+  use_anyway:"Use this photo",
   guidelines_helpers_b:"Be kind in every message and comment. Give freely — never ask for anything in return, and never use help to pressure someone. Respect privacy: payout details are shown to you in trust, so do not share them with anyone else. If a bill worries you, report it instead of accusing the poster in public.",
   guidelines_helpers_t:"For helpers",
   guidelines_intro:"Sahay Pay works because strangers are kind to each other. These guidelines apply to everyone — posters and helpers alike.",
@@ -2419,6 +2429,14 @@ ne: {
   topic_who_sees:"कसले के देख्छ",
   // Items 356/457
   guidelines_helpers_t:"सहयोगीहरूका लागि",
+  // Items 322/496/497
+  back_to_current:"हालको श्रेणीमा फर्कनुहोस्",
+  current:"हालको",
+  hof_rule:"हल अफ फेममा वास्तविक सहयोगबाट मात्र पुगिन्छ — अनुरोध, मनोनयन वा भुक्तानीबाट कहिल्यै होइन।",
+  leaders_archive:"अभिलेख",
+  photo_quality_lowres:"यो फोटो कम रिजोल्युसनको छ — स्पष्ट फोटोले समीक्षकलाई मद्दत गर्छ।",
+  photo_quality_title:"फोटो पढ्न गाह्रो हुन सक्छ",
+  use_anyway:"यो फोटो प्रयोग गर्नुहोस्",
   guidelines_posters_t:"पोस्ट गर्नेहरूका लागि",
   unfollow:"अनफलो",
   upheld:"कायम",
@@ -3152,6 +3170,14 @@ hi: {
   topic_who_sees:"कौन क्या देखता है",
   // Items 356/457
   guidelines_helpers_t:"सहायकों के लिए",
+  // Items 322/496/497
+  back_to_current:"वर्तमान रैंकिंग पर वापस जाएँ",
+  current:"वर्तमान",
+  hof_rule:"हॉल ऑफ़ फ़ेम में जगह असली मदद से ही मिलती है — अनुरोध, नामांकन या भुगतान से कभी नहीं।",
+  leaders_archive:"अभिलेख",
+  photo_quality_lowres:"यह फ़ोटो कम रिज़ॉल्यूशन की है — साफ़ फ़ोटो समीक्षकों की मदद करती है।",
+  photo_quality_title:"फ़ोटो पढ़ना मुश्किल हो सकता है",
+  use_anyway:"यह फ़ोटो इस्तेमाल करें",
   guidelines_posters_t:"पोस्ट करने वालों के लिए",
   unfollow:"अनफ़ॉलो",
   upheld:"बरकरार",

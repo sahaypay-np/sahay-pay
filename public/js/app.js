@@ -358,6 +358,36 @@ async function uploadFile(file, kind){
   if(!res.ok){ var e2=new Error((data&&data.error&&data.error.message)||t("upload_failed")); e2.code=(data&&data.error&&data.error.code)||"UPLOAD"; e2.status=res.status; throw e2; }
   return data;
 }
+// Shared image-quality check (item 322, verify flow): dark / blurry /
+// low-resolution analysis of an image File. Non-images resolve {notImage:true}.
+function checkImageQuality(file){
+  return new Promise(function(resolve){
+    if(!file||!file.type||file.type.indexOf("image/")!==0){ resolve({notImage:true}); return; }
+    var url=URL.createObjectURL(file);
+    var img=new Image();
+    img.onload=function(){
+      try{
+        var lowRes=Math.max(img.naturalWidth, img.naturalHeight)<600;
+        var w=120, h=Math.max(1, Math.round(120*img.naturalHeight/img.naturalWidth));
+        var c=document.createElement("canvas"); c.width=w; c.height=h;
+        var ctx=c.getContext("2d"); ctx.drawImage(img,0,0,w,h);
+        var d=ctx.getImageData(0,0,w,h).data;
+        var sum=0, n=w*h;
+        for(var i=0;i<n;i++) sum+=0.299*d[i*4]+0.587*d[i*4+1]+0.114*d[i*4+2];
+        var mean=sum/n;
+        var edge=0, m=0;
+        for(var y=1;y<h-1;y++) for(var x=1;x<w-1;x++){
+          var idx=(y*w+x)*4;
+          edge+=Math.abs(d[idx]-d[idx+4])+Math.abs(d[idx]-d[idx-4]); m++;
+        }
+        URL.revokeObjectURL(url);
+        resolve({dark:mean<42, blurry:(edge/Math.max(1,m))<6, lowRes:lowRes});
+      }catch(e){ URL.revokeObjectURL(url); resolve({dark:false, blurry:false, lowRes:false}); }
+    };
+    img.onerror=function(){ URL.revokeObjectURL(url); resolve({dark:false, blurry:false, lowRes:false}); };
+    img.src=url;
+  });
+}
 function pickList(data, keys){
   if(Array.isArray(data)) return data;
   if(!data) return [];
@@ -2339,13 +2369,14 @@ function renderPost(arg, q){
         img.src=url;
       });
     }
-    // Photo-quality check (item 139): dark or blurry warnings from canvas
-    // luminance + edge-variance analysis.
+    // Photo-quality check (items 139/322): dark, blurry or low-resolution
+    // warnings from canvas luminance + edge-variance analysis.
     function qualityCheck(dataUrl){
       return new Promise(function(resolve){
         var img=new Image();
         img.onload=function(){
           try{
+            var lowRes=Math.max(img.naturalWidth, img.naturalHeight)<600;
             var w=120, h=Math.max(1, Math.round(120*img.naturalHeight/img.naturalWidth));
             var c=document.createElement("canvas"); c.width=w; c.height=h;
             var ctx=c.getContext("2d"); ctx.drawImage(img,0,0,w,h);
@@ -2359,7 +2390,7 @@ function renderPost(arg, q){
               var gx=Math.abs(d[idx]-d[idx+4])+Math.abs(d[idx]-d[idx-4]);
               edge+=gx; m++;
             }
-            resolve({dark:mean<42, blurry:(edge/Math.max(1,m))<6});
+            resolve({dark:mean<42, blurry:(edge/Math.max(1,m))<6, lowRes:lowRes});
           }catch(e){ resolve({dark:false, blurry:false}); }
         };
         img.onerror=function(){ resolve({dark:false, blurry:false}); };
@@ -2381,7 +2412,7 @@ function renderPost(arg, q){
             p.activePhoto=p.photos.length-1;
             var q=await qualityCheck(r.result);
             var qw=$("#photo-quality");
-            if(qw) qw.innerHTML=(q.dark?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_dark"))+'</p>':"")+(q.blurry?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_blurry"))+'</p>':"");
+            if(qw) qw.innerHTML=(q.dark?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_dark"))+'</p>':"")+(q.blurry?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_blurry"))+'</p>':"")+(q.lowRes?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_lowres"))+'</p>':"");
             syncPhotoAliases(); drawThumbs(); showEditor(); saveDraft(p);
             res();
           };
@@ -2806,11 +2837,12 @@ function renderPost(arg, q){
 
 /* ---------- leaders ---------- */
 function renderLeaders(arg, q){
-  // URL persistence (item 402): tab/period/scope live in the hash query.
+  // URL persistence (item 402): tab/period/scope/week live in the hash query.
   var tab=(q&&q.tab)||S.leadersTab||"top_supporters";
   var period=(q&&q.period)||S.leadersPeriod||"30d";
   var scope=(q&&q.scope)||S.leadersScope||"all";
-  S.leadersTab=tab; S.leadersPeriod=period; S.leadersScope=scope;
+  var week=(q&&q.week)||S.leadersWeek||"";
+  S.leadersTab=tab; S.leadersPeriod=period; S.leadersScope=scope; S.leadersWeek=week;
   view('<h1>'+esc(t("leaders_title"))+'</h1><p class="small">'+esc(t("leaders_scope_note"))+'</p>'
     +'<div class="tabs" id="ld-tabs">'
     +[["top_supporters",t("top_supporters")],["most_received",t("most_received")],["top_bills",t("top_bills")],["fully_paid",t("fully_paid")],["streak",t("tab_streak")],["most_thanked",t("tab_most_thanked")],["brands",t("leaders_brands")]].map(function(x){ return '<button class="tab-btn'+(tab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")
@@ -2818,10 +2850,12 @@ function renderLeaders(arg, q){
     +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="ld-period" aria-label="'+esc(t("posted"))+'" style="flex:1"><option value="7d" '+(period==="7d"?"selected":"")+'>'+esc(t("last_7"))+'</option><option value="30d" '+(period==="30d"?"selected":"")+'>'+esc(t("last_30"))+'</option><option value="all" '+(period==="all"?"selected":"")+'>'+esc(t("all_time"))+'</option></select>'
     +'<select id="ld-scope" aria-label="'+esc(t("filter_country"))+'" style="flex:1"><option value="all" '+(scope==="all"?"selected":"")+'>'+esc(t("scope_all"))+'</option><option value="NP" '+(scope==="NP"?"selected":"")+'>🇳🇵 '+esc(t("nepal"))+'</option><option value="IN" '+(scope==="IN"?"selected":"")+'>🇮🇳 '+esc(t("india"))+'</option></select></div>'
     +'<input id="ld-search" placeholder="'+esc(t("search_leaders"))+'" style="margin-bottom:10px">'
+    // Weekly archive (item 496): browse the last 4 completed weeks.
+    +'<div id="ld-archive" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px"></div>'
     +'<div id="ld-body">'+skeleton(2)+'</div>'
     +'<p class="small" style="margin-top:12px">'+esc(t("leaders_fairness"))+' <a href="#/help?topic=leaderboard">'+esc(t("how_leaderboard_works"))+'</a></p>');
   function syncUrl(){
-    var h="#/leaders?tab="+encodeURIComponent(S.leadersTab)+"&period="+encodeURIComponent(S.leadersPeriod)+"&scope="+encodeURIComponent(S.leadersScope);
+    var h="#/leaders?tab="+encodeURIComponent(S.leadersTab)+"&period="+encodeURIComponent(S.leadersPeriod)+"&scope="+encodeURIComponent(S.leadersScope)+(S.leadersWeek?"&week="+encodeURIComponent(S.leadersWeek):"");
     if(location.hash!==h) history.replaceState(null, "", h);
   }
   $all("#ld-tabs .tab-btn").forEach(function(b){ b.onclick=function(){ S.leadersTab=b.getAttribute("data-t"); syncUrl(); load(); }; });
@@ -2835,7 +2869,22 @@ function renderLeaders(arg, q){
     body.innerHTML=skeleton(2);
     try{
       var q2=new URLSearchParams({tab:S.leadersTab, period:S.leadersPeriod, scope:S.leadersScope});
+      if(S.leadersWeek) q2.set("week", S.leadersWeek);
       var d=await api("/leaders?"+q2.toString());
+      // Archive chips (item 496).
+      var arch=$("#ld-archive");
+      if(arch){
+        var weeks=d.archiveWeeks||[];
+        arch.innerHTML='<span class="small">'+esc(t("leaders_archive"))+':</span>'
+          +'<button class="chip'+(S.leadersWeek?"":" on")+'" data-w="">'+esc(t("current"))+'</button>'
+          +weeks.map(function(w){ return '<button class="chip'+(S.leadersWeek===w?" on":"")+'" data-w="'+esc(w)+'">'+esc(w)+'</button>'; }).join("")
+          +(S.leadersWeek?'<span class="small">'+esc(t("archive_week_label"))+' '+esc(S.leadersWeek)+' · <a href="#" id="ld-back-current">'+esc(t("back_to_current"))+'</a></span>':"");
+        $all("#ld-archive [data-w]").forEach(function(b){
+          b.onclick=function(){ S.leadersWeek=b.getAttribute("data-w"); syncUrl(); load(); };
+        });
+        var bc=$("#ld-back-current");
+        if(bc) bc.onclick=function(e){ e.preventDefault(); S.leadersWeek=""; syncUrl(); load(); };
+      }
       // Brands tab returns two lists (mostResponded / mostAsked), not leaders.
       if(S.leadersTab==="brands"){
         var resp=pickList(d,["mostResponded"]), asked=pickList(d,["mostAsked"]);
@@ -3889,7 +3938,7 @@ function renderProfile(username){
 /* ---------- hall of fame (items 407/408/409/439/497) ---------- */
 function renderHallOfFame(arg, q){
   var month=(q&&q.month)||"all";
-  view('<h1>'+esc(t("hall_of_fame"))+'</h1><p class="small">'+esc(t("hof_intro"))+'</p>'
+  view('<h1>'+esc(t("hall_of_fame"))+'</h1><p class="small">'+esc(t("hof_intro"))+'</p><p class="small">'+esc(t("hof_rule"))+'</p>'
     +'<div class="btn-row" style="margin-bottom:10px"><button class="btn secondary small" id="hof-share">🔗 '+esc(t("share"))+'</button></div>'
     +'<div id="hof-months" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>'
     +'<div id="hof-body">'+skeleton(2)+'</div>');
@@ -4595,13 +4644,27 @@ function renderVerify(){
         var f=inp.files[0];
         if(!f){ toast(t("verify_upload_first"), true); return; }
         var docType=$("#vf-doctype-"+type)?$("#vf-doctype-"+type).value:"other";
-        btn.disabled=true; btn.textContent=t("loading");
-        try{
-          var up=await uploadFile(f, kind);
-          var url=up.url||up.fileUrl||up.path;
-          await api("/verification", {method:"POST", body:{type:type, docUrl:url, docType:docType}});
-          toast(t("verification_submitted")); load();
-        }catch(e){ btn.disabled=false; btn.textContent=t("verify_submit"); toast(e.message||t("err_generic"), true); }
+        // Image-quality retake prompt (item 322): warn, let the user
+        // choose another file or continue with this one.
+        var q=await checkImageQuality(f);
+        if(!q.notImage&&(q.dark||q.blurry||q.lowRes)){
+          var issues=[];
+          if(q.dark) issues.push(t("photo_quality_dark"));
+          if(q.blurry) issues.push(t("photo_quality_blurry"));
+          if(q.lowRes) issues.push(t("photo_quality_lowres"));
+          confirmDialog(t("photo_quality_title"), issues.join(" ")+" "+t("photo_quality_body"), t("use_anyway"), function(){ doSubmit(); });
+          return;
+        }
+        doSubmit();
+        async function doSubmit(){
+          btn.disabled=true; btn.textContent=t("loading");
+          try{
+            var up=await uploadFile(f, kind);
+            var url=up.url||up.fileUrl||up.path;
+            await api("/verification", {method:"POST", body:{type:type, docUrl:url, docType:docType}});
+            toast(t("verification_submitted")); load();
+          }catch(e){ btn.disabled=false; btn.textContent=t("verify_submit"); toast(e.message||t("err_generic"), true); }
+        }
       };
     });
   }
