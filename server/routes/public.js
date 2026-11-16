@@ -40,10 +40,22 @@ router.get('/config', async (req, res, next) => {
       ]);
     const feeMode = feeModeRaw || 'supporter_fee';
     const minGiftMinor = Number(minGiftRaw) || 1000;
+    // Item 791: whether the owner is available (owner-set; default false —
+    // the honest default is "not available" until the owner says otherwise).
+    const adminAvailable = (await db.getSetting('admin_available')) === 'true';
+    // Item 748 (funnel): an anonymous daily visitor counter, incremented
+    // on each /config hit — the first request a visit makes. Fire-and-
+    // forget: a failure must never slow or break /config. No identity is
+    // tracked — only a daily total in settings.
+    const todayKey = `visits_${new Date().toISOString().slice(0, 10)}`;
+    db.getSetting(todayKey)
+      .then((v) => db.setSetting(todayKey, String((Number(v) || 0) + 1)))
+      .catch(() => {});
     res.json({
       appName: 'Sahay Pay',
       tagline: 'Small acts. Real help.',
       demoMode: true,
+      adminAvailable,
       feeMode,
       feeConfig,
       feeModelSentenceNPR: feeModelSentence(feeMode, feeConfig, 'NPR'),

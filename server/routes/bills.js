@@ -23,6 +23,7 @@ const {
 const { parseMajorToMinor, isMinorAmount } = require('../lib/money');
 const { upload, isPrivateKind, isKnownKind, publicUrlFor, privateRefFor, encryptAccount, PUBLIC_DIR, PRIVATE_DIR, fileMatchesMime } = require('../lib/storage');
 const { createReviewPacket, billPacketPayload } = require('../lib/notify');
+const { maybeNotifyReferralMilestone } = require('../lib/referrals');
 
 const router = express.Router();
 
@@ -296,6 +297,9 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
     if (submit) {
       packet = await createReviewPacket('bill', id, await billPacketPayload(bill, await getPayoutHints(id)));
       await logAudit('user', req.user.id, 'bill_submitted', 'bill', id, { requestCode: bill.request_code });
+      // Item 674: the user's first submitted bill counts as a referral
+      // milestone for whoever invited them.
+      await maybeNotifyReferralMilestone(req.user.id, 'first_bill');
     }
     res.status(201).json({
       bill: publicBill(bill, req.user),
@@ -504,11 +508,29 @@ router.get('/:id/history', requireAuth, async (req, res, next) => {
       'SELECT * FROM bill_edits WHERE bill_id = $1 ORDER BY created_at DESC LIMIT 50',
       [bill.id]
     );
+    // Item 704: include the review decisions + reasons alongside edits
+    // (from the audit log — approve/reject/changes on this bill's packets).
+    const { rows: reviewRows } = await db.query(
+      `SELECT * FROM audit_logs WHERE target_type = 'bill' AND target_id = $1
+       AND action IN ('review_approve', 'review_reject', 'review_changes')
+       ORDER BY created_at DESC LIMIT 50`,
+      [bill.id]
+    );
     res.json({
       edits: rows.map((r) => {
         let fields = [];
         try { fields = JSON.parse(r.changed_fields || '[]'); } catch { /* keep [] */ }
         return { id: r.id, changedFields: fields, createdAt: r.created_at };
+      }),
+      reviews: reviewRows.map((r) => {
+        let meta = {};
+        try { meta = JSON.parse(r.meta_json || '{}'); } catch { /* keep {} */ }
+        return {
+          id: r.id,
+          action: r.action,
+          reason: meta.reason || '',
+          decidedAt: r.created_at,
+        };
       }),
     });
   } catch (err) {

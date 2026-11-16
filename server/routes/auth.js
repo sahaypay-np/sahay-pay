@@ -18,6 +18,7 @@ const {
 } = require('../lib/auth');
 const { TERMS_VERSION, PRIVACY_VERSION, consentIsCurrent } = require('../lib/policy');
 const { validateOnboarding, cleanStr } = require('../lib/validate');
+const { generateReferralCode, checkReferralVelocity } = require('../lib/referrals');
 
 const router = express.Router();
 
@@ -44,6 +45,15 @@ function parsePrefs(row) {
       notifyPrefs: p.notifyPrefs || { posts: true, gifts: true, brands: true },
       showTotals: p.showTotals !== false,
       anonDefault: p.anonDefault === true,
+      // Phase 2 §7 notification preferences (612–618, 655, 680).
+      notifyTypes: p.notifyTypes || {},
+      pauseUntil: p.pauseUntil || null,
+      quietHours: p.quietHours || null,
+      tzOffsetMinutes: Number.isInteger(p.tzOffsetMinutes) ? p.tzOffsetMinutes : null,
+      notifyLang: p.notifyLang || null,
+      digestOptOut: p.digestOptOut === true,
+      referralOptOut: p.referralOptOut === true,
+      soundEnabled: p.soundEnabled === true,
     };
   } catch {
     return { notifyPrefs: { posts: true, gifts: true, brands: true }, showTotals: true, anonDefault: false };
@@ -102,18 +112,36 @@ router.post('/onboard', rateLimit('onboard', 10, 60 * 60 * 1000), async (req, re
     // and NEVER stored or logged in plain text — only a scrypt hash (for
     // verification) and a SHA-256 lookup key reach the database.
     const recoveryCode = generateRecoveryCode();
+    // Item 673: referral link — the landing page stores ?ref=CODE and passes
+    // it here. The code resolves to an existing user, so a new account can
+    // never be its own referrer (self-referral is structurally impossible).
+    const refCode = cleanStr(req.body.ref || req.body.referralCode || '', 20).toUpperCase();
+    let referredBy = null;
+    if (refCode) {
+      const referrer = await db.get('SELECT id, prefs_json FROM users WHERE referral_code = $1', [refCode]);
+      let optedOut = false;
+      try { optedOut = JSON.parse(referrer?.prefs_json || '{}').referralOptOut === true; } catch { /* no */ }
+      if (referrer && !optedOut) {
+        referredBy = referrer.id;
+        // Item 678: referral-velocity flag (5+ signups via one code in 24h
+        // -> audit flag for admin review; no device identification).
+        await checkReferralVelocity(referrer.id);
+      }
+    }
+    const referralCode = await generateReferralCode();
     await db.run(
       `INSERT INTO users (id, display_name, username, age, country, city, about, language, photo_url,
         recovery_code_hash, recovery_code_lookup,
         terms_accepted_version, terms_accepted_at, privacy_accepted_version, privacy_accepted_at,
-        suspended, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, $16)`,
+        suspended, referral_code, referred_by, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, $16, $17, $18)`,
       [
         id, displayName, username, age, req.body.country, cleanStr(req.body.city, 120),
         cleanStr(req.body.about || '', 500), req.body.language || 'en', photoUrl,
         hashSecret(recoveryCode.replace(/-/g, '')),
         recoveryLookupKey(recoveryCode),
         TERMS_VERSION, now, PRIVACY_VERSION, now,
+        referralCode, referredBy,
         now,
       ]
     );
