@@ -2606,7 +2606,7 @@ var CONTACT_OWNER_HTML=
  +'<li><strong>Legal</strong> — a legal question or a problem with these pages.</li>'
  +'<li><strong>Privacy</strong> — a question about your data or your rights.</li>'
  +'<li><strong>Press</strong> — media enquiries.</li></ul>'
- +'<p>Every message is read by a human. Please do not send personal documents (ID photos, bank statements) unless asked — and never send your recovery code, MPIN, or OTP.</p>';
+ +'<p>Every message is read by a human, and the owner checks new messages every day. Please do not send personal documents (ID photos, bank statements) unless asked — and never send your recovery code, MPIN, or OTP.</p>';
 var COMPLAINT_TIMELINE_HTML=
  '<p>What happens after you file a complaint:</p>'
  +'<ol><li><strong>Day 0 — Filed.</strong> Your complaint is logged with an ID. Keep the ID to track it (<a href="#/complaint-status">track a complaint</a>).</li>'
