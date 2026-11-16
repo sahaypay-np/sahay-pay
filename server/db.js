@@ -20,7 +20,16 @@ let sqliteDb = null;
 
 if (usePostgres) {
   const { Pool } = require('pg');
-  pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  // Explicit pool limits + timeouts (checklist item 220): the free-tier
+  // Supabase DB is small, so cap connections and fail slow queries fast
+  // instead of hanging a serverless invocation.
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: 10,
+    idleTimeoutMillis: 30 * 1000,
+    connectionTimeoutMillis: 10 * 1000,
+    statement_timeout: 30 * 1000,
+  });
   pool.on('error', (err) => console.error('[db] pg pool error:', err.message));
 } else {
   const { DatabaseSync } = require('node:sqlite');
@@ -160,23 +169,55 @@ function loadSchema(filename) {
   throw new Error(`schema file not found: ${filename}`);
 }
 
+// Additive column migration for databases created before these columns
+// existed (CREATE TABLE IF NOT EXISTS never alters an existing table).
+// A duplicate-column error just means the column is already there.
+const EXTRA_COLUMNS = [
+  ['users', 'prefs_json', "TEXT DEFAULT '{}'"],
+  ['bills', 'anonymous', 'INTEGER NOT NULL DEFAULT 0'],
+  ['payout_methods', 'meta_json', "TEXT DEFAULT '{}'"],
+  ['users', 'recovery_code_hash', 'TEXT'],
+  ['users', 'recovery_code_lookup', 'TEXT'],
+  ['users', 'terms_accepted_version', 'TEXT'],
+  ['users', 'terms_accepted_at', 'TEXT'],
+  ['users', 'privacy_accepted_version', 'TEXT'],
+  ['users', 'privacy_accepted_at', 'TEXT'],
+  ['sessions', 'csrf_token', 'TEXT'],
+  ['sessions', 'user_agent', 'TEXT'],
+  ['admin_sessions', 'csrf_token', 'TEXT'],
+  ['admin_sessions', 'last_seen_at', 'TEXT'],
+];
+
+// Cold-start mitigation (checklist priority fix (g)): the full migrate is
+// ~20 statements (schema + ALTER probes + settings seeds). On a serverless
+// cold start each round trip costs, so when the stored schema hash matches
+// the current schema file + column list, skip the whole migrate with a
+// single cheap probe. The hash is written only AFTER a successful full
+// migrate, so a failed or partial migrate is retried on the next boot,
+// and a fresh DB (no settings table yet) always runs the full path.
 async function migrate() {
   const schemaFile = usePostgres ? 'schema.postgres.sql' : 'schema.sqlite.sql';
   const sql = loadSchema(schemaFile);
+  const schemaHash = require('crypto')
+    .createHash('sha256')
+    .update(sql)
+    .update(JSON.stringify(EXTRA_COLUMNS))
+    .digest('hex');
+  try {
+    const stored = await getSetting('schema_hash');
+    if (stored === schemaHash) {
+      console.log(`[db] schema current (hash ${schemaHash.slice(0, 8)}), migrate skipped`);
+      return;
+    }
+  } catch {
+    // No settings table yet (fresh DB) — run the full migrate below.
+  }
   if (usePostgres) {
     await pool.query(sql);
   } else {
     sqliteDb.exec(sql);
   }
-  // Additive column migration for databases created before these columns
-  // existed (CREATE TABLE IF NOT EXISTS never alters an existing table).
-  // A duplicate-column error just means the column is already there.
-  const extraColumns = [
-    ['users', 'prefs_json', "TEXT DEFAULT '{}'"],
-    ['bills', 'anonymous', 'INTEGER NOT NULL DEFAULT 0'],
-    ['payout_methods', 'meta_json', "TEXT DEFAULT '{}'"],
-  ];
-  for (const [table, column, ddl] of extraColumns) {
+  for (const [table, column, ddl] of EXTRA_COLUMNS) {
     try {
       await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
       console.log(`[db] added column ${table}.${column}`);
@@ -191,6 +232,7 @@ async function migrate() {
       [key, value]
     );
   }
+  await setSetting('schema_hash', schemaHash);
   console.log(`[db] migrated (${usePostgres ? 'postgres' : 'sqlite'})`);
 }
 

@@ -21,7 +21,7 @@ const {
   cleanStr, validatePayoutMethod, methodAllowedForCountry,
 } = require('../lib/validate');
 const { parseMajorToMinor, isMinorAmount } = require('../lib/money');
-const { upload, isPrivateKind, isKnownKind, publicUrlFor, privateRefFor, encryptAccount, PRIVATE_DIR } = require('../lib/storage');
+const { upload, isPrivateKind, isKnownKind, publicUrlFor, privateRefFor, encryptAccount, PUBLIC_DIR, PRIVATE_DIR, fileMatchesMime } = require('../lib/storage');
 const { createReviewPacket, billPacketPayload } = require('../lib/notify');
 
 const router = express.Router();
@@ -455,6 +455,28 @@ uploadsRouter.post('/', requireActive, (req, res, next) => {
     }
     if (!req.file) {
       return res.status(400).json({ error: { code: 'VALIDATION', message: 'No file was uploaded.' } });
+    }
+    // Magic-byte check (item 135): the declared MIME type is client-claimed
+    // and trivially faked — verify the file's real signature matches it,
+    // and delete the file when it doesn't.
+    if (!fileMatchesMime(req.file.path, req.file.mimetype)) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({
+        error: { code: 'VALIDATION', message: 'That file is not a real image or PDF — please upload a genuine jpg, png, webp or PDF file.' },
+      });
+    }
+    // Multer chooses the destination from req.body.kind, but multipart
+    // fields arriving AFTER the file part aren't parsed yet when the file
+    // stream starts — so a client sending `file` before `kind` (including
+    // our own frontend's uploadFile) landed a PRIVATE file in the public
+    // dir, publicly reachable and 404 on its private ref. Move the file
+    // to the directory its kind requires.
+    const expectedDir = isPrivateKind(kind) ? PRIVATE_DIR : PUBLIC_DIR;
+    if (req.file.destination !== expectedDir) {
+      const target = path.join(expectedDir, req.file.filename);
+      fs.renameSync(req.file.path, target);
+      req.file.path = target;
+      req.file.destination = expectedDir;
     }
     const url = isPrivateKind(kind) ? privateRefFor(req.file.filename) : publicUrlFor(req.file.filename);
     res.status(201).json({

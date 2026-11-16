@@ -153,6 +153,71 @@ router.patch('/me', requireAuth, async (req, res, next) => {
   }
 });
 
+// GET /api/profile/export — download my data as JSON (items 183/273/429).
+// Profile, bills, gifts (given + received), notifications, verifications.
+// Payout accounts are NEVER included — only the masked hints. Must stay
+// above the /:username route or "export" would match as a username.
+router.get('/export', requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const user = await db.get('SELECT * FROM users WHERE id = $1', [userId]);
+    if (!user) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Profile not found.' } });
+    const bills = await db.query(
+      `SELECT b.id, b.request_code, b.title, b.category, b.company, b.amount_minor, b.currency,
+              b.covered_minor, b.due_date, b.story, b.details, b.charity, b.anonymous, b.status,
+              b.city, b.country, b.photo_url, b.support_photo_url, b.pay_direct, b.biller_name,
+              b.biller_ref, b.biller_destination, b.views, b.created_at, b.updated_at
+       FROM bills b WHERE b.user_id = $1 ORDER BY b.created_at DESC`,
+      [userId]
+    );
+    const billIds = bills.rows.map((b) => b.id);
+    let payoutHints = [];
+    if (billIds.length) {
+      const ph = billIds.map((_, i) => `$${i + 1}`).join(',');
+      const hints = await db.query(
+        `SELECT bill_id, method, holder_name, account_hint FROM payout_methods WHERE bill_id IN (${ph})`,
+        billIds
+      );
+      payoutHints = hints.rows;
+    }
+    const giftsGiven = await db.query(
+      `SELECT id, bill_id, amount_minor, currency, fee_minor, tip_minor, status, reference, created_at, confirmed_at
+       FROM gifts WHERE supporter_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    const giftsReceived = await db.query(
+      `SELECT g.id, g.bill_id, g.supporter_id, g.amount_minor, g.currency, g.fee_minor, g.tip_minor,
+              g.status, g.reference, g.created_at, g.confirmed_at
+       FROM gifts g JOIN bills b ON b.id = g.bill_id WHERE b.user_id = $1 ORDER BY g.created_at DESC`,
+      [userId]
+    );
+    const notifications = await db.query(
+      `SELECT id, kind, title, body, link, is_read, created_at FROM notifications
+       WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    const verifications = await db.query(
+      `SELECT id, bill_id, type, status, reviewer_note, created_at, decided_at
+       FROM verifications WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    res.set('Content-Disposition', 'attachment; filename="sahay-pay-my-data.json"');
+    res.json({
+      exportedAt: nowIso(),
+      app: 'Sahay Pay',
+      profile: publicUser(user),
+      bills: bills.rows,
+      payoutHints,
+      giftsGiven: giftsGiven.rows,
+      giftsReceived: giftsReceived.rows,
+      notifications: notifications.rows,
+      verifications: verifications.rows,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Public profile by username. Never shows payout accounts or private data.
 router.get('/:username', async (req, res, next) => {
   try {

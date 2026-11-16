@@ -18,9 +18,12 @@ const {
   isPinSet, setupPin, verifyAdminPin, changePin,
   createAdminSession, destroyAdminSession, requireAdmin,
   sessionCookieOptions, ADMIN_SESSION_HOURS, rateLimit,
+  getOrCreateCsrfToken,
 } = require('../lib/auth');
 const { cleanStr } = require('../lib/validate');
 const { applyReviewDecision, createNotification } = require('../lib/notify');
+const { deletePrivateFile } = require('../lib/storage');
+const { getMaintenanceState, setMaintenanceMode } = require('../lib/maintenance');
 
 const router = express.Router();
 
@@ -58,14 +61,17 @@ router.post('/login', rateLimit('admin-login', 10, 15 * 60 * 1000), async (req, 
       });
     }
     const ok = await verifyAdminPin(req.body?.pin);
+    // Client IP in the audit meta for login events, success + failure
+    // (item 238). req.ip is the real client IP (trust proxy is set).
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
     if (!ok) {
-      await logAudit('admin', 'owner', 'admin_login_failed', 'admin', 'login', {});
+      await logAudit('admin', 'owner', 'admin_login_failed', 'admin', 'login', { ip });
       return res.status(401).json({ error: { code: 'INVALID_PIN', message: 'Incorrect PIN.' } });
     }
     const session = await createAdminSession();
     res.cookie('sp_admin', session.token, sessionCookieOptions(ADMIN_SESSION_HOURS * 60 * 60 * 1000));
-    await logAudit('admin', 'owner', 'admin_login', 'admin', 'login', {});
-    res.json({ ok: true, sessionExpiresAt: session.expiresAt });
+    await logAudit('admin', 'owner', 'admin_login', 'admin', 'login', { ip });
+    res.json({ ok: true, sessionExpiresAt: session.expiresAt, csrfToken: session.csrfToken });
   } catch (err) {
     next(err);
   }
@@ -83,6 +89,38 @@ router.post('/logout', async (req, res, next) => {
 
 // Everything below requires a valid admin session.
 router.use(requireAdmin);
+
+// GET /api/admin/csrf — (re-)fetch this admin session's CSRF token.
+router.get('/csrf', async (req, res, next) => {
+  try {
+    const csrfToken = await getOrCreateCsrfToken('admin_sessions', req.cookies?.sp_admin);
+    res.json({ csrfToken });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Maintenance-mode kill switch (item 194) ---
+
+router.get('/maintenance', async (req, res, next) => {
+  try {
+    res.json(await getMaintenanceState());
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/maintenance', async (req, res, next) => {
+  try {
+    const enabled = req.body?.enabled;
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'enabled must be true or false.' } });
+    }
+    res.json(await setMaintenanceMode(enabled, req.body?.message));
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.post('/change-pin', async (req, res, next) => {
   try {
@@ -250,9 +288,18 @@ router.post('/verifications/:id', async (req, res, next) => {
     }
     const status = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'more_required';
     const note = cleanStr(req.body?.note || '', 600);
+    // Verification documents are deleted after review (item 255) — the
+    // Privacy Policy already promises this. On a final decision (approve
+    // or reject) the private file is removed from disk and the reference
+    // cleared; "more required" keeps the document (review is not over).
+    let docDeleted = false;
+    if (decision !== 'more_required' && row.doc_url) {
+      docDeleted = deletePrivateFile(row.doc_url);
+    }
     await db.run(
-      `UPDATE verifications SET status = $1, reviewer_note = $2, decided_at = $3 WHERE id = $4`,
-      [status, note, nowIso(), row.id]
+      `UPDATE verifications SET status = $1, reviewer_note = $2, decided_at = $3,
+       doc_url = $4 WHERE id = $5`,
+      [status, note, nowIso(), decision === 'more_required' ? row.doc_url : null, row.id]
     );
     await createNotification(
       row.user_id,
@@ -261,9 +308,9 @@ router.post('/verifications/:id', async (req, res, next) => {
       note || `Your ${row.type} verification was ${status}.`,
       '#/verify'
     );
-    await logAudit('admin', 'owner', `verification_${decision}`, 'verification', row.id, { type: row.type });
+    await logAudit('admin', 'owner', `verification_${decision}`, 'verification', row.id, { type: row.type, docDeleted });
     const updated = await db.get('SELECT * FROM verifications WHERE id = $1', [row.id]);
-    res.json({ verification: updated });
+    res.json({ verification: updated, docDeleted });
   } catch (err) {
     next(err);
   }
@@ -330,11 +377,19 @@ router.post('/reports/:id', async (req, res, next) => {
 
 router.get('/fees', async (req, res, next) => {
   try {
+    // Parallel: independent settings reads (see /config — each is a
+    // ~200ms Supabase round trip from the serverless function).
+    const [feeModeRaw, feeConfig, founderTipConfig, minGiftRaw] = await Promise.all([
+      db.getSetting('fee_mode'),
+      db.getSettingJson('fee_config', {}),
+      db.getSettingJson('founder_tip_config', {}),
+      db.getSetting('min_gift_minor'),
+    ]);
     res.json({
-      feeMode: (await db.getSetting('fee_mode')) || 'supporter_fee',
-      feeConfig: await db.getSettingJson('fee_config', {}),
-      founderTipConfig: await db.getSettingJson('founder_tip_config', {}),
-      minGiftMinor: Number(await db.getSetting('min_gift_minor')) || 1000,
+      feeMode: feeModeRaw || 'supporter_fee',
+      feeConfig,
+      founderTipConfig,
+      minGiftMinor: Number(minGiftRaw) || 1000,
     });
   } catch (err) {
     next(err);
@@ -388,11 +443,13 @@ router.put('/fees', async (req, res, next) => {
 
 router.get('/methods', async (req, res, next) => {
   try {
-    res.json({
-      paymentMethods: await db.getSettingJson('payment_methods', {}),
-      brandPackages: await db.getSettingJson('brand_packages', []),
-      categories: await db.getSettingJson('categories', []),
-    });
+    // Parallel: independent settings reads (see /config).
+    const [paymentMethods, brandPackages, categories] = await Promise.all([
+      db.getSettingJson('payment_methods', {}),
+      db.getSettingJson('brand_packages', []),
+      db.getSettingJson('categories', []),
+    ]);
+    res.json({ paymentMethods, brandPackages, categories });
   } catch (err) {
     next(err);
   }

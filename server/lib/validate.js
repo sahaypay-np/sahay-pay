@@ -144,6 +144,10 @@ function validateOnboarding(body) {
   if (body.language !== undefined && !['en', 'ne', 'hi'].includes(body.language)) {
     return 'Language must be English, Nepali or Hindi.';
   }
+  // Two SEPARATE consents (checklist items 402/404): Terms and Privacy
+  // Policy are accepted independently and version-logged at onboarding.
+  if (body.termsAccepted !== true) return 'Please agree to the Terms to create a profile.';
+  if (body.privacyAccepted !== true) return 'Please agree to the Privacy Policy to create a profile.';
   return null;
 }
 

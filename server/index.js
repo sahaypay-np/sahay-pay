@@ -11,7 +11,8 @@ const fs = require('fs');
 const express = require('express');
 
 const db = require('./db');
-const { attachUser } = require('./lib/auth');
+const { attachUser, verifyOrigin, verifyCsrf } = require('./lib/auth');
+const { maintenanceGate } = require('./lib/maintenance');
 const { payoutKeySource, PUBLIC_DIR } = require('./lib/storage');
 
 const ROOT = path.join(__dirname, '..');
@@ -44,6 +45,13 @@ app.use(express.json({ limit: '1mb' }));
 
 // Attach the user (if any) to every request; routes decide whether auth is required.
 app.use(attachUser);
+
+// Maintenance kill switch (item 194): 503s the API (except health + admin)
+// while maintenance_mode is on. Then Origin/Referer verification (item 130)
+// and CSRF synchronizer tokens (item 129) for state-changing API requests.
+app.use(maintenanceGate);
+app.use(verifyOrigin);
+app.use(verifyCsrf);
 
 // --- API routes ---
 app.use('/api', require('./routes/public')); // /api/config, /api/feed, /api/leaders
