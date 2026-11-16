@@ -128,7 +128,7 @@ const DEFAULT_SETTINGS = {
   min_gift_minor: '1000',
   // Phase 2 sections 4–6: velocity caps (admin-configurable) + featured
   // brand of the week (rotated on read; no scheduler on the free tier).
-  bill_day_cap: '3',
+  bill_day_cap: '5',
   bill_week_cap: '10',
   gift_hour_cap: '10',
   reveal_day_cap: '20',

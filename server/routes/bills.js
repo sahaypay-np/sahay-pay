@@ -257,7 +257,7 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
 
     // Day/week posting caps (item 333, admin-configurable). The hourly
     // rateLimit above stays as the first line of defence.
-    const dayCap = Number(await db.getSetting('bill_day_cap')) || 3;
+    const dayCap = Number(await db.getSetting('bill_day_cap')) || 5;
     const weekCap = Number(await db.getSetting('bill_week_cap')) || 10;
     const dayAgo = new Date(Date.now() - 24 * 3600000).toISOString();
     const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
