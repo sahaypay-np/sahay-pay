@@ -1,0 +1,8 @@
+# Sahay Pay — security.txt (RFC 9116, checklist items 188/190)
+# Sahay Pay has no email address by design, so security reports go through
+# the in-app complaint form (reviewed by a human) or the public repo.
+Contact: https://sahay-pay.netlify.app/#/help?topic=complaints
+Contact: https://github.com/sahaypay-np/sahay-pay
+Expires: 2027-11-16T00:00:00.000Z
+Preferred-Languages: en, ne, hi
+Policy: https://github.com/sahaypay-np/sahay-pay/blob/main/SECURITY.md

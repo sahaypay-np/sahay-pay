@@ -71,6 +71,13 @@ app.get('/api/health', (req, res) => {
 // Served from the same resolved dir multer writes to (/tmp on Vercel).
 app.use('/uploads/public', express.static(PUBLIC_DIR, { maxAge: '7d' }));
 
+// security.txt (RFC 9116): express.static ignores dotfiles by default, so
+// serve /.well-known/security.txt explicitly. Netlify serves it from
+// public/ directly; this keeps local/dev behaviour identical to live.
+app.get('/.well-known/security.txt', (req, res) => {
+  res.type('text/plain').sendFile(path.join(ROOT, 'public', '.well-known', 'security.txt'), { dotfiles: 'allow' });
+});
+
 // Frontend SPA (built by the frontend agent; served as-is here).
 app.use(express.static(path.join(ROOT, 'public')));
 

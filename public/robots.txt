@@ -1,3 +1,5 @@
 User-agent: *
 Allow: /
 Disallow: /api/
+
+Sitemap: https://sahay-pay.netlify.app/sitemap.xml
