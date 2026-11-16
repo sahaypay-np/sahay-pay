@@ -82,7 +82,20 @@ async function main() {
   $('#c-next').click();
   check('onboarding form renders', await waitFor(() => !!$('#ob-form'), 3000, 'onboarding'));
 
-  // 3. Fill + submit onboarding (age 25, NP).
+  // 3. Onboarding validation: empty submit shows specific inline errors (562/554),
+  // then a partial fill clears only the fixed field's error (555: data preserved).
+  $('#ob-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await sleep(100);
+  check('onboarding empty submit shows inline errors', !!$('#e-name').textContent && !!$('#e-age').textContent && !!$('#e-city').textContent,
+    'name=' + $('#e-name').textContent + ' age=' + $('#e-age').textContent + ' city=' + $('#e-city').textContent);
+  check('onboarding error fields get aria-invalid + aria-describedby',
+    $('#ob-name').getAttribute('aria-invalid') === 'true' && $('#ob-name').getAttribute('aria-describedby') === 'e-name');
+  $('#ob-name').value = 'Harness User';
+  $('#ob-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await sleep(100);
+  check('onboarding keeps entered data after a failed submit', $('#ob-name').value === 'Harness User' && !$('#e-name').textContent && !!$('#e-age').textContent);
+
+  // Fill + submit onboarding (age 25, NP).
   $('#ob-name').value = 'Harness User';
   $('#ob-age').value = '25';
   $('#ob-city').value = 'Bhairahawa';
@@ -113,7 +126,127 @@ async function main() {
   window.location.hash = '#/mybills';
   check('my bills renders', await waitFor(() => text().includes('My Bills'), 5000, 'mybills'));
   window.location.hash = '#/post';
-  check('post step 1 renders', await waitFor(() => !!doc.querySelector('#view h1'), 5000, 'post'));
+  check('post step 1 renders', await waitFor(() => !!$('#f-title'), 5000, 'post'));
+
+  // 5b. Post flow end to end (562): step 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> submitted.
+  $('#f-title').value = 'Harness electricity bill';
+  doc.querySelector('#f-cats .chip').click();
+  $('#f-amount').value = '5000';
+  $('#f-story').value = 'Harness test story for the post flow, long enough to be a real story.';
+  $('#p-next').click();
+  check('post step 2 renders (photo)', await waitFor(() => !!$('#f-photo'), 3000, 'post step 2'));
+  $('#p-next').click();
+  check('post step 3 renders (profile)', await waitFor(() => !!$('#f-anon'), 3000, 'post step 3'));
+  $('#p-next').click();
+  check('post step 4 renders (payout)', await waitFor(() => !!doc.querySelector('[data-payout]'), 3000, 'post step 4'));
+  doc.querySelector('[data-payout="0"] [data-f="account"]').value = '9800000000';
+  doc.querySelector('[data-payout="0"] [data-f="holder"]').value = 'Harness User';
+  $('#f-belongs').checked = true;
+  $('#p-next').click();
+  check('post step 5 renders (verification)', await waitFor(() => !!$('#v-bill'), 3000, 'post step 5'));
+  $('#p-next').click();
+  check('post step 6 renders (preview)', await waitFor(() => text().includes('Final preview'), 3000, 'post step 6'));
+  $('#p-next').click();
+  check('post submits and shows request code', await waitFor(() => text().includes('Your request code'), 8000, 'post submitted'), text().slice(0, 200));
+
+  // 5c. Complaint form: validation error path, then a real submit (786/554).
+  window.location.hash = '#/help?topic=complaints';
+  check('complaint form renders', await waitFor(() => !!$('#cp-send'), 5000, 'complaint form'));
+  $('#cp-send').click();
+  await sleep(100);
+  check('complaint empty submit shows inline error', !!$('#cp-err').textContent);
+  $('#cp-subject').value = 'Harness complaint';
+  $('#cp-body').value = 'Testing the complaint form end to end.';
+  $('#cp-send').click();
+  check('complaint submits and clears the form', await waitFor(() => $('#cp-subject').value === '' && doc.getElementById('toast-root').textContent.length > 0, 5000, 'complaint sent'));
+
+  // 5d. Footer links (549): all five present; Terms/Privacy land on full text.
+  const footerLinks = [...doc.querySelectorAll('#site-footer a')].map((a) => a.getAttribute('href'));
+  check('footer has 5 links (help/terms/privacy/refunds/about)', footerLinks.length === 5, footerLinks.join(','));
+  check('footer copyright present', text().includes('© 2026') || doc.getElementById('site-footer').textContent.includes('© 2026'));
+  window.location.hash = '#/swipe';
+  await waitFor(() => !!$('#deck-wrap'), 5000, 'swipe again');
+  doc.querySelector('#site-footer a[href="#/help?topic=terms"]').click();
+  check('footer Terms link opens full terms', await waitFor(() => text().includes('Governing law and contact'), 5000, 'footer terms'));
+  doc.querySelector('#site-footer a[href="#/help?topic=privacy"]').click();
+  check('footer Privacy link opens full privacy policy', await waitFor(() => text().includes('Individual Privacy Act 2075'), 5000, 'footer privacy'));
+  doc.querySelector('#site-footer a[href="#/help"]').click();
+  check('footer Help Centre link opens topic list', await waitFor(() => !!$('#help-list'), 5000, 'footer help'));
+  // Refunds/About topics land with workstream C; until then they must fall
+  // back to the Help Centre list, never a crash or a 404 view.
+  doc.querySelector('#site-footer a[href="#/help?topic=refunds"]').click();
+  check('footer Refunds link lands on help (topic pending)', await waitFor(() => !!$('#help-list') || text().includes('Refund'), 5000, 'footer refunds'));
+  doc.querySelector('#site-footer a[href="#/help?topic=about"]').click();
+  check('footer About link lands on help (topic pending)', await waitFor(() => !!$('#help-list') || text().includes('About'), 5000, 'footer about'));
+
+  // 5e. Dock tabs (549): each tab navigates to its view.
+  const tabs = ['swipe', 'post', 'leaders', 'brands', 'mybills'];
+  let tabsOk = true;
+  for (const tab of tabs) {
+    doc.querySelector(`.dock-tab[data-tab="${tab}"]`).click();
+    const ok = await waitFor(() => window.location.hash === '#/' + tab, 3000, 'dock ' + tab);
+    if (!ok) tabsOk = false;
+  }
+  check('all 5 dock tabs navigate to their views', tabsOk);
+
+  // 5f. Help topic links (674): every topic renders, none 404s.
+  let topicsOk = true;
+  for (const topic of ['helping', 'posting', 'faq', 'verification', 'fees', 'safety', 'complaints', 'privacy', 'terms']) {
+    window.location.hash = '#/help?topic=' + topic;
+    const ok = await waitFor(() => !!doc.querySelector('#view h1') && !text().includes('Page not found'), 3000, 'topic ' + topic);
+    if (!ok) topicsOk = false;
+  }
+  check('all 9 help topics render without a 404', topicsOk);
+
+  // 5g. Branded 404 (563/572) for unknown routes + unknown bills.
+  window.location.hash = '#/does-not-exist';
+  check('unknown route shows branded 404 view', await waitFor(() => text().includes('Page not found') && !!doc.querySelector('#view h1'), 3000, '404 view'));
+  window.location.hash = '#/bill/no-such-bill';
+  check('unknown bill shows not-found state', await waitFor(() => text().includes("isn't available"), 5000, 'bill 404'));
+
+  // 5h. Skeleton loading state (566/572): visible while the bill loads.
+  window.location.hash = '#/swipe';
+  await waitFor(() => !!$('#deck-wrap'), 5000, 'swipe again 2');
+  window.location.hash = '#/bill/another-missing-bill';
+  let sawSkeleton = false;
+  for (let i = 0; i < 120; i++) {
+    if (doc.querySelector('.skel[role="status"]')) { sawSkeleton = true; break; }
+    await sleep(5);
+  }
+  check('skeleton shows a visible loading state (role=status)', sawSkeleton);
+  await waitFor(() => text().includes("isn't available"), 5000, 'bill 404 again');
+
+  // 5i. Escape closes sheets, and the sheet has a close button (550).
+  window.location.hash = '#/swipe';
+  await waitFor(() => !!$('#f-open'), 5000, 'swipe again 3');
+  $('#f-open').click();
+  check('filters sheet opens with a close button', await waitFor(() => !!doc.querySelector('#sheet-root [role="dialog"]') && !!doc.querySelector('.sheet-close'), 3000, 'sheet open'));
+  doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await sleep(100);
+  check('Escape closes the sheet', !doc.querySelector('#sheet-root').firstChild);
+
+  // 5j. Offline banner (569): offline event shows it, online hides it.
+  window.dispatchEvent(new window.Event('offline'));
+  await sleep(100);
+  check('offline event shows the offline banner', !$('#offline-banner').hidden && $('#offline-text').textContent.length > 0);
+  window.dispatchEvent(new window.Event('online'));
+  await sleep(100);
+  check('online event hides the offline banner', $('#offline-banner').hidden);
+
+  // 5k. Skip link (547): present, and clicking it focuses main without routing.
+  check('skip link present', !!doc.querySelector('.skip-link') && doc.querySelector('.skip-link').getAttribute('href') === '#view');
+  const hashBefore = window.location.hash;
+  doc.querySelector('.skip-link').click();
+  await sleep(100);
+  check('skip link focuses main and does not route to 404', window.location.hash === hashBefore && doc.activeElement === doc.getElementById('view'));
+
+  // 5l. Static shell assets (736/502): service worker, logo, manifest all serve.
+  const swRes = await jarFetch(BASE + '/sw.js');
+  const swText = await swRes.text();
+  check('service worker serves and never caches /api/*', swRes.status === 200 && swText.includes('/api/') && swText.includes('never cache API'));
+  check('logo + manifest serve', (await jarFetch(BASE + '/logo.svg')).status === 200 && (await jarFetch(BASE + '/manifest.webmanifest')).status === 200);
+  check('html lang matches the active locale (en)', doc.documentElement.lang === 'en');
+  check('header uses the SVG logo', !!doc.querySelector('.logo-mark img[src="logo.svg"]'));
 
   // 6. Admin: PIN setup (fresh DB) -> login -> dashboard metrics load.
   window.location.hash = '#/admin';
@@ -130,6 +263,18 @@ async function main() {
   if (loginBtn) loginBtn.click();
   check('admin dashboard loads', await waitFor(() => window.location.hash.startsWith('#/admin/dashboard') && !!$('#ad-body'), 8000, 'dashboard'));
   check('dashboard shows real metrics (1 user)', await waitFor(() => text().includes('1'), 5000, 'metrics'));
+
+  // 6b. Logout resets the header (a): avatar back to '?', badge hidden.
+  window.location.hash = '#/settings';
+  await waitFor(() => !!$('#st-logout'), 5000, 'settings again');
+  $('#st-logout').click();
+  check('logout confirm dialog opens', await waitFor(() => !!doc.querySelector('#modal-root [data-act="yes"]'), 3000, 'logout confirm'));
+  doc.querySelector('#modal-root [data-act="yes"]').click();
+  check('logout lands on welcome', await waitFor(() => window.location.hash === '#/welcome', 5000, 'welcome after logout'));
+  await sleep(200);
+  check('header avatar resets to ? after logout', $('#avatar-initial').textContent === '?');
+  check('bell badge hidden after logout', $('#bell-badge').hidden === true);
+  check('country chip hidden after logout', $('#country-chip').hidden === true);
 
   // 7. No uncaught page errors at any point.
   check('no uncaught page errors', errors.length === 0, errors.slice(0, 5).join(' | '));
