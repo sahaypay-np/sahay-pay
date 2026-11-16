@@ -15,15 +15,149 @@ const crypto = require('crypto');
 const db = require('../db');
 const { logAudit, nowIso } = require('./audit');
 
-async function createNotification(userId, kind, title, body, link = '') {
+// --- Notification preferences (Phase 2 §7, items 612–618) ---
+// Every notification kind maps to one preference event. The user's
+// prefs_json.notifyTypes[event] === false suppresses that event (default:
+// everything on). Legacy notifyPrefs (posts/gifts/brands) still apply as
+// a fallback for users who never set the per-event toggles.
+// Categories: 'security' alerts can NEVER be turned off (item 616) and
+// bypass the pause + quiet-hours rules; everything else is non-essential
+// for the pause rule (614) and non-urgent for quiet hours (617).
+const KIND_EVENT = {
+  post_approved: 'bill_approved',
+  post_rejected: 'bill_rejected',
+  changes_requested: 'changes_requested',
+  bill_paused: 'security',
+  bill_removed: 'security',
+  bill_restored: 'security',
+  poster_warned: 'security',
+  payout_edited: 'security',
+  gift_started: 'gift_received',
+  gift_details_shown: 'gift_received',
+  gift_reported_sent: 'gift_received',
+  gift_confirmed: 'gift_confirmed',
+  gift_not_received: 'gift_received',
+  gift_progress: 'milestones',
+  first_gift: 'milestones',
+  gift_fully_funded: 'milestones',
+  milestone_giver: 'milestones',
+  milestone_helper: 'milestones',
+  verification_approved: 'verification',
+  verification_decided: 'verification',
+  complaint_resolved: 'account',
+  appeal_decided: 'account',
+  report_decided: 'account',
+  user_notice: 'account',
+  digest_weekly: 'digest',
+  digest_monthly: 'digest',
+  referral_milestone: 'referral',
+  referral_friend: 'referral',
+  message_received: 'messages',
+  thank_you_received: 'thanks',
+  announcement: 'announcements',
+  broadcast: 'announcements',
+  deadline_reminder: 'bills',
+  confirm_reminder: 'gifts',
+  verification_reminder: 'verification',
+  thank_you_reminder: 'thanks',
+};
+const SECURITY_EVENTS = new Set(['security']);
+// Legacy notifyPrefs fallback: posts -> bill events, gifts -> gift events,
+// brands -> announcements.
+const LEGACY_EVENT_MAP = {
+  bill_approved: 'posts', bill_rejected: 'posts', changes_requested: 'posts',
+  gift_received: 'gifts', gift_confirmed: 'gifts',
+  announcements: 'brands',
+};
+
+async function getUserPrefs(userId) {
+  try {
+    const row = await db.get('SELECT prefs_json FROM users WHERE id = $1', [userId]);
+    return JSON.parse(row?.prefs_json || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function eventEnabled(prefs, event) {
+  if (SECURITY_EVENTS.has(event)) return true; // item 616: security cannot be off
+  const types = prefs.notifyTypes || {};
+  if (types[event] === false) return false;
+  if (types[event] === true) return true;
+  const legacyKey = LEGACY_EVENT_MAP[event];
+  if (legacyKey && prefs.notifyPrefs && prefs.notifyPrefs[legacyKey] === false) return false;
+  return true;
+}
+
+// Quiet hours (item 617): prefs.quietHours = {start, end} in LOCAL hours
+// (0–23), prefs.tzOffsetMinutes = minutes ahead of UTC (client-detected;
+// default +345, Nepal). Returns the ISO time the notification should be
+// delivered at, or null for "now". Non-urgent notifications created inside
+// the window are held until the window ends (lazy delivery on next visit).
+function quietHoursDeliverAt(prefs, event, nowMs) {
+  if (SECURITY_EVENTS.has(event)) return null;
+  const qh = prefs.quietHours;
+  if (!qh || !Number.isInteger(qh.start) || !Number.isInteger(qh.end) || qh.start === qh.end) return null;
+  const offsetMin = Number.isInteger(prefs.tzOffsetMinutes) ? prefs.tzOffsetMinutes : 345;
+  const localMs = nowMs + offsetMin * 60000;
+  const local = new Date(localMs);
+  const localMinutes = local.getUTCHours() * 60 + local.getUTCMinutes();
+  const startMin = qh.start * 60;
+  const endMin = qh.end * 60;
+  const inWindow = startMin < endMin
+    ? (localMinutes >= startMin && localMinutes < endMin)
+    : (localMinutes >= startMin || localMinutes < endMin);
+  if (!inWindow) return null;
+  // Next window end, in local minutes from now.
+  let daysAhead = 0;
+  if (localMinutes >= endMin) daysAhead = 1;
+  const endLocal = new Date(localMs);
+  endLocal.setUTCHours(Math.floor(endMin / 60), endMin % 60, 0, 0);
+  endLocal.setUTCDate(endLocal.getUTCDate() + daysAhead);
+  return new Date(endLocal.getTime() - offsetMin * 60000).toISOString();
+}
+
+async function createNotification(userId, kind, title, body, link = '', opts = {}) {
   if (!userId) return null;
+  const event = KIND_EVENT[kind] || 'account';
+  const prefs = await getUserPrefs(userId);
+  if (!eventEnabled(prefs, event)) return null; // per-event opt-out (613/615)
+  // Pause-all-non-essential (614): 7-day auto-resume — the toggle stores
+  // pauseUntil; once it passes, delivery resumes on its own (lazy check).
+  if (!SECURITY_EVENTS.has(event) && prefs.pauseUntil && Date.parse(prefs.pauseUntil) > Date.now()) {
+    return null;
+  }
+  const deliverAt = quietHoursDeliverAt(prefs, event, Date.now());
   const id = crypto.randomUUID();
   await db.run(
-    `INSERT INTO notifications (id, user_id, kind, title, body, link, is_read, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7)`,
-    [id, userId, kind, title, body, link, nowIso()]
+    `INSERT INTO notifications (id, user_id, kind, title, body, link, is_read, deliver_at, broadcast_id, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9)`,
+    [id, userId, kind, title, body, link, deliverAt, opts.broadcastId || null, nowIso()]
   );
   return id;
+}
+
+// Item 797: persist every owner-webhook delivery (target, kind, result)
+// so the admin console can show the delivery log. The stored URL is the
+// origin + path only — the query string is stripped because it could carry
+// a secret token.
+async function logWebhookDelivery(url, payloadKind, statusCode, error) {
+  try {
+    let safeUrl = '';
+    try {
+      const u = new URL(url);
+      safeUrl = `${u.origin}${u.pathname}`;
+    } catch {
+      safeUrl = String(url || '').split('?')[0].slice(0, 200);
+    }
+    await db.run(
+      `INSERT INTO webhook_deliveries (id, target_url, payload_kind, status_code, error, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [crypto.randomUUID(), safeUrl, payloadKind, statusCode, String(error || '').slice(0, 300), nowIso()]
+    );
+  } catch (err) {
+    console.error('[webhook] FAILED to log delivery:', err.message);
+  }
 }
 
 // Fire-and-forget POST of the review packet to the owner's webhook (Muse).
@@ -33,6 +167,7 @@ function sendOwnerWebhook(packet) {
   const url = process.env.OWNER_NOTIFICATION_WEBHOOK_URL;
   if (!url) return;
   const payload = JSON.stringify(packet);
+  const kind = packet?.type === 'webhook_test' ? 'webhook_test' : 'review_packet';
   fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -40,9 +175,11 @@ function sendOwnerWebhook(packet) {
   })
     .then((res) => {
       console.log(`[webhook] review packet ${packet.id} -> owner webhook: HTTP ${res.status}`);
+      logWebhookDelivery(url, kind, res.status, res.ok ? '' : `HTTP ${res.status}`);
     })
     .catch((err) => {
       console.error(`[webhook] review packet ${packet.id} -> owner webhook FAILED:`, err.message);
+      logWebhookDelivery(url, kind, null, err.message);
     });
 }
 
@@ -212,7 +349,11 @@ async function applyReviewDecision(packetId, decision, reason, actorType, actorI
 
 module.exports = {
   createNotification,
+  getUserPrefs,
+  eventEnabled,
+  KIND_EVENT,
   sendOwnerWebhook,
+  logWebhookDelivery,
   createReviewPacket,
   billPacketPayload,
   applyReviewDecision,
