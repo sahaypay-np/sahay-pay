@@ -42,7 +42,8 @@ t "onboard reporter (IN)" 201 "$c"
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" "$B/auth/me"); c=$(code "$r")
 t "GET /api/auth/me with cookie" 200 "$c"
 r=$(curl -s -w '\n%{http_code}' "$B/auth/me"); c=$(code "$r")
-t "GET /api/auth/me without cookie -> 401" 401 "$c"
+t "GET /api/auth/me without cookie -> 200 null" 200 "$c"
+echo "$(body "$r")" | grep -q '"user":null' && { echo "PASS: me null when logged out"; pass=$((pass+1)); } || { echo "FAIL: me null"; fail=$((fail+1)); }
 
 # --- admin PIN: fail-closed, setup once, login ---
 r=$(curl -s -w '\n%{http_code}' "$B/admin/pin-status")

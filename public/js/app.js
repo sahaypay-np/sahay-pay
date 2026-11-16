@@ -2400,7 +2400,7 @@ async function boot(){
   try{ S.config=await api("/config"); }catch(e){ S.config=null; }
   try{
     var me=await api("/auth/me");
-    S.user=me.user||me.profile||me;
+    S.user=(me&&me.user)||null;
     if(S.user&&S.user.language) I.setLang(S.user.language);
     if(S.user&&S.user.country) S.country=countryCode(S.user.country);
   }catch(e){ S.user=null; }

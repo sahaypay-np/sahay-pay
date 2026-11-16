@@ -107,9 +107,11 @@ router.post('/onboard', rateLimit('onboard', 10, 60 * 60 * 1000), async (req, re
   }
 });
 
-// GET /api/auth/me — restore the session (returning user lands straight in).
-router.get('/me', requireAuth, async (req, res) => {
-  res.json({ user: req.user });
+// GET /api/auth/me — who is signed in (null when logged out). Deliberately
+// 200 for logged-out visitors: the app calls this on every load, and a 401
+// would log a console error for every first-time visitor.
+router.get('/me', async (req, res) => {
+  res.json({ user: req.user || null });
 });
 
 // POST /api/auth/logout — end this device's session.
