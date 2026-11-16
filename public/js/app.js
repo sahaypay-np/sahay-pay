@@ -146,7 +146,7 @@ function progressHtml(bill){
 /* ---------- state ---------- */
 var S = {
   user:null, config:null, admin:false, booted:false,
-  csrfToken:null, adminCsrf:null,
+  csrfToken:null, adminCsrf:null, adminRole:null, adminName:null,
   country: (function(){ try{ return localStorage.getItem("sp_country")||null; }catch(e){ return null; } })(),
   feed:[], feedCursor:null, feedLoading:false, seen:{}, filters:loadFilters(),
   feedTotal:0, feedUpdatedAt:null, lastSwiped:null, lastSwipeAt:0, lastReshuffleAt:0,
@@ -4058,9 +4058,21 @@ function renderFounderTip(q){
 
 /* ---------- admin ---------- */
 function adminNav(active){
-  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["users",t("users")],["verifications",t("verifications")],["reports",t("reports")],["fees",t("fees")],["audit",t("audit_log")]];
-  return '<div class="admin-nav">'+links.map(function(l){ return '<a href="#/admin/'+l[0]+'" class="'+(active===l[0]?"on":"")+'">'+esc(l[1])+'</a>'; }).join("")+'</div>';
+  // Phase 2 §8: the full console nav. .admin-nav scrolls horizontally.
+  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["users",t("users")],["verifications",t("verifications")],
+    ["reports",t("reports")],["complaints",t("admin_complaints")],["appeals",t("admin_appeals")],["disputes",t("admin_disputes")],
+    ["escalations",t("admin_escalations")],["analytics",t("admin_analytics")],["payouts",t("admin_payouts")],
+    ["broadcasts",t("admin_broadcasts")],["announcements",t("admin_announcements")],["activity",t("admin_activity")],
+    ["admins",t("admin_admins")],["security",t("admin_security")],["weekly-report",t("admin_weekly")],
+    ["bridge-history",t("admin_bridge")],["webhook-log",t("admin_webhook")],["leaderboard-audit",t("admin_leaderboard_audit")],
+    ["fees",t("fees")],["audit",t("audit_log")]];
+  return '<div class="admin-nav">'+links.map(function(l){ return '<a href="#/admin/'+l[0]+'" class="'+(active===l[0]?"on":"")+'">'+esc(l[1])+'</a>'; }).join("")+'</div>'
+    +(S.adminName?'<p class="small muted">'+esc(t("admin_role"))+': '+esc(S.adminName)+' ('+esc(S.adminRole||"owner")+')'+(isViewer()?' · '+esc(t("viewer_readonly")):"")+'</p>':"");
 }
+// Item 772: viewers are read-only — the console hides write UI for them
+// (the server also rejects viewer writes; this is the UX half).
+function isViewer(){ return S.adminRole==="viewer"; }
+function isOwner(){ return S.adminRole==="owner" || !S.adminRole; }
 function adminGuard(){
   if(!S.admin){
     view('<h1>'+esc(t("admin"))+'</h1>'+emptyState("🔐", t("no_admin"), t("need_login_admin"), '<a class="btn small" href="#/admin">'+esc(t("admin_login"))+'</a>'));
@@ -4069,8 +4081,16 @@ function adminGuard(){
   return true;
 }
 async function checkAdminSession(){
-  try{ var d=await api("/admin/session"); S.admin=!!(d&&d.admin); return d; }
-  catch(e){ S.admin=false; return null; }
+  try{
+    var d=await api("/admin/session");
+    S.admin=!!(d&&d.admin);
+    // Items 771/772: remember the role so the console can hide write UI
+    // for viewers. A session with no role is the owner (shared PIN).
+    S.adminRole=(d&&d.role)||(S.admin?"owner":null);
+    S.adminName=(d&&d.displayName)||(S.admin?"Owner":null);
+    return d;
+  }
+  catch(e){ S.admin=false; S.adminRole=null; S.adminName=null; return null; }
 }
 function renderAdminLogin(){
   view('<h1>'+esc(t("admin"))+'</h1><div id="ad-body">'+skeleton(1)+'</div>');
@@ -4100,26 +4120,52 @@ function renderAdminLogin(){
         return;
       }
       body.innerHTML='<div class="card"><h2>'+esc(t("admin_login"))+'</h2><p>'+esc(t("pin_login_body"))+'</p>'
+        // Items 771–772: per-admin login path (team admins log in with
+        // their admin ID + individual PIN; the owner uses the shared PIN).
+        +'<label class="check-row"><input type="checkbox" id="ad-team"> '+esc(t("admin_team_login"))+'</label>'
+        +'<div id="ad-team-fields" hidden><label for="ad-adminid">'+esc(t("admin_id_label"))+'</label><input id="ad-adminid" autocomplete="username" placeholder="admin id"></div>'
         +'<label for="ad-pin">'+esc(t("pin_label"))+'</label><input id="ad-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="current-password" aria-describedby="ad-err">'
         +'<div class="field-err" id="ad-err" role="alert"></div>'
         +'<button class="btn" id="ad-login">'+esc(t("login"))+'</button>'
         +'<p class="small" style="margin-top:10px">'+esc(t("pin_forgot"))+'</p><p class="small">'+esc(t("session_admin_note"))+'</p></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("redeem_invite"))+'</h2><p class="small">'+esc(t("redeem_invite_note"))+'</p>'
+        +'<label for="ad-code">'+esc(t("invite_code"))+'</label><input id="ad-code" autocomplete="off">'
+        +'<label for="ad-name">'+esc(t("display_name"))+'</label><input id="ad-name" maxlength="60">'
+        +'<label for="ad-newpin">'+esc(t("pin_label"))+'</label><input id="ad-newpin" type="password" inputmode="numeric" maxlength="12" autocomplete="new-password">'
+        +'<button class="btn secondary" id="ad-redeem" style="margin-top:10px">'+esc(t("redeem_invite"))+'</button></div>'
         +'<div class="card" style="margin-top:12px"><h2>'+esc(t("change_pin"))+'</h2>'
         +'<label for="ad-old">'+esc(t("old_pin"))+'</label><input id="ad-old" type="password" inputmode="numeric" maxlength="12">'
         +'<label for="ad-new">'+esc(t("new_pin"))+'</label><input id="ad-new" type="password" inputmode="numeric" maxlength="12">'
         +'<button class="btn secondary" id="ad-change" style="margin-top:10px">'+esc(t("change_pin"))+'</button></div>';
+      $("#ad-team").onchange=function(){ $("#ad-team-fields").hidden=!$("#ad-team").checked; };
       $("#ad-login").onclick=async function(){
         var pin=$("#ad-pin").value;
         if(!pin){ $("#ad-err").textContent=t("pin_required"); return; }
+        var adminId=$("#ad-team").checked?$("#ad-adminid").value.trim():"";
+        if($("#ad-team").checked && !adminId){ $("#ad-err").textContent=t("admin_id_required"); return; }
         var btn=$("#ad-login"); btn.disabled=true; btn.textContent=t("loading");
         try{
-          var lr=await api("/admin/login", {method:"POST", body:{pin:pin}});
+          var lr=await api("/admin/login", {method:"POST", body:adminId?{adminId:adminId, pin:pin}:{pin:pin}});
           if(lr&&lr.csrfToken) S.adminCsrf=lr.csrfToken;
           S.admin=true;
+          S.adminRole=(lr&&lr.role)||"owner";
+          S.adminName=(lr&&lr.displayName)||"Owner";
           if(location.hash.split("?")[0]!=="#/admin") return;
           toast(t("admin_welcome")); go("#/admin/dashboard");
-        }catch(e){ btn.disabled=false; btn.textContent=t("login"); var ae=$("#ad-err"); if(ae) ae.textContent=(e.status===401||e.status===403)?t("wrong_pin"):(e.message||t("err_generic")); }
+        }catch(e){ btn.disabled=false; btn.textContent=t("login"); var ae=$("#ad-err"); if(ae) ae.textContent=(e.status===401||e.status===403)?t("wrong_pin"):(e.status===423?t("admin_locked"):(e.message||t("err_generic"))); }
 
+      };
+      $("#ad-redeem").onclick=async function(){
+        var code=$("#ad-code").value.trim(), name=$("#ad-name").value.trim(), pin=$("#ad-newpin").value;
+        if(!code||!name){ toast(t("err_required"), true); return; }
+        if(pin.length<6||!/^\d+$/.test(pin)){ toast(t("pin_min"), true); return; }
+        var b=$("#ad-redeem"); b.disabled=true; b.textContent=t("loading");
+        try{
+          var r=await api("/admin/redeem-invite", {method:"POST", body:{code:code, displayName:name, pin:pin}});
+          toast(t("invite_redeemed")+" — "+esc(r.adminUser?r.adminUser.id:""));
+          $("#ad-code").value=""; $("#ad-name").value=""; $("#ad-newpin").value="";
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ b.disabled=false; b.textContent=t("redeem_invite"); }
       };
       $("#ad-change").onclick=async function(){
         var oldP=$("#ad-old").value, newP=$("#ad-new").value;
@@ -4142,7 +4188,7 @@ function adminExportBtn(){
 }
 function bindAdminLogout(){
   var b=$("#ad-logout");
-  if(b) b.onclick=async function(){ try{ await api("/admin/logout", {method:"POST"}); }catch(e){} S.admin=false; go("#/admin"); };
+  if(b) b.onclick=async function(){ try{ await api("/admin/logout", {method:"POST"}); }catch(e){} S.admin=false; S.adminRole=null; S.adminName=null; go("#/admin"); };
 }
 function bindAdminExport(){
   var b=$("#ad-export"); if(!b) return;
@@ -4184,10 +4230,48 @@ async function renderAdminDashboard(){
       +statBox(t("open_reports"), m.openReports||m.open_reports||0)
       +statBox(t("open_complaints"), m.openComplaints!=null?m.openComplaints:(m.open_complaints||0))
       +'</div>'
+      // Items 715/755/764: SLA alerts — overdue packets, stuck gifts,
+      // overdue reports — plus open appeals and disputes.
+      +((m.overdueReviewPackets||m.stuckGifts||m.overdueReports||m.openAppeals||m.openDisputes)
+        ? '<div class="notice warn" style="margin-top:12px"><strong>'+esc(t("admin_alerts"))+'</strong><ul style="margin:6px 0 0;padding-left:18px">'
+          +(m.overdueReviewPackets?'<li><a href="#/admin/queue">'+esc(t("overdue_packets"))+': '+esc(m.overdueReviewPackets)+'</a></li>':"")
+          +(m.stuckGifts?'<li><a href="#/admin/payouts">'+esc(t("stuck_gifts"))+': '+esc(m.stuckGifts)+'</a></li>':"")
+          +(m.overdueReports?'<li><a href="#/admin/reports">'+esc(t("overdue_reports"))+': '+esc(m.overdueReports)+'</a></li>':"")
+          +(m.openAppeals?'<li><a href="#/admin/appeals">'+esc(t("open_appeals"))+': '+esc(m.openAppeals)+'</a></li>':"")
+          +(m.openDisputes?'<li><a href="#/admin/disputes">'+esc(t("open_disputes"))+': '+esc(m.openDisputes)+'</a></li>':"")
+          +'</ul></div>' : "")
+      // Item 791/792: admin availability status (shown to users via /config).
+      +'<div class="card" style="margin-top:12px"><h2>'+esc(t("admin_available"))+'</h2><p class="small">'+esc(t("availability_note"))+'</p><p id="av-state" class="small">'+esc(t("loading"))+'</p><button class="btn secondary small" id="av-toggle" disabled>'+esc(t("availability_toggle"))+'</button></div>'
+      // Item 800: human-only moderation policy, stated on the console.
+      +'<div class="notice info" style="margin-top:12px"><p style="margin:0">'+esc(t("human_only_note"))+'</p></div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("fee_mode"))+'</h2><p>'+esc(t("current_mode"))+': <strong>'+esc((S.config&&S.config.feeMode)||"supporter_fee")+'</strong></p><p class="small">'+esc(feeSentence())+'</p><a class="btn secondary small" href="#/admin/fees">'+esc(t("fees"))+'</a></div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("maintenance_mode"))+'</h2><p class="small">'+esc(t("maintenance_note"))+'</p><p id="mt-state" class="small">'+esc(t("loading"))+'</p><button class="btn secondary small" id="mt-toggle" disabled>'+esc(t("maintenance_toggle"))+'</button></div>'
 
       +'<div class="btn-row"><a class="btn" href="#/admin/queue">'+esc(t("admin_queue_cta"))+'</a><a class="btn secondary" href="#/swipe">'+esc(t("back_to_app"))+'</a></div>';
+    // Availability toggle (items 791–792; owner only).
+    (async function(){
+      var stEl=$("#av-state"), btn=$("#av-toggle"); if(!stEl||!btn) return;
+      try{
+        var cur=await api("/admin/availability");
+        var on=!!cur.available;
+        stEl.textContent=on?t("admin_available"):t("admin_unavailable");
+        if(isOwner()&&!isViewer()){
+          btn.disabled=false;
+          btn.textContent=on?t("admin_unavailable"):t("availability_toggle");
+          btn.onclick=async function(){
+            btn.disabled=true;
+            try{
+              var r=await api("/admin/availability", {method:"PUT", body:{available:!on}});
+              on=!!r.available;
+              stEl.textContent=on?t("admin_available"):t("admin_unavailable");
+              btn.textContent=on?t("admin_unavailable"):t("availability_toggle");
+              toast(on?t("admin_available"):t("admin_unavailable"));
+            }catch(e){ toast(e.message||t("err_generic"), true); }
+            btn.disabled=false;
+          };
+        }
+      }catch(e){ stEl.textContent=t("err_generic"); }
+    })();
     // Maintenance kill-switch toggle (item 194).
     (async function(){
       var stEl=$("#mt-state"), btn=$("#mt-toggle"); if(!stEl||!btn) return;
@@ -4221,28 +4305,73 @@ async function renderAdminDashboard(){
 function renderAdminQueue(){
   if(!adminGuard()) return;
   view('<h1>'+esc(t("queue"))+'</h1><p class="small">'+esc(t("packet_meta"))+'</p>'+adminNav("queue")
-    +'<div class="tabs"><button class="tab-btn on" data-s="pending">'+esc(t("pending"))+'</button><button class="tab-btn" data-s="approved">'+esc(t("approved"))+'</button><button class="tab-btn" data-s="rejected">'+esc(t("rejected"))+'</button><button class="tab-btn" data-s="changes_requested">'+esc(t("changes_requested"))+'</button></div>'
+    +'<div class="tabs"><button class="tab-btn on" data-s="pending">'+esc(t("pending"))+'</button><button class="tab-btn" data-s="held">'+esc(t("queue_held"))+'</button><button class="tab-btn" data-s="approved">'+esc(t("approved"))+'</button><button class="tab-btn" data-s="rejected">'+esc(t("rejected"))+'</button><button class="tab-btn" data-s="changes_requested">'+esc(t("changes_requested"))+'</button></div>'
+    // Items 709–711: type filter, oldest/newest sort, flagged-only, search.
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
+    +'<select id="q-type" aria-label="'+esc(t("queue_filter_type"))+'"><option value="">'+esc(t("queue_all_types"))+'</option><option value="bill">'+esc(t("packet_bill"))+'</option><option value="brand">'+esc(t("packet_brand"))+'</option><option value="auction">'+esc(t("packet_auction"))+'</option><option value="photo">'+esc(t("packet_photo"))+'</option></select>'
+    +'<select id="q-order" aria-label="'+esc(t("queue_sort"))+'"><option value="newest">'+esc(t("queue_newest"))+'</option><option value="oldest">'+esc(t("queue_oldest"))+'</option></select>'
+    +'<label class="check-row"><input type="checkbox" id="q-flagged"> '+esc(t("queue_flagged"))+'</label>'
+    +'<input id="q-search" placeholder="'+esc(t("queue_search_ph"))+'" style="flex:1;min-width:160px"></div>'
+    // Items 705–708: bulk decision bar (appears when packets are checked).
+    +'<div id="q-bulk" class="card" style="margin-bottom:10px" hidden><p class="small">'+esc(t("bulk_select"))+'</p><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><select id="q-bulk-dec"><option value="approve">'+esc(t("approve"))+'</option><option value="reject">'+esc(t("reject"))+'</option><option value="changes">'+esc(t("request_changes"))+'</option></select><input id="q-bulk-reason" placeholder="'+esc(t("decision_reason"))+'" style="flex:1;min-width:160px"><button class="btn small" id="q-bulk-go"></button></div></div>'
     +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
   bindAdminLogout();
   var status="pending";
-  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ status=b.getAttribute("data-s"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  var selected={};
+  function selCount(){ return Object.keys(selected).filter(function(k){ return selected[k]; }).length; }
+  function drawBulk(){
+    var bar=$("#q-bulk"); if(!bar) return;
+    var n=selCount();
+    bar.hidden=n===0;
+    var go=$("#q-bulk-go"); if(go) go.textContent=t("bulk_decide", {n:n});
+  }
+  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ status=b.getAttribute("data-s"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); selected={}; drawBulk(); load(); }; });
+  $("#q-type").onchange=load; $("#q-order").onchange=load; $("#q-flagged").onchange=load;
+  var searchTimer=null;
+  $("#q-search").addEventListener("input", function(){ clearTimeout(searchTimer); searchTimer=setTimeout(load, 300); });
+  $("#q-bulk-go").onclick=function(){
+    var ids=Object.keys(selected).filter(function(k){ return selected[k]; });
+    var dec=$("#q-bulk-dec").value;
+    var reason=$("#q-bulk-reason").value.trim();
+    if(dec!=="approve" && !reason){ toast(t("err_required"), true); return; }
+    confirmDialog(t("bulk_decide", {n:ids.length}), t("bulk_confirm", {n:ids.length, decision:dec}), t("bulk_decide", {n:ids.length}), async function(){
+      try{
+        var r=await api("/admin/review/bulk", {method:"POST", body:{packetIds:ids, decision:dec, reason:reason||undefined}});
+        toast(t("bulk_done", {n:r.decided, total:r.requested}));
+        selected={}; drawBulk(); load();
+      }catch(e){ toast(e.message||t("err_generic"), true); }
+    });
+  };
   load();
   async function load(){
     var body=$("#ad-body"); if(!body) return;
     body.innerHTML=skeleton(2);
     try{
-      var d=await api("/admin/queue?status="+encodeURIComponent(status));
+      var qs="?status="+encodeURIComponent(status);
+      var tt=$("#q-type").value; if(tt) qs+="&target_type="+encodeURIComponent(tt);
+      qs+="&order="+encodeURIComponent($("#q-order").value);
+      if($("#q-flagged").checked) qs+="&flagged=1";
+      var q=$("#q-search").value.trim(); if(q) qs+="&q="+encodeURIComponent(q);
+      var d=await api("/admin/queue"+qs);
       var packets=pickList(d,["packets","queue"]);
       if(!packets.length){ body.innerHTML=emptyState("📥", t("no_packets"), t("review_queue_empty")); return; }
       body.innerHTML=packets.map(function(pk){
         var pay=pk.payload||pk.payload_json||{};
         if(typeof pay==="string"){ try{ pay=JSON.parse(pay); }catch(e){ pay={}; } }
         var typeLabel={bill:t("packet_bill"),brand:t("packet_brand"),auction:t("packet_auction"),photo:t("packet_photo")}[pk.target_type||pk.targetType]||(pk.target_type||"");
-        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(typeLabel)+'</strong><span class="chip">'+esc(pk.status||"")+'</span></div>'
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><span>'
+          +(!isViewer()&&pk.status==="pending"?'<input type="checkbox" class="q-sel" data-id="'+esc(pk.id)+'" '+(selected[pk.id]?"checked":"")+' aria-label="'+esc(t("bulk_select"))+'"> ':"")
+          +'<strong>'+esc(typeLabel)+'</strong></span><span class="chip">'+esc(pk.status||"")+'</span></div>'
           +'<p class="small">'+esc(pay.title||pay.name||pk.target_id||"")+' · '+esc(timeAgo(pk.created_at||pk.createdAt))+'</p>'
           +(pay.amountMinor!=null?'<p class="small">'+esc(money(pay.amountMinor, pay.currency||"NPR"))+'</p>':"")
+          +(pk.flagged?'<p class="small" style="color:var(--warn)">🚩 '+esc(t("queue_flagged_bill"))+'</p>':"")
+          +(pk.watchlisted?'<p class="small" style="color:var(--warn)">👀 '+esc(t("queue_watchlisted"))+'</p>':"")
+          +(pk.approvedBy?'<p class="small">'+esc(t("queue_approved_by"))+': '+esc(pk.approvedBy)+'</p>':"")
           +'<button class="btn small" data-packet="'+esc(pk.id)+'">'+esc(t("open_packet"))+'</button></div>';
       }).join("");
+      $all(".q-sel", body).forEach(function(cb){
+        cb.onchange=function(){ selected[cb.getAttribute("data-id")]=cb.checked; drawBulk(); };
+      });
       $all("[data-packet]", body).forEach(function(btn){
         btn.onclick=function(){
           var pk=packets.find(function(x){ return String(x.id)===String(btn.getAttribute("data-packet")); });
@@ -4279,13 +4408,22 @@ function renderAdminQueue(){
       +(pay.hasPrivateProof||pay.privateProof?'<p class="small">🔒 '+esc(t("packet_proof"))+'</p>':"")
       +(pay.aiNote?'<p class="small muted">'+esc(pay.aiNote)+'</p>':"")
       +(pay.flags&&pay.flags.length?'<h3>'+esc(t("packet_flags"))+'</h3><p class="small">'+esc(t("ai_suggested"))+'</p><ul>'+pay.flags.map(function(f){ return '<li>'+esc(typeof f==="string"?f:JSON.stringify(f))+'</li>'; }).join("")+'</ul>':"")
-      +'<label for="pk-reason">'+esc(t("decision_reason"))+'</label><textarea id="pk-reason" maxlength="500" placeholder="'+esc(t("reason_ph"))+'"></textarea>'
+      +(isViewer()?"":'<label for="pk-reason">'+esc(t("decision_reason"))+'</label><textarea id="pk-reason" maxlength="500" placeholder="'+esc(t("reason_ph"))+'"></textarea>'
       +'<label for="pk-note">'+esc(t("owner_private_note"))+'</label><textarea id="pk-note" maxlength="500"></textarea>'
       +'<div class="field-err" id="pk-err" role="alert"></div>'
-      +'<div style="display:grid;gap:8px;margin-top:10px"><button class="btn" data-dec="approve">✓ '+esc(t("approve"))+'</button><button class="btn secondary" data-dec="changes">✎ '+esc(t("request_changes"))+'</button><button class="btn danger" data-dec="reject">✕ '+esc(t("reject"))+'</button></div>');
+      +'<div style="display:grid;gap:8px;margin-top:10px">'
+      +(pk.status==="pending"?'<button class="btn" data-dec="approve">✓ '+esc(t("approve"))+'</button><button class="btn secondary" data-dec="changes">✎ '+esc(t("request_changes"))+'</button><button class="btn danger" data-dec="reject">✕ '+esc(t("reject"))+'</button><button class="btn secondary" data-dec="hold">⏸ '+esc(t("queue_hold"))+'</button>':"")
+      +(pk.status==="held"?'<button class="btn secondary" data-dec="unhold">▶ '+esc(t("queue_unhold"))+'</button>':"")
+      +'</div>'));
     $all("[data-dec]").forEach(function(btn){
       btn.onclick=async function(){
         var dec=btn.getAttribute("data-dec");
+        if(dec==="hold"||dec==="unhold"){
+          btn.disabled=true;
+          try{ await api("/admin/review/"+encodeURIComponent(pk.id)+"/"+dec, {method:"POST"}); closeSheets(); toast(dec==="hold"?t("queue_held_msg"):t("queue_unheld_msg")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          return;
+        }
         var reason=$("#pk-reason").value.trim();
         if(dec!=="approve" && !reason){ $("#pk-err").textContent=t("err_required"); return; }
         btn.disabled=true;
@@ -4318,15 +4456,39 @@ function renderAdminUsers(){
       body.innerHTML='<div class="card" style="overflow-x:auto"><table class="tbl"><tr><th>'+esc(t("display_name"))+'</th><th>'+esc(t("user_status"))+'</th><th>'+esc(t("user_joined"))+'</th><th>'+esc(t("user_actions"))+'</th></tr>'
         +users.map(function(u){
           var susp=u.suspended?1:0;
-          return '<tr><td><strong>'+esc(u.display_name||u.displayName||"")+'</strong><br><span class="small">@'+esc(u.username||"")+' · '+flag(u.country)+' '+esc(u.city||"")+'</span></td><td>'+(susp?'<span class="chip bad">'+esc(t("suspend"))+'</span>':'<span class="chip good">'+esc(t("approved"))+'</span>')+'</td><td>'+esc(u.created_at?fmtDate(u.created_at):"")+'</td>'
-          +'<td><button class="btn secondary small" data-u="'+esc(u.id)+'" data-act="'+(susp?"restore":"suspend")+'">'+esc(susp?t("restore"):t("suspend"))+'</button></td></tr>';
+          var name=u.display_name||u.displayName||"";
+          return '<tr><td><strong>'+esc(name)+'</strong><br><span class="small">@'+esc(u.username||"")+' · '+flag(u.country)+' '+esc(u.city||"")+'</span><br><span class="small">'+esc(t("user_bills"))+': '+(u.billCount!=null?u.billCount:"—")+' · '+esc(t("user_gifts_sent"))+': '+(u.giftsSentCount!=null?u.giftsSentCount:"—")+'</span></td><td>'+(u.banned?'<span class="chip bad">'+esc(t("user_banned"))+'</span>':susp?'<span class="chip bad">'+esc(t("suspend"))+(u.suspendedUntil?" · "+esc(fmtDate(u.suspendedUntil)):"")+'</span>':'<span class="chip good">'+esc(t("approved"))+'</span>')
+            +(u.trustedPoster?' <span class="chip good">✓ '+esc(t("user_trusted"))+'</span>':"")
+            +(u.watchlist?' <span class="chip warn">👀 '+esc(t("user_watchlist"))+'</span>':"")
+            +'</td><td>'+esc(u.created_at||u.createdAt?fmtDate(u.created_at||u.createdAt):"")+'</td>'
+          +'<td><a class="btn secondary small" href="#/admin/users/'+encodeURIComponent(u.id)+'">'+esc(t("user_detail"))+'</a> '
+          +(isViewer()?"":'<button class="btn secondary small" data-u="'+esc(u.id)+'" data-act="'+(susp?"restore":"suspend")+'">'+esc(susp?t("restore"):t("suspend"))+'</button>')
+          +'</td></tr>';
         }).join("")+'</table></div>';
       $all("[data-u]", body).forEach(function(btn){
         btn.onclick=async function(){
           var act=btn.getAttribute("data-act"), id=btn.getAttribute("data-u");
-          btn.disabled=true;
-          try{ await api("/admin/users/"+encodeURIComponent(id)+"/"+act, {method:"POST"}); toast(act==="suspend"?t("user_suspended"):t("user_restored")); load(); }
-          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          if(act==="restore"){
+            btn.disabled=true;
+            try{ await api("/admin/users/"+encodeURIComponent(id)+"/restore", {method:"POST"}); toast(t("user_restored")); load(); }
+            catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+            return;
+          }
+          // Items 726/727: suspension needs a mandatory reason (shown to
+          // the user) and can be temporary (7/30 days) or indefinite.
+          openSheet('<h2>'+esc(t("suspend"))+'</h2>'
+            +'<label for="sp-reason">'+esc(t("user_suspend_reason"))+'</label><textarea id="sp-reason" maxlength="600"></textarea>'
+            +'<label for="sp-days">'+esc(t("user_suspend_days"))+'</label><select id="sp-days"><option value="7">'+esc(t("user_suspend_7"))+'</option><option value="30">'+esc(t("user_suspend_30"))+'</option><option value="">'+esc(t("user_suspend_indef"))+'</option></select>'
+            +'<div class="field-err" id="sp-err" role="alert"></div>'
+            +'<button class="btn danger" id="sp-go">'+esc(t("suspend"))+'</button>');
+          $("#sp-go").onclick=async function(){
+            var reason=$("#sp-reason").value.trim();
+            if(!reason){ $("#sp-err").textContent=t("err_required"); return; }
+            var days=$("#sp-days").value?Number($("#sp-days").value):undefined;
+            var b=$("#sp-go"); b.disabled=true; b.textContent=t("loading");
+            try{ await api("/admin/users/"+encodeURIComponent(id)+"/suspend", {method:"POST", body:{reason:reason, days:days}}); closeSheets(); toast(t("user_suspended")); load(); }
+            catch(e){ b.disabled=false; b.textContent=t("suspend"); toast(e.message||t("err_generic"), true); }
+          };
         };
       });
     }catch(e){
@@ -4372,27 +4534,60 @@ function renderAdminVerifications(){
 }
 function renderAdminReports(){
   if(!adminGuard()) return;
-  view('<h1>'+esc(t("reports"))+'</h1><p class="small">'+esc(t("admin_reports_note"))+'</p>'+adminNav("reports")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  view('<h1>'+esc(t("reports"))+'</h1><p class="small">'+esc(t("admin_reports_note"))+'</p>'+adminNav("reports")
+    // Items 761/766: filter by status and severity.
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><select id="rp-status"><option value="">'+esc(t("queue_all_types"))+'</option><option value="open" selected>'+esc(t("reports_open"))+'</option><option value="resolved">'+esc(t("reports_resolved"))+'</option></select>'
+    +'<select id="rp-sev"><option value="">'+esc(t("report_severity"))+': '+esc(t("queue_all_types"))+'</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
   bindAdminLogout();
+  $("#rp-status").onchange=load; $("#rp-sev").onchange=load;
   load();
   async function load(){
     var body=$("#ad-body"); if(!body) return;
     try{
-      var d=await api("/admin/reports");
+      var qs="?";
+      var st=$("#rp-status").value; if(st) qs+="status="+encodeURIComponent(st)+"&";
+      var sv=$("#rp-sev").value; if(sv) qs+="severity="+encodeURIComponent(sv);
+      var d=await api("/admin/reports"+qs);
       var list=pickList(d,["reports"]);
       if(!list.length){ body.innerHTML=emptyState("🚩", t("no_reports"), ""); return; }
       body.innerHTML=list.map(function(r){
         return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(r.reason||"")+'</strong><span class="chip">'+esc(r.status||"")+'</span></div>'
           +'<p class="small">'+esc(t("reports_target"))+': '+esc(r.target_type||"")+' '+esc(r.target_id||"")+' · '+esc(timeAgo(r.created_at||r.createdAt))+'</p>'
           +(r.note?'<p>'+esc(r.note)+'</p>':"")
+          +'<p class="small">'+esc(t("report_severity"))+': <strong>'+esc(r.severity||"medium")+'</strong>'
+          +(r.assigned_to?' · '+esc(t("report_assign"))+': '+esc(r.assigned_to):"")
+          +(r.needs_legal? ' · ⚖️ '+esc(t("report_legal")):"")
+          +' · '+esc(t("reports_reporter"))+': '+esc(r.reporter_name||r.reporter_username||"")+'</p>'
           +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
-          +[["dismiss",t("dismiss")],["hide",t("hide_post")],["pause",t("pause_bill")],["remove",t("remove_bill")],["suspend",t("suspend_account")],["restore",t("restore_bill")]].map(function(a){ return '<button class="btn secondary small" data-r="'+esc(r.id)+'" data-a="'+a[0]+'">'+esc(a[1])+'</button>'; }).join("")
+          +'<a class="btn secondary small" href="#/admin/reports/'+encodeURIComponent(r.id)+'">'+esc(t("report_detail"))+'</a>'
+          +(isViewer()?"":([["dismiss",t("dismiss")],["hide",t("hide_post")],["pause",t("pause_bill")],["remove",t("remove_bill")],["suspend",t("suspend_account")],["restore",t("restore_bill")],["request_changes",t("report_request_changes")],["escalate",t("report_escalate")]].concat(r.target_type==="message"?[["hide_message",t("report_hide_message")]]:[]).map(function(a){ return '<button class="btn secondary small" data-r="'+esc(r.id)+'" data-a="'+a[0]+'">'+esc(a[1])+'</button>'; }).join("")))
           +'</div></div>';
       }).join("");
       $all("[data-r]", body).forEach(function(btn){
         btn.onclick=async function(){
+          var action=btn.getAttribute("data-a"), id=btn.getAttribute("data-r");
+          if(action==="request_changes"){
+            // Item 735: request-changes needs a note for the poster.
+            openSheet('<h2>'+esc(t("report_request_changes"))+'</h2><label for="rc-note">'+esc(t("report_changes_note"))+'</label><textarea id="rc-note" maxlength="600"></textarea><div class="field-err" id="rc-err" role="alert"></div><button class="btn" id="rc-send">'+esc(t("message_send"))+'</button>');
+            $("#rc-send").onclick=async function(){
+              var note=$("#rc-note").value.trim();
+              if(!note){ $("#rc-err").textContent=t("err_required"); return; }
+              var b=$("#rc-send"); b.disabled=true; b.textContent=t("loading");
+              try{ await api("/admin/reports/"+encodeURIComponent(id), {method:"POST", body:{action:"request_changes", note:note}}); closeSheets(); toast(t("decision_saved")); load(); }
+              catch(e){ b.disabled=false; b.textContent=t("message_send"); toast(e.message||t("err_generic"), true); }
+            };
+            return;
+          }
+          if(action==="escalate"){
+            confirmDialog(t("report_escalate"), t("escalation_note"), t("report_escalate"), async function(){
+              try{ await api("/admin/reports/"+encodeURIComponent(id), {method:"POST", body:{action:"escalate"}}); toast(t("decision_saved")); load(); }
+              catch(e){ toast(e.message||t("err_generic"), true); }
+            });
+            return;
+          }
           btn.disabled=true;
-          try{ await api("/admin/reports/"+encodeURIComponent(btn.getAttribute("data-r")), {method:"POST", body:{action:btn.getAttribute("data-a")}}); toast(t("decision_saved")); load(); }
+          try{ await api("/admin/reports/"+encodeURIComponent(id), {method:"POST", body:{action:action}}); toast(t("decision_saved")); load(); }
           catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
         };
       });
@@ -4495,24 +4690,61 @@ function renderAdminFees(){
 function renderAdminAudit(){
   if(!adminGuard()) return;
   view('<h1>'+esc(t("audit_log"))+'</h1>'+adminNav("audit")
-    +'<div style="display:flex;gap:8px;margin-bottom:10px"><label class="sr-only" for="audit-filter">'+esc(t("audit_filter"))+'</label><input id="audit-filter" placeholder="'+esc(t("audit_filter"))+'" style="flex:1"><button class="btn secondary small" id="audit-export">'+esc(t("export_audit"))+'</button></div>'
+    // Item 718: server-side filters (actor, action, target type, dates).
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><input id="audit-actor" placeholder="'+esc(t("audit_actor_ph"))+'" style="flex:1;min-width:120px"><input id="audit-action" placeholder="'+esc(t("audit_action_ph"))+'" style="flex:1;min-width:120px"><input id="audit-target" placeholder="'+esc(t("audit_target_ph"))+'" style="flex:1;min-width:120px"><input id="audit-from" type="date" aria-label="'+esc(t("audit_from"))+'"><input id="audit-to" type="date" aria-label="'+esc(t("audit_to"))+'"><button class="btn secondary small" id="audit-apply">'+esc(t("audit_apply"))+'</button></div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button class="btn secondary small" id="audit-export">'+esc(t("export_audit"))+'</button><button class="btn secondary small" id="audit-verify">'+esc(t("audit_verify"))+'</button><span id="audit-verify-out" class="small" style="align-self:center"></span></div>'
+    +'<div id="audit-archive-box"></div>'
     +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
   bindAdminLogout();
   var rows=[];
-  $("#audit-filter").addEventListener("input", draw);
+  $("#audit-apply").onclick=load;
+  // Item 719: server CSV export (same filters, up to 5000 rows).
   $("#audit-export").onclick=function(){
-    if(!rows.length) return;
-    var csv="when,actor,action,target\n"+rows.map(function(r){ return [r.created_at||r.createdAt||"", r.actor_type||r.actorType||"", r.action||"", (r.target_type||"")+"/"+(r.target_id||"")].map(function(x){ return '"'+String(x).replace(/"/g,'""')+'"'; }).join(","); }).join("\n");
-    var blob=new Blob([csv], {type:"text/csv"});
-    var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="sahay-pay-audit.csv"; a.click();
+    var qs=auditQs();
+    var a=document.createElement("a");
+    a.href="/api/admin/audit/export"+qs;
+    a.download="sahay-pay-audit.csv";
+    document.body.appendChild(a); a.click(); a.remove();
     toast(t("audit_exported"));
   };
+  // Item 721: verify the audit hash chain.
+  $("#audit-verify").onclick=async function(){
+    var out=$("#audit-verify-out"); out.textContent=t("loading");
+    try{
+      var r=await api("/admin/audit/verify");
+      out.textContent=r.ok? t("audit_chain_ok")+" ("+r.checked+" "+t("audit_checked")+")" : t("audit_chain_bad")+" — "+(r.brokenAt?r.brokenAt.action+" "+r.brokenAt.id:"");
+    }catch(e){ out.textContent=e.message||t("err_generic"); }
+  };
+  function auditQs(){
+    var qs="";
+    var actor=$("#audit-actor").value.trim(); if(actor) qs+="&actor="+encodeURIComponent(actor);
+    var action=$("#audit-action").value.trim(); if(action) qs+="&action="+encodeURIComponent(action);
+    var tt=$("#audit-target").value.trim(); if(tt) qs+="&targetType="+encodeURIComponent(tt);
+    var from=$("#audit-from").value; if(from) qs+="&from="+encodeURIComponent(from);
+    var to=$("#audit-to").value; if(to) qs+="&to="+encodeURIComponent(to+"T23:59:59Z");
+    return qs? "?"+qs.slice(1) : "";
+  }
   load();
   async function load(){
     var body=$("#ad-body"); if(!body) return;
     try{
-      var d=await api("/admin/audit");
-      rows=pickList(d,["audit","logs","entries"]);
+      var d=await api("/admin/audit"+auditQs());
+      rows=pickList(d,["logs","audit","entries"]);
+      // Item 722: archive banner when 90+ day entries exist (owner only).
+      var box=$("#audit-archive-box");
+      if(box){
+        var n=d.archivableCount||0;
+        box.innerHTML=(n>0&&isOwner())
+          ? '<div class="notice info" style="margin-bottom:10px"><strong>'+esc(t("audit_archivable", {n:n}))+'</strong> <button class="btn secondary small" id="audit-archive-btn">'+esc(t("audit_archive"))+'</button></div>'
+          : "";
+        var ab=$("#audit-archive-btn");
+        if(ab) ab.onclick=function(){
+          confirmDialog(t("audit_archive"), t("audit_archivable", {n:n}), t("audit_archive"), async function(){
+            try{ var r=await api("/admin/audit/archive", {method:"POST"}); toast(t("audit_archived", {n:r.archived})); load(); }
+            catch(e){ toast(e.message||t("err_generic"), true); }
+          });
+        };
+      }
       draw();
     }catch(e){
       if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
@@ -4521,11 +4753,845 @@ function renderAdminAudit(){
   }
   function draw(){
     var body=$("#ad-body"); if(!body) return;
-    var f=$("#audit-filter").value.trim().toLowerCase();
-    var list=rows.filter(function(r){ return !f || String(r.action||"").toLowerCase().indexOf(f)>=0 || String(r.actor_type||"").toLowerCase().indexOf(f)>=0; });
-    if(!list.length){ body.innerHTML=emptyState("📋", t("no_audit"), ""); return; }
+    if(!rows.length){ body.innerHTML=emptyState("📋", t("no_audit"), ""); return; }
     body.innerHTML='<div class="card" style="overflow-x:auto"><table class="tbl"><tr><th>'+esc(t("audit_when"))+'</th><th>'+esc(t("audit_who"))+'</th><th>'+esc(t("audit_what"))+'</th><th>'+esc(t("audit_target"))+'</th></tr>'
-      +list.map(function(r){ return '<tr><td>'+esc(timeAgo(r.created_at||r.createdAt))+'</td><td>'+esc((r.actor_type||"")+" "+(r.actor_id||""))+'</td><td>'+esc(r.action||"")+'</td><td>'+esc((r.target_type||"")+" "+(r.target_id||""))+'</td></tr>'; }).join("")+'</table></div>';
+      +rows.map(function(r){ return '<tr><td>'+esc(timeAgo(r.created_at||r.createdAt))+'</td><td>'+esc((r.actor_type||r.actorType||"")+" "+(r.actor_id||r.actorId||""))+'</td><td>'+esc(r.action||"")+'</td><td>'+esc((r.target_type||r.targetType||"")+" "+(r.target_id||r.targetId||""))+'</td></tr>'; }).join("")+'</table></div>';
+  }
+}
+
+
+/* ---------- admin: user detail, report detail, complaints, appeals ---------- */
+function renderAdminUserDetail(id){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("user_detail"))+'</h1>'+adminNav("users")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/users/"+encodeURIComponent(id));
+      var u=d.user||{};
+      var bills=d.bills||[], given=d.giftsGiven||[], received=d.giftsReceived||[];
+      var against=d.reportsAgainst||[], filed=d.reportsFiled||[], verifs=d.verifications||[];
+      var threads=d.messageThreads||[], messages=d.messages||[];
+      body.innerHTML='<div class="card"><h2>'+esc(u.displayName||"")+' <span class="small">@'+esc(u.username||"")+'</span></h2>'
+        +'<div class="kv"><span>'+esc(t("user_status"))+'</span><b>'+(u.banned?esc(t("user_banned")):u.suspended?esc(t("suspend"))+(u.suspendedUntil?" · "+esc(fmtDate(u.suspendedUntil)):""):esc(t("approved")))+'</b></div>'
+        +(u.suspensionReason?'<div class="kv"><span>'+esc(t("user_suspend_reason"))+'</span><b>'+esc(u.suspensionReason)+'</b></div>':"")
+        +'<div class="kv"><span>'+esc(t("user_joined"))+'</span><b>'+esc(u.createdAt?fmtDate(u.createdAt):"")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("country"))+'</span><b>'+esc(flag(u.country))+' '+esc(u.city||"")+'</b></div>'
+        +(u.about?'<p>'+esc(u.about)+'</p>':"")
+        +(u.referralCode?'<div class="kv"><span>'+esc(t("referral_code"))+'</span><b>'+esc(u.referralCode)+'</b></div>':"")
+        +(d.trustedSuggested?'<p class="small" style="color:var(--good)">⭐ '+esc(t("user_trusted_suggest"))+'</p>':"")
+        +'</div>'
+        +(isViewer()?"":'<div class="card" style="margin-top:12px"><h2>'+esc(t("user_actions"))+'</h2>'
+        +'<label for="ud-notes">'+esc(t("user_notes"))+'</label><textarea id="ud-notes" maxlength="2000">'+esc(u.adminNotes||"")+'</textarea>'
+        +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
+        +'<button class="btn secondary small" id="ud-save-notes">'+esc(t("save"))+'</button>'
+        +'<button class="btn secondary small" id="ud-trusted">'+(u.trustedPoster?esc(t("user_untrust")):esc(t("user_trusted")))+'</button>'
+        +'<button class="btn secondary small" id="ud-watch">'+(u.watchlist?esc(t("user_unwatch")):esc(t("user_watchlist")))+'</button>'
+        +(u.suspended?'<button class="btn secondary small" id="ud-restore">'+esc(t("restore"))+'</button>':'<button class="btn secondary small" id="ud-suspend">'+esc(t("suspend"))+'</button>')
+        +(isOwner()&&!u.banned?'<button class="btn danger small" id="ud-ban">'+esc(t("user_ban"))+'</button>':"")
+        +'</div></div>')
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("my_bills"))+' ('+bills.length+')</h2>'
+        +(bills.length?bills.map(function(b){ return '<div class="kv"><span><a href="#/bill/'+encodeURIComponent(b.id)+'">'+esc(b.title||"")+'</a> · '+esc(b.status||"")+'</span><b>'+esc(money(b.amount_minor||0, b.currency||"NPR"))+' · '+esc(b.report_count||0)+' '+esc(t("reports"))+'</b></div>'; }).join(""):'<p>'+esc(t("empty_mybills"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("help_given"))+' ('+given.length+') · '+esc(t("help_received"))+' ('+received.length+')</h2>'
+        +(given.concat(received).slice(0,20).map(function(g){ return '<div class="kv"><span>'+esc(g.bill_title||"")+' · '+esc(g.status||"")+'</span><b>'+esc(money(g.amount_minor||0, g.currency||"NPR"))+'</b></div>'; }).join("")||'<p>'+esc(t("empty_gifts"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("reports"))+' — '+esc(t("reports_against"))+' ('+against.length+') · '+esc(t("reports_filed"))+' ('+filed.length+')</h2>'
+        +(against.concat(filed).slice(0,20).map(function(r){ return '<div class="kv"><span><a href="#/admin/reports/'+encodeURIComponent(r.id)+'">'+esc(r.reason||"")+'</a> · '+esc(r.target_type||"")+' · '+esc(r.status||"")+'</span><b>'+esc(timeAgo(r.created_at))+'</b></div>'; }).join("")||'<p>'+esc(t("no_reports"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("verifications"))+' ('+verifs.length+')</h2>'
+        +(verifs.map(function(v){ return '<div class="kv"><span>'+esc(v.type||"")+' · '+esc(v.status||"")+'</span><b>'+esc(timeAgo(v.created_at))+'</b></div>'; }).join("")||'<p>'+esc(t("no_verifications"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("messages"))+' ('+threads.length+' '+esc(t("message_threads"))+')</h2>'
+        +(threads.map(function(th){ return '<p class="small"><strong>'+esc(th.bill_title||"")+'</strong> · '+esc(timeAgo(th.updated_at))+'</p>'; }).join("")||'<p>'+esc(t("messages_empty"))+'</p>')
+        +(messages.length?'<details><summary>'+esc(t("messages"))+' ('+messages.length+')</summary>'+messages.map(function(m){ return '<div class="kv"><span>'+esc(m.hidden? t("message_hidden") : m.body)+'</span><b>'+esc(timeAgo(m.created_at))+'</b></div>'; }).join("")+'</details>':"")
+        +'</div>';
+      var sn=$("#ud-save-notes");
+      if(sn) sn.onclick=async function(){ try{ await api("/admin/users/"+encodeURIComponent(id)+"/notes", {method:"POST", body:{notes:$("#ud-notes").value}}); toast(t("config_saved")); }catch(e){ toast(e.message||t("err_generic"), true); } };
+      var tr=$("#ud-trusted");
+      if(tr) tr.onclick=async function(){ try{ await api("/admin/users/"+encodeURIComponent(id)+"/trusted", {method:"POST", body:{trusted:!u.trustedPoster}}); toast(t("config_saved")); load(); }catch(e){ toast(e.message||t("err_generic"), true); } };
+      var wa=$("#ud-watch");
+      if(wa) wa.onclick=async function(){ try{ await api("/admin/users/"+encodeURIComponent(id)+"/watchlist", {method:"POST", body:{watchlist:!u.watchlist}}); toast(t("config_saved")); load(); }catch(e){ toast(e.message||t("err_generic"), true); } };
+      var rs=$("#ud-restore");
+      if(rs) rs.onclick=async function(){ try{ await api("/admin/users/"+encodeURIComponent(id)+"/restore", {method:"POST"}); toast(t("user_restored")); load(); }catch(e){ toast(e.message||t("err_generic"), true); } };
+      var sp=$("#ud-suspend");
+      if(sp) sp.onclick=function(){
+        openSheet('<h2>'+esc(t("suspend"))+'</h2><label for="sp-reason">'+esc(t("user_suspend_reason"))+'</label><textarea id="sp-reason" maxlength="600"></textarea><label for="sp-days">'+esc(t("user_suspend_days"))+'</label><select id="sp-days"><option value="7">'+esc(t("user_suspend_7"))+'</option><option value="30">'+esc(t("user_suspend_30"))+'</option><option value="">'+esc(t("user_suspend_indef"))+'</option></select><div class="field-err" id="sp-err" role="alert"></div><button class="btn danger" id="sp-go">'+esc(t("suspend"))+'</button>');
+        $("#sp-go").onclick=async function(){
+          var reason=$("#sp-reason").value.trim();
+          if(!reason){ $("#sp-err").textContent=t("err_required"); return; }
+          var days=$("#sp-days").value?Number($("#sp-days").value):undefined;
+          var b=$("#sp-go"); b.disabled=true; b.textContent=t("loading");
+          try{ await api("/admin/users/"+encodeURIComponent(id)+"/suspend", {method:"POST", body:{reason:reason, days:days}}); closeSheets(); toast(t("user_suspended")); load(); }
+          catch(e){ b.disabled=false; b.textContent=t("suspend"); toast(e.message||t("err_generic"), true); }
+        };
+      };
+      var bn=$("#ud-ban");
+      if(bn) bn.onclick=function(){
+        // Item 728: ban needs the typed confirmation BAN + a reason.
+        openSheet('<h2>'+esc(t("user_ban"))+'</h2><p class="small">'+esc(t("user_ban_warn"))+'</p><label for="bn-reason">'+esc(t("user_suspend_reason"))+'</label><textarea id="bn-reason" maxlength="600"></textarea><label for="bn-confirm">'+esc(t("user_ban_confirm"))+'</label><input id="bn-confirm" autocomplete="off"><div class="field-err" id="bn-err" role="alert"></div><button class="btn danger" id="bn-go">'+esc(t("user_ban"))+'</button>');
+        $("#bn-go").onclick=async function(){
+          if($("#bn-confirm").value.trim()!=="BAN"){ $("#bn-err").textContent=t("user_ban_confirm"); return; }
+          var reason=$("#bn-reason").value.trim();
+          if(!reason){ $("#bn-err").textContent=t("err_required"); return; }
+          var b=$("#bn-go"); b.disabled=true; b.textContent=t("loading");
+          try{ await api("/admin/users/"+encodeURIComponent(id)+"/ban", {method:"POST", body:{confirm:"BAN", reason:reason}}); closeSheets(); toast(t("user_banned")); load(); }
+          catch(e){ b.disabled=false; b.textContent=t("user_ban"); toast(e.message||t("err_generic"), true); }
+        };
+      };
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminReportDetail(id){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("report_detail"))+'</h1>'+adminNav("reports")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/reports/"+encodeURIComponent(id));
+      var r=d.report||{}, reporter=d.reporter||{}, target=d.target||null;
+      var notes=d.caseNotes||[], timeline=d.timeline||[];
+      body.innerHTML='<div class="card"><h2>'+esc(r.reason||"")+' <span class="chip">'+esc(r.status||"")+'</span></h2>'
+        +'<div class="kv"><span>'+esc(t("reports_reporter"))+'</span><b>'+esc(reporter.display_name||reporter.username||"")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("reports_target"))+'</span><b>'+esc(r.target_type||"")+' '+esc(r.target_id||"")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("report_severity"))+'</span><b>'+esc(r.severity||"medium")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("report_assign"))+'</span><b>'+esc(r.assigned_to||"—")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("report_legal"))+'</span><b>'+(r.needs_legal?"⚖️ "+esc(t("yes")):esc(t("no")))+'</b></div>'
+        +(r.note?'<p>'+esc(r.note)+'</p>':"")
+        +(target?'<div class="card" style="margin-top:10px"><h3>'+esc(t("report_target_summary"))+'</h3>'
+          +'<p>'+esc(target.title||target.name||target.display_name||target.body||"")+'</p>'
+          +(target.status?'<p class="small">'+esc(t("bill_status_label"))+': '+esc(target.status)+'</p>':"")
+          +(target.amount_minor!=null?'<p class="small">'+esc(money(target.amount_minor, target.currency||"NPR"))+'</p>':"")
+          +(r.target_type==="bill"?'<p><a class="btn secondary small" href="#/bill/'+encodeURIComponent(target.id)+'">'+esc(t("view_bill"))+'</a></p>':"")
+          +(r.target_type==="user"?'<p><a class="btn secondary small" href="#/admin/users/'+encodeURIComponent(target.id)+'">'+esc(t("user_detail"))+'</a></p>':"")
+          +'</div>':"")
+        +'</div>'
+        +(isViewer()?"":'<div class="card" style="margin-top:12px"><h2>'+esc(t("report_update"))+'</h2>'
+        +'<label for="rd-sev">'+esc(t("report_severity"))+'</label><select id="rd-sev"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>'
+        +'<label for="rd-assign">'+esc(t("report_assign"))+'</label><input id="rd-assign" value="'+esc(r.assigned_to||"")+'" placeholder="'+esc(t("report_assign_ph"))+'">'
+        +'<label class="check-row"><input type="checkbox" id="rd-legal" '+(r.needs_legal?"checked":"")+'> '+esc(t("report_legal"))+'</label>'
+        +'<label for="rd-note">'+esc(t("case_note_add"))+'</label><textarea id="rd-note" maxlength="2000"></textarea>'
+        +'<button class="btn secondary" id="rd-save" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("report_actions"))+'</h2><div style="display:flex;gap:6px;flex-wrap:wrap">'
+        +[["dismiss",t("dismiss")],["hide",t("hide_post")],["pause",t("pause_bill")],["remove",t("remove_bill")],["suspend",t("suspend_account")],["restore",t("restore_bill")],["request_changes",t("report_request_changes")],["escalate",t("report_escalate")]].concat(r.target_type==="message"?[["hide_message",t("report_hide_message")]]:[]).map(function(a){ return '<button class="btn secondary small" data-a="'+a[0]+'">'+esc(a[1])+'</button>'; }).join("")
+        +'</div></div>')
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("case_notes"))+' ('+notes.length+')</h2>'
+        +(notes.map(function(n){ return '<div class="kv"><span>'+esc(n.admin_id||"")+' · '+esc(timeAgo(n.created_at))+'</span><b>'+esc(n.body||"")+'</b></div>'; }).join("")||'<p>'+esc(t("case_notes_empty"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("audit_timeline"))+'</h2>'
+        +(timeline.map(function(a){ return '<div class="kv"><span>'+esc(a.action||"")+' · '+esc(timeAgo(a.created_at))+'</span><b>'+esc((a.actor_type||"")+" "+(a.actor_id||""))+'</b></div>'; }).join("")||'<p>'+esc(t("no_audit"))+'</p>')
+        +'</div>';
+      var sev=$("#rd-sev"); if(sev) sev.value=r.severity||"medium";
+      var sv=$("#rd-save");
+      if(sv) sv.onclick=async function(){
+        var b=$("#rd-save"); b.disabled=true; b.textContent=t("loading");
+        try{
+          await api("/admin/reports/"+encodeURIComponent(id), {method:"PATCH", body:{severity:$("#rd-sev").value, assignedTo:$("#rd-assign").value.trim(), needsLegal:$("#rd-legal").checked, note:$("#rd-note").value.trim()||undefined}});
+          toast(t("config_saved")); load();
+        }catch(e){ b.disabled=false; b.textContent=t("save"); toast(e.message||t("err_generic"), true); }
+      };
+      $all("[data-a]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          var action=btn.getAttribute("data-a");
+          if(action==="request_changes"){
+            openSheet('<h2>'+esc(t("report_request_changes"))+'</h2><label for="rc-note">'+esc(t("report_changes_note"))+'</label><textarea id="rc-note" maxlength="600"></textarea><div class="field-err" id="rc-err" role="alert"></div><button class="btn" id="rc-send">'+esc(t("message_send"))+'</button>');
+            $("#rc-send").onclick=async function(){
+              var note=$("#rc-note").value.trim();
+              if(!note){ $("#rc-err").textContent=t("err_required"); return; }
+              var b=$("#rc-send"); b.disabled=true; b.textContent=t("loading");
+              try{ await api("/admin/reports/"+encodeURIComponent(id), {method:"POST", body:{action:"request_changes", note:note}}); closeSheets(); toast(t("decision_saved")); load(); }
+              catch(e){ b.disabled=false; b.textContent=t("message_send"); toast(e.message||t("err_generic"), true); }
+            };
+            return;
+          }
+          if(action==="escalate"){
+            confirmDialog(t("report_escalate"), t("escalation_note"), t("report_escalate"), async function(){
+              try{ await api("/admin/reports/"+encodeURIComponent(id), {method:"POST", body:{action:"escalate"}}); toast(t("decision_saved")); load(); }
+              catch(e){ toast(e.message||t("err_generic"), true); }
+            });
+            return;
+          }
+          btn.disabled=true;
+          try{ await api("/admin/reports/"+encodeURIComponent(id), {method:"POST", body:{action:action}}); toast(t("decision_saved")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminComplaints(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_complaints"))+'</h1>'+adminNav("complaints")
+    +'<div class="tabs"><button class="tab-btn on" data-s="open">'+esc(t("reports_open"))+'</button><button class="tab-btn" data-s="resolved">'+esc(t("reports_resolved"))+'</button><button class="tab-btn" data-s="">'+esc(t("queue_all_types"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  var status="open";
+  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ status=b.getAttribute("data-s"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/complaints"+(status?"?status="+encodeURIComponent(status):""));
+      var list=pickList(d,["complaints"]);
+      if(!list.length){ body.innerHTML=emptyState("📬", t("no_complaints"), ""); return; }
+      body.innerHTML=list.map(function(c){
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(c.subject||"")+'</strong><span class="chip">'+esc(c.status||"")+'</span></div>'
+          +'<p class="small">'+esc(c.user_name||c.user_username||"")+' · '+esc(timeAgo(c.created_at))+'</p>'
+          +'<p>'+esc(c.body||"")+'</p>'
+          +(c.status==="open"&&!isViewer()?'<label for="cr-'+esc(c.id)+'">'+esc(t("complaint_response"))+'</label><textarea id="cr-'+esc(c.id)+'" maxlength="2000"></textarea>'
+            +'<p class="small">'+esc(t("complaint_templates"))+': '
+            +'<button class="chip" data-tpl="thanks" data-c="'+esc(c.id)+'">'+esc(t("complaint_tpl_short_thanks"))+'</button> '
+            +'<button class="chip" data-tpl="review" data-c="'+esc(c.id)+'">'+esc(t("complaint_tpl_short_review"))+'</button> '
+            +'<button class="chip" data-tpl="more" data-c="'+esc(c.id)+'">'+esc(t("complaint_tpl_short_more"))+'</button></p>'
+            +'<button class="btn small" data-resolve="'+esc(c.id)+'">'+esc(t("complaint_resolve"))+'</button>':"")
+          +(c.status==="resolved"&&!isViewer()?'<button class="btn secondary small" data-reopen="'+esc(c.id)+'">'+esc(t("complaint_reopen"))+'</button>':"")
+          +'</div>';
+      }).join("");
+      $all("[data-tpl]", body).forEach(function(btn){
+        btn.onclick=function(){
+          var ta=$("#cr-"+CSS.escape(btn.getAttribute("data-c")));
+          if(ta) ta.value=t("complaint_tpl_"+btn.getAttribute("data-tpl"));
+        };
+      });
+      $all("[data-resolve]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          var cid=btn.getAttribute("data-resolve");
+          btn.disabled=true;
+          try{ await api("/admin/complaints/"+encodeURIComponent(cid), {method:"POST", body:{action:"resolve", response:$("#cr-"+CSS.escape(cid)).value.trim()||undefined}}); toast(t("complaint_resolved_msg")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+      $all("[data-reopen]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          btn.disabled=true;
+          try{ await api("/admin/complaints/"+encodeURIComponent(btn.getAttribute("data-reopen")), {method:"POST", body:{action:"reopen"}}); toast(t("complaint_reopened_msg")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminAppeals(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_appeals"))+'</h1>'+adminNav("appeals")
+    +'<div class="tabs"><button class="tab-btn on" data-s="open">'+esc(t("reports_open"))+'</button><button class="tab-btn" data-s="approved">'+esc(t("approved"))+'</button><button class="tab-btn" data-s="rejected">'+esc(t("rejected"))+'</button><button class="tab-btn" data-s="">'+esc(t("queue_all_types"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  var status="open";
+  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ status=b.getAttribute("data-s"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/appeals"+(status?"?status="+encodeURIComponent(status):""));
+      var list=pickList(d,["appeals"]);
+      if(!list.length){ body.innerHTML=emptyState("📨", t("no_appeals"), ""); return; }
+      body.innerHTML=list.map(function(a){
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(a.target_type||"")+' '+esc(a.target_id||"")+'</strong><span class="chip">'+esc(a.status||"")+'</span></div>'
+          +'<p class="small">'+esc(a.user_name||a.user_username||"")+' · '+esc(timeAgo(a.created_at))+'</p>'
+          +'<p>'+esc(a.reason||a.body||"")+'</p>'
+          +(a.decision_note?'<p class="small">'+esc(t("appeal_decision_note"))+': '+esc(a.decision_note)+'</p>':"")
+          +(a.target_type==="bill"?'<p><a class="btn secondary small" href="#/bill/'+encodeURIComponent(a.target_id)+'">'+esc(t("view_bill"))+'</a></p>':"")
+          +(a.target_type==="user"?'<p><a class="btn secondary small" href="#/admin/users/'+encodeURIComponent(a.target_id)+'">'+esc(t("user_detail"))+'</a></p>':"")
+          +(a.status==="open"&&!isViewer()?'<label for="ap-'+esc(a.id)+'">'+esc(t("appeal_note"))+'</label><textarea id="ap-'+esc(a.id)+'" maxlength="600"></textarea><div style="display:flex;gap:6px;margin-top:8px"><button class="btn small" data-ap="'+esc(a.id)+'" data-dec="approve">'+esc(t("appeal_approve"))+'</button><button class="btn danger small" data-ap="'+esc(a.id)+'" data-dec="reject">'+esc(t("appeal_reject"))+'</button></div>':"")
+          +'</div>';
+      }).join("");
+      $all("[data-ap]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          var dec=btn.getAttribute("data-dec"), aid=btn.getAttribute("data-ap");
+          btn.disabled=true;
+          try{ await api("/admin/appeals/"+encodeURIComponent(aid), {method:"POST", body:{decision:dec, note:$("#ap-"+CSS.escape(aid)).value.trim()||undefined}}); toast(t("decision_saved")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+
+function renderAdminDisputes(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_disputes"))+'</h1><p class="small">'+esc(t("disputes_note"))+'</p>'+adminNav("disputes")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/disputes");
+      var list=pickList(d,["disputes"]);
+      if(!list.length){ body.innerHTML=emptyState("⚖️", t("no_disputes"), ""); return; }
+      body.innerHTML=list.map(function(dp){
+        var g=dp.gift||{}, tl=dp.timeline||[];
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(money(g.amount_minor||0, g.currency||"NPR"))+'</strong><span class="chip">'+esc(g.status||"")+'</span></div>'
+          +'<p class="small">'+esc(g.bill_title||"")+' · '+esc(t("gift_from"))+' '+esc(g.supporter_name||g.supporter_username||"")+' · '+esc(timeAgo(g.created_at))+'</p>'
+          +(g.needs_legal?'<p class="small">⚖️ '+esc(t("report_legal"))+'</p>':"")
+          +'<details><summary>'+esc(t("audit_timeline"))+' ('+tl.length+')</summary>'+tl.map(function(a){ return '<div class="kv"><span>'+esc(a.action||"")+' · '+esc(timeAgo(a.created_at))+'</span><b>'+esc((a.actor_type||"")+" "+(a.actor_id||""))+'</b></div>'; }).join("")+'</details>'
+          +(isViewer()?"":'<label for="dp-note-'+esc(g.id)+'">'+esc(t("dispute_note_label"))+'</label><textarea id="dp-note-'+esc(g.id)+'" maxlength="600"></textarea><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
+          +'<button class="btn small" data-dp="'+esc(g.id)+'" data-a="resolve-confirm">'+esc(t("dispute_resolve_confirm"))+'</button>'
+          +'<button class="btn secondary small" data-dp="'+esc(g.id)+'" data-a="resolve-fail">'+esc(t("dispute_resolve_fail"))+'</button>'
+          +'<button class="btn secondary small" data-dp="'+esc(g.id)+'" data-a="refund-guidance">'+esc(t("dispute_refund_guidance"))+'</button>'
+          +'<button class="btn secondary small" data-dp="'+esc(g.id)+'" data-a="escalate">'+esc(t("report_escalate"))+'</button></div>')
+          +'</div>';
+      }).join("");
+      $all("[data-dp]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          var action=btn.getAttribute("data-a"), gid=btn.getAttribute("data-dp");
+          btn.disabled=true;
+          try{ await api("/admin/gifts/"+encodeURIComponent(gid)+"/dispute", {method:"POST", body:{action:action, note:$("#dp-note-"+CSS.escape(gid)).value.trim()||undefined}}); toast(t("decision_saved")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminAnalytics(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_analytics"))+'</h1>'+adminNav("analytics")
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><input id="an-from" type="date" aria-label="'+esc(t("audit_from"))+'"><input id="an-to" type="date" aria-label="'+esc(t("audit_to"))+'"><button class="btn secondary small" id="an-apply">'+esc(t("audit_apply"))+'</button><button class="btn secondary small" id="an-export">'+esc(t("analytics_export"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  // Default range: last 30 days.
+  var to=new Date(), from=new Date(Date.now()-30*24*3600000);
+  $("#an-to").value=to.toISOString().slice(0,10);
+  $("#an-from").value=from.toISOString().slice(0,10);
+  $("#an-apply").onclick=load;
+  $("#an-export").onclick=function(){
+    var qs=anQs();
+    var a=document.createElement("a");
+    a.href="/api/admin/analytics/export"+qs;
+    a.download="sahay-pay-analytics.csv";
+    document.body.appendChild(a); a.click(); a.remove();
+    toast(t("analytics_exported"));
+  };
+  function anQs(){
+    var qs="";
+    var f=$("#an-from").value, tt=$("#an-to").value;
+    if(f) qs+="&from="+encodeURIComponent(f);
+    if(tt) qs+="&to="+encodeURIComponent(tt+"T23:59:59Z");
+    return qs? "?"+qs.slice(1) : "";
+  }
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/analytics"+anQs());
+      var dau=d.dau||[], signups=d.signupsByDay||[], bills=d.billsByDay||[];
+      var gifts=d.giftsByDay||[], confirmed=d.confirmedValueByCurrency||[];
+      var funnel=d.funnel||{};
+      function sum(arr, k){ return arr.reduce(function(a,x){ return a+(x[k]||0); }, 0); }
+      function barChart(title, rows, labelFn){
+        if(!rows.length) return '<div class="card" style="margin-top:12px"><h2>'+esc(title)+'</h2><p>'+esc(t("analytics_no_data"))+'</p></div>';
+        var max=Math.max.apply(null, rows.map(function(r){ return r.count||r.users||0; }));
+        return '<div class="card" style="margin-top:12px"><h2>'+esc(title)+'</h2>'
+          +rows.slice(-30).map(function(r){
+            var v=r.count!=null?r.count:r.users;
+            var w=max>0?Math.round(v/max*100):0;
+            return '<div style="display:flex;gap:8px;align-items:center;margin:3px 0"><span class="small" style="width:84px;flex:none">'+esc(r.date)+'</span><span style="display:inline-block;height:14px;background:var(--accent);width:'+w+'%;min-width:2px"></span><b class="small">'+esc(v)+'</b></div>';
+          }).join("")+'</div>';
+      }
+      body.innerHTML='<div class="grid2">'
+        +'<div class="card stat"><div class="n">'+esc(sum(signups,"count"))+'</div><div class="l">'+esc(t("analytics_signups"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(sum(bills,"count"))+'</div><div class="l">'+esc(t("analytics_bills"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(sum(gifts,"count"))+'</div><div class="l">'+esc(t("analytics_gifts"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.medianDecisionMs!=null?Math.round(d.medianDecisionMs/3600000*10)/10+"h":"—")+'</div><div class="l">'+esc(t("analytics_median_decision"))+'</div></div>'
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("analytics_funnel"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("analytics_visitors"))+'</span><b>'+esc(funnel.visitors||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("analytics_signups"))+'</span><b>'+esc(funnel.signups||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("analytics_bills_submitted"))+'</span><b>'+esc(funnel.billsSubmitted||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("analytics_gifts_created"))+'</span><b>'+esc(funnel.giftsCreated||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("analytics_gifts_confirmed"))+'</span><b>'+esc(funnel.giftsConfirmed||0)+'</b></div>'
+        +'<p class="small">'+esc(t("analytics_funnel_note"))+'</p></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("analytics_confirmed_value"))+'</h2>'
+        +(confirmed.length?confirmed.map(function(c){ return '<div class="kv"><span>'+esc(c.currency)+'</span><b>'+esc(money(c.totalMinor, c.currency))+' · '+esc(c.gifts)+' '+esc(t("analytics_gifts"))+'</b></div>'; }).join(""):'<p>'+esc(t("analytics_no_data"))+'</p>')
+        +'</div>'
+        +barChart(t("analytics_dau"), dau)
+        +barChart(t("analytics_signups"), signups)
+        +barChart(t("analytics_bills"), bills)
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("analytics_bills_by_status"))+'</h2>'
+        +(Object.keys(d.billsByStatus||{}).map(function(k){ return '<div class="kv"><span>'+esc(k)+'</span><b>'+esc(d.billsByStatus[k])+'</b></div>'; }).join("")||'<p>'+esc(t("analytics_no_data"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("analytics_reports"))+'</h2>'
+        +((d.reportVolumeByReason||[]).map(function(r){ return '<div class="kv"><span>'+esc(r.reason)+'</span><b>'+esc(r.count)+'</b></div>'; }).join("")||'<p>'+esc(t("analytics_no_data"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("top_supporters"))+'</h2>'
+        +((d.topGivers||[]).map(function(g){ return '<div class="kv"><span><a href="#/admin/users/'+encodeURIComponent(g.userId)+'">'+esc(g.displayName||g.username||"")+'</a></span><b>'+esc(money(g.totalMinor, "NPR"))+' · '+esc(g.gifts)+' '+esc(t("analytics_gifts"))+'</b></div>'; }).join("")||'<p>'+esc(t("analytics_no_data"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("analytics_top_posters"))+'</h2>'
+        +((d.topPosters||[]).map(function(g){ return '<div class="kv"><span><a href="#/admin/users/'+encodeURIComponent(g.userId)+'">'+esc(g.displayName||g.username||"")+'</a></span><b>'+esc(g.bills)+' '+esc(t("analytics_bills"))+' · '+esc(money(g.receivedMinor, "NPR"))+'</b></div>'; }).join("")||'<p>'+esc(t("analytics_no_data"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("analytics_cities"))+'</h2>'
+        +((d.cityBreakdown||[]).map(function(c){ return '<div class="kv"><span>'+esc(c.city||"")+' ('+esc(c.country||"")+')</span><b>'+esc(c.count)+'</b></div>'; }).join("")||'<p>'+esc(t("analytics_no_data"))+'</p>')
+        +'</div>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminPayouts(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_payouts"))+'</h1>'+adminNav("payouts")
+    // Item 759: Demo Mode banner — no real money moves.
+    +'<div class="notice info" style="margin-bottom:10px"><strong>'+esc(t("demo_banner_payouts"))+'</strong></div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><select id="po-status"><option value="">'+esc(t("gift_status"))+': '+esc(t("queue_all_types"))+'</option><option value="donor_reported_sent">'+esc(t("gift_status_reported"))+'</option><option value="confirmed">'+esc(t("gift_status_confirmed"))+'</option><option value="disputed">'+esc(t("gift_status_disputed"))+'</option><option value="failed">'+esc(t("gift_status_failed"))+'</option></select><input id="po-from" type="date" aria-label="'+esc(t("audit_from"))+'"><input id="po-to" type="date" aria-label="'+esc(t("audit_to"))+'"><button class="btn secondary small" id="po-apply">'+esc(t("audit_apply"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  $("#po-apply").onclick=load;
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var qs="?";
+      var st=$("#po-status").value; if(st) qs+="status="+encodeURIComponent(st)+"&";
+      var f=$("#po-from").value; if(f) qs+="from="+encodeURIComponent(f)+"&";
+      var tt=$("#po-to").value; if(tt) qs+="to="+encodeURIComponent(tt+"T23:59:59Z");
+      var d=await api("/admin/gifts"+qs);
+      var gifts=pickList(d,["gifts"]);
+      var p=await api("/admin/payouts");
+      var monthly=p.monthlySummary||[];
+      var feeTable=p.feeTable||{};
+      body.innerHTML='<div class="card"><h2>'+esc(t("fee_table"))+'</h2><p class="small">'+esc(t("current_mode"))+': <strong>'+esc(p.feeMode||"supporter_fee")+'</strong></p>'
+        +(Object.keys(feeTable).map(function(cur){
+          var c=feeTable[cur]||{};
+          return '<div class="kv"><span>'+esc(cur)+'</span><b>'+esc(t("fees_flat"))+' '+esc(money(c.flatMinor||0, cur))+' · '+esc(t("fees_percent"))+' '+(c.percent!=null?c.percent:"—")+'%</b></div>';
+        }).join("")||'<p>'+esc(t("analytics_no_data"))+'</p>')
+        +'<div class="kv"><span>'+esc(t("monthly_fee_total"))+' ('+esc(p.monthlyFeeMonth||"")+')</span><b>'+esc(money(p.monthlyFeeTotalMinor||0, "NPR"))+'</b></div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("payouts_monthly"))+'</h2>'
+        +(monthly.map(function(m){ return '<div class="kv"><span>'+esc(m.month)+' · '+esc(m.currency)+'</span><b>'+esc(m.gifts)+' '+esc(t("analytics_gifts"))+' · '+esc(money(m.totalMinor, m.currency))+' · '+esc(t("monthly_fee_total"))+' '+esc(money(m.feesMinor, m.currency))+'</b></div>'; }).join("")||'<p>'+esc(t("analytics_no_data"))+'</p>')
+        +'</div>'
+        +'<h2 style="margin-top:16px">'+esc(t("payouts_gifts"))+' ('+gifts.length+')</h2>'
+        +(gifts.length?gifts.map(function(g){
+          return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(money(g.amount_minor||0, g.currency||"NPR"))+'</strong><span class="chip">'+esc(giftStatusLabel(g.status))+'</span></div>'
+            +'<p class="small">'+esc(g.bill_title||"")+' · '+esc(t("gift_from"))+' '+esc(g.supporter_name||g.supporter_username||"")+' · '+esc(timeAgo(g.created_at))+'</p>'
+            +(isViewer()?"":'<div style="display:flex;gap:6px;flex-wrap:wrap"><select id="gs-'+esc(g.id)+'" aria-label="'+esc(t("gift_override"))+'"><option value="initiated">initiated</option><option value="details_shown">details_shown</option><option value="donor_reported_sent">donor_reported_sent</option><option value="confirmed">confirmed</option><option value="failed">failed</option><option value="disputed">disputed</option></select><button class="btn secondary small" data-gs="'+esc(g.id)+'">'+esc(t("gift_override"))+'</button></div>'
+            +'<p class="small">'+esc(t("gift_status_override_note"))+'</p>')
+            +'</div>';
+        }).join(""):'<p>'+esc(t("empty_gifts"))+'</p>');
+      $all("[data-gs]", body).forEach(function(btn){
+        var gid=btn.getAttribute("data-gs");
+        var sel=$("#gs-"+CSS.escape(gid));
+        var g=gifts.find(function(x){ return String(x.id)===String(gid); });
+        if(sel&&g) sel.value=g.status;
+        btn.onclick=async function(){
+          var st2=sel.value;
+          btn.disabled=true;
+          try{ await api("/admin/gifts/"+encodeURIComponent(gid)+"/status", {method:"POST", body:{status:st2}}); toast(t("decision_saved")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+
+function renderAdminBroadcasts(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_broadcasts"))+'</h1><p class="small">'+esc(t("broadcast_note"))+'</p>'+adminNav("broadcasts")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/broadcasts");
+      var list=pickList(d,["broadcasts"]);
+      body.innerHTML=(isOwner()&&!isViewer()
+        ? '<div class="card"><h2>'+esc(t("broadcast_compose"))+'</h2>'
+        +'<label for="bc-title">'+esc(t("broadcast_title"))+'</label><input id="bc-title" maxlength="200">'
+        +'<label for="bc-body">'+esc(t("broadcast_body"))+'</label><textarea id="bc-body" maxlength="2000"></textarea>'
+        +'<label for="bc-aud">'+esc(t("broadcast_audience"))+'</label><select id="bc-aud"><option value="all">'+esc(t("broadcast_aud_all"))+'</option><option value="givers">'+esc(t("broadcast_aud_givers"))+'</option><option value="posters">'+esc(t("broadcast_aud_posters"))+'</option><option value="city">'+esc(t("broadcast_aud_city"))+'</option></select>'
+        +'<div id="bc-city-wrap" hidden><label for="bc-city">'+esc(t("broadcast_city"))+'</label><input id="bc-city" maxlength="120"></div>'
+        +'<p class="small" id="bc-preview">'+esc(t("broadcast_preview"))+': —</p>'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn secondary" id="bc-preview-btn">'+esc(t("broadcast_preview_btn"))+'</button><button class="btn" id="bc-send">'+esc(t("broadcast_send"))+'</button></div>'
+        +'<p class="small">'+esc(t("broadcast_optout_note"))+'</p></div>'
+        : "")
+        +'<h2 style="margin-top:16px">'+esc(t("broadcast_history"))+' ('+list.length+')</h2>'
+        +(list.map(function(b){
+          var aud=b.audience||{};
+          return '<div class="card list-item"><strong>'+esc(b.title||"")+'</strong><p>'+esc(b.body||"")+'</p><p class="small">'+esc(t("broadcast_audience"))+': '+esc(aud.type||"all")+(aud.city?" ("+esc(aud.city)+")":"")+' · '+esc(t("broadcast_preview"))+': '+esc(b.recipientCount!=null?b.recipientCount:"—")+' · '+esc(timeAgo(b.createdAt))+'</p></div>';
+        }).join("")||'<p>'+esc(t("broadcast_none"))+'</p>');
+      var aud=$("#bc-aud");
+      if(aud) aud.onchange=function(){ $("#bc-city-wrap").hidden=$("#bc-aud").value!=="city"; };
+      var pv=$("#bc-preview-btn");
+      if(pv) pv.onclick=async function(){
+        var type=$("#bc-aud").value, city=$("#bc-city").value.trim();
+        try{
+          var r=await api("/admin/broadcasts/preview?audienceType="+encodeURIComponent(type)+(type==="city"?"&city="+encodeURIComponent(city):""));
+          $("#bc-preview").textContent=t("broadcast_preview")+": "+r.recipientCount;
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+      var snd=$("#bc-send");
+      if(snd) snd.onclick=function(){
+        var title=$("#bc-title").value.trim(), bdy=$("#bc-body").value.trim();
+        if(title.length<3||bdy.length<10){ toast(t("err_required"), true); return; }
+        var type=$("#bc-aud").value, city=$("#bc-city").value.trim();
+        if(type==="city"&&!city){ toast(t("err_required"), true); return; }
+        confirmDialog(t("broadcast_send"), t("broadcast_confirm"), t("broadcast_send"), async function(){
+          try{
+            var r=await api("/admin/broadcasts", {method:"POST", body:{title:title, body:bdy, audience:{type:type, city:city||undefined}}});
+            toast(t("broadcast_sent_msg", {n:r.sent, total:r.audienceSize}));
+            load();
+          }catch(e){ toast(e.message||t("err_generic"), true); }
+        });
+      };
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminAnnouncements(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_announcements"))+'</h1>'+adminNav("announcements")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/announcements");
+      var list=pickList(d,["announcements"]);
+      body.innerHTML=(isOwner()&&!isViewer()
+        ? '<div class="card"><h2>'+esc(t("announcement_title"))+'</h2>'
+        +'<label for="an-title">'+esc(t("broadcast_title"))+'</label><input id="an-title" maxlength="200">'
+        +'<label for="an-body">'+esc(t("broadcast_body"))+'</label><textarea id="an-body" maxlength="4000"></textarea>'
+        +'<label for="an-when">'+esc(t("announcement_schedule"))+'</label><input id="an-when" type="datetime-local">'
+        +'<button class="btn" id="an-create" style="margin-top:8px">'+esc(t("announcement_create"))+'</button></div>'
+        : "")
+        +'<h2 style="margin-top:16px">'+esc(t("announcements"))+' ('+list.length+')</h2>'
+        +(list.map(function(a){
+          var pub=a.publish_at||a.publishAt;
+          var scheduled=pub&&Date.parse(pub)>Date.now();
+          return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(a.title||"")+'</strong><span class="chip">'+(scheduled?esc(t("announcement_scheduled")):esc(t("announcement_live")))+'</span></div>'
+            +'<p>'+esc(a.body||"")+'</p><p class="small">'+esc(t("posted"))+' '+esc(timeAgo(a.created_at))+(pub?' · '+esc(t("announcement_publish_at"))+' '+esc(fmtDate(pub)):"")+'</p>'
+            +(isOwner()&&!isViewer()?'<button class="btn danger small" data-del="'+esc(a.id)+'">'+esc(t("remove"))+'</button>':"")
+            +'</div>';
+        }).join("")||'<p>'+esc(t("announcements_empty"))+'</p>');
+      var cr=$("#an-create");
+      if(cr) cr.onclick=async function(){
+        var title=$("#an-title").value.trim(), bdy=$("#an-body").value.trim();
+        if(title.length<3||bdy.length<10){ toast(t("err_required"), true); return; }
+        var when=$("#an-when").value;
+        var b=$("#an-create"); b.disabled=true; b.textContent=t("loading");
+        try{
+          await api("/admin/announcements", {method:"POST", body:{title:title, body:bdy, publishAt:when?new Date(when).toISOString():undefined}});
+          toast(t("announcement_created_msg")); load();
+        }catch(e){ b.disabled=false; b.textContent=t("announcement_create"); toast(e.message||t("err_generic"), true); }
+      };
+      $all("[data-del]", body).forEach(function(btn){
+        btn.onclick=function(){
+          confirmDialog(t("remove"), t("announcement_delete_confirm"), t("remove"), async function(){
+            try{ await api("/admin/announcements/"+encodeURIComponent(btn.getAttribute("data-del")), {method:"DELETE"}); toast(t("announcement_deleted_msg")); load(); }
+            catch(e){ toast(e.message||t("err_generic"), true); }
+          }, true);
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminActivity(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_activity"))+'</h1>'+adminNav("activity")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/activity");
+      var list=pickList(d,["activity"]);
+      var byActor=d.byActor||[];
+      body.innerHTML='<div class="card"><h2>'+esc(t("activity_by_admin"))+'</h2>'
+        +(byActor.map(function(a){ return '<div class="kv"><span>'+esc(a.actorName||a.actorId||"")+'</span><b>'+esc(a.count)+'</b></div>'; }).join("")||'<p>'+esc(t("no_audit"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px;overflow-x:auto"><table class="tbl"><tr><th>'+esc(t("audit_when"))+'</th><th>'+esc(t("audit_who"))+'</th><th>'+esc(t("audit_what"))+'</th><th>'+esc(t("audit_target"))+'</th></tr>'
+        +(list.map(function(r){ return '<tr><td>'+esc(timeAgo(r.createdAt))+'</td><td>'+esc(r.actorName||r.actorId||"")+'</td><td>'+esc(r.action||"")+'</td><td>'+esc((r.targetType||"")+" "+(r.targetId||""))+'</td></tr>'; }).join("")||'')
+        +'</table></div>';
+      if(!list.length) body.innerHTML+=emptyState("📋", t("no_audit"), "");
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminAdmins(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_admins"))+'</h1><p class="small">'+esc(t("admins_note"))+'</p>'+adminNav("admins")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/admins");
+      var list=pickList(d,["admins"]);
+      body.innerHTML='<div class="card"><h2>'+esc(t("admin_create"))+'</h2>'
+        +'<label for="aa-name">'+esc(t("display_name"))+'</label><input id="aa-name" maxlength="60">'
+        +'<label for="aa-role">'+esc(t("admin_role"))+'</label><select id="aa-role"><option value="moderator">'+esc(t("admin_role_moderator"))+'</option><option value="viewer">'+esc(t("admin_role_viewer"))+'</option></select>'
+        +'<label for="aa-pin">'+esc(t("pin_label"))+'</label><input id="aa-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="new-password">'
+        +'<button class="btn" id="aa-create" style="margin-top:8px">'+esc(t("admin_create"))+'</button></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("admin_invite"))+'</h2><p class="small">'+esc(t("admin_invite_note"))+'</p>'
+        +'<label for="aa-inv-role">'+esc(t("admin_role"))+'</label><select id="aa-inv-role"><option value="moderator">'+esc(t("admin_role_moderator"))+'</option><option value="viewer">'+esc(t("admin_role_viewer"))+'</option></select>'
+        +'<button class="btn secondary" id="aa-invite" style="margin-top:8px">'+esc(t("admin_invite_create"))+'</button>'
+        +'<div id="aa-invite-out" style="margin-top:10px"></div></div>'
+        +'<h2 style="margin-top:16px">'+esc(t("admin_admins"))+' ('+list.length+')</h2>'
+        +(list.map(function(a){
+          return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(a.displayName||a.display_name||"")+'</strong><span class="chip">'+esc(a.role||"")+'</span></div>'
+            +'<p class="small">ID: '+esc(a.id)+' · '+esc(t("user_joined"))+' '+esc(timeAgo(a.createdAt||a.created_at))+(a.lockedUntil||a.locked_until?' · 🔒 '+esc(t("admin_locked_until"))+' '+esc(fmtDate(a.lockedUntil||a.locked_until)):"")+'</p>'
+            +'<button class="btn danger small" data-del="'+esc(a.id)+'">'+esc(t("admin_delete"))+'</button></div>';
+        }).join("")||'<p>'+esc(t("admins_none"))+'</p>');
+      $("#aa-create").onclick=async function(){
+        var name=$("#aa-name").value.trim(), role=$("#aa-role").value, pin=$("#aa-pin").value;
+        if(!name){ toast(t("err_required"), true); return; }
+        if(pin.length<6||!/^\d+$/.test(pin)){ toast(t("pin_min"), true); return; }
+        var b=$("#aa-create"); b.disabled=true; b.textContent=t("loading");
+        try{
+          var r=await api("/admin/admins", {method:"POST", body:{displayName:name, role:role, pin:pin}});
+          toast(t("admin_created_msg")+" — ID: "+(r.adminUser?r.adminUser.id:""));
+          load();
+        }catch(e){ b.disabled=false; b.textContent=t("admin_create"); toast(e.message||t("err_generic"), true); }
+      };
+      $("#aa-invite").onclick=async function(){
+        var b=$("#aa-invite"); b.disabled=true; b.textContent=t("loading");
+        try{
+          var r=await api("/admin/invites", {method:"POST", body:{role:$("#aa-inv-role").value}});
+          var out=$("#aa-invite-out");
+          // The code is shown ONCE — the owner passes it to the new admin
+          // himself (there is no email channel).
+          out.innerHTML='<div class="notice warn"><strong>'+esc(t("invite_code"))+': '+esc(r.invite?r.invite.code:"")+'</strong><p style="margin:4px 0 0">'+esc(t("invite_created"))+'</p><p style="margin:8px 0 0"><button class="btn secondary small" id="aa-copy-code">'+esc(t("copy"))+'</button></p></div>';
+          $("#aa-copy-code").onclick=function(){ copyText(r.invite?r.invite.code:"", t("copied")); };
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ b.disabled=false; b.textContent=t("admin_invite_create"); }
+      };
+      $all("[data-del]", body).forEach(function(btn){
+        btn.onclick=function(){
+          confirmDialog(t("admin_delete"), t("admin_delete_confirm"), t("admin_delete"), async function(){
+            try{ await api("/admin/admins/"+encodeURIComponent(btn.getAttribute("data-del")), {method:"DELETE"}); toast(t("admin_deleted_msg")); load(); }
+            catch(e){ toast(e.message||t("err_generic"), true); }
+          }, true);
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      if(e.status===403){ body.innerHTML=emptyState("🔐", t("admin_owner_only"), ""); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+
+function renderAdminSecurity(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_security"))+'</h1>'+adminNav("security")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/security");
+      var signIns=d.lastSignIns||[], events=d.events||[];
+      var settings=d.securitySettings||{};
+      body.innerHTML='<div class="card"><h2>'+esc(t("last_sign_ins"))+'</h2>'
+        +(signIns.map(function(x){ return '<div class="kv"><span>'+esc(x.displayName||x.adminUserId||"")+'</span><b>'+esc(x.lastLoginAt?fmtDate(x.lastLoginAt):"—")+(x.userAgent?' · '+esc(x.userAgent.slice(0,60)):"")+'</b></div>'; }).join("")||'<p>'+esc(t("no_signins"))+'</p>')
+        +'</div>'
+        +(isOwner()
+          ? '<div class="card" style="margin-top:12px"><h2>'+esc(t("security_settings"))+'</h2>'
+          +'<label for="ss-pin">'+esc(t("pin_min_length"))+'</label><input id="ss-pin" type="number" min="4" max="32" value="'+esc(settings.pinMinLength!=null?settings.pinMinLength:6)+'">'
+          +'<label for="ss-idle">'+esc(t("admin_idle_minutes"))+'</label><input id="ss-idle" type="number" min="5" max="480" value="'+esc(settings.adminIdleMinutes!=null?settings.adminIdleMinutes:30)+'">'
+          +'<label for="ss-attempts">'+esc(t("lockout_attempts"))+'</label><input id="ss-attempts" type="number" min="3" max="20" value="'+esc(settings.lockoutAttempts!=null?settings.lockoutAttempts:5)+'">'
+          +'<label for="ss-minutes">'+esc(t("lockout_minutes"))+'</label><input id="ss-minutes" type="number" min="5" max="1440" value="'+esc(settings.lockoutMinutes!=null?settings.lockoutMinutes:15)+'">'
+          +'<button class="btn" id="ss-save" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
+          : "")
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("security_events"))+' ('+events.length+')</h2>'
+        +(events.map(function(e){ return '<div class="kv"><span>'+esc(e.action||"")+' · '+esc(timeAgo(e.createdAt))+'</span><b>'+esc((e.actorId||"")+" · "+(e.targetType||"")+" "+(e.targetId||""))+'</b></div>'; }).join("")||'<p>'+esc(t("no_security_events"))+'</p>')
+        +'</div>';
+      var sv=$("#ss-save");
+      if(sv) sv.onclick=async function(){
+        var b=$("#ss-save"); b.disabled=true; b.textContent=t("loading");
+        try{
+          await api("/admin/security-settings", {method:"PUT", body:{
+            pinMinLength:Number($("#ss-pin").value),
+            adminIdleMinutes:Number($("#ss-idle").value),
+            lockoutAttempts:Number($("#ss-attempts").value),
+            lockoutMinutes:Number($("#ss-minutes").value)
+          }});
+          toast(t("config_saved"));
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ b.disabled=false; b.textContent=t("save"); }
+      };
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminEscalations(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_escalations"))+'</h1><p class="small">'+esc(t("escalation_note"))+'</p>'+adminNav("escalations")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/escalations");
+      var reports=d.reports||[], gifts=d.gifts||[];
+      body.innerHTML='<div class="card"><h2>'+esc(t("reports"))+' ('+reports.length+')</h2>'
+        +(reports.map(function(r){
+          return '<div class="kv"><span><a href="#/admin/reports/'+encodeURIComponent(r.id)+'">'+esc(r.reason||"")+'</a> · '+esc(r.target_type||"")+' '+esc(r.target_id||"")+' · '+esc(timeAgo(r.created_at))+'</span><b>'+esc(r.severity||"")+'</b></div>';
+        }).join("")||'<p>'+esc(t("no_reports"))+'</p>')
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("admin_disputes"))+' / '+esc(t("analytics_gifts"))+' ('+gifts.length+')</h2>'
+        +(gifts.map(function(g){
+          return '<div class="kv"><span>'+esc(g.bill_title||"")+' · '+esc(money(g.amount_minor||0, g.currency||"NPR"))+' · '+esc(timeAgo(g.created_at))+'</span><b>'+esc(g.status||"")+'</b></div>';
+        }).join("")||'<p>'+esc(t("empty_gifts"))+'</p>')
+        +'</div>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminWeeklyReport(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("weekly_report_title"))+'</h1>'+adminNav("weekly-report")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/weekly-report");
+      var rev=d.reviews||{}, rep=d.reports||{}, comp=d.complaints||{}, app=d.appeals||{};
+      var growth=d.growth||{}, open=d.stillOpen||{};
+      body.innerHTML='<p class="small">'+esc(t("weekly_since"))+': '+esc(d.since?fmtDate(d.since):"")+' · '+esc(t("weekly_generated"))+': '+esc(d.generatedAt?fmtDate(d.generatedAt):"")+'</p>'
+        +'<div class="card"><h2>'+esc(t("weekly_reviews"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("weekly_decided"))+'</span><b>'+esc(rev.decided||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("approved"))+'</span><b>'+esc(rev.approved||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("rejected"))+'</span><b>'+esc(rev.rejected||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("changes_requested"))+'</span><b>'+esc(rev.changes||0)+'</b></div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("weekly_reports"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("weekly_filed"))+'</span><b>'+esc(rep.filed||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("weekly_resolved"))+'</span><b>'+esc(rep.resolved||0)+'</b></div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("weekly_complaints"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("weekly_filed"))+'</span><b>'+esc(comp.filed||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("weekly_resolved"))+'</span><b>'+esc(comp.resolved||0)+'</b></div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("weekly_appeals"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("weekly_filed"))+'</span><b>'+esc(app.filed||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("weekly_decided"))+'</span><b>'+esc(app.decided||0)+'</b></div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("weekly_growth"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("analytics_signups"))+'</span><b>'+esc(growth.newUsers||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("analytics_bills"))+'</span><b>'+esc(growth.newBills||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("analytics_gifts_confirmed"))+'</span><b>'+esc(growth.giftsConfirmed||0)+'</b></div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("weekly_still_open"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("pending"))+'</span><b>'+esc(open.pendingReviewPackets||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("open_reports"))+'</span><b>'+esc(open.openReports||0)+'</b></div></div>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminBridgeHistory(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_bridge"))+'</h1>'+adminNav("bridge-history")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var h=await api("/admin/bridge-health");
+      var d=await api("/admin/bridge-history");
+      var list=pickList(d,["history"]);
+      body.innerHTML='<div class="card"><h2>'+esc(t("bridge_health"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("bridge_status"))+'</span><b>'+esc(h.status||"unknown")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("bridge_configured"))+'</span><b>'+(h.configured?esc(t("yes")):esc(t("no")))+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("bridge_last_ping"))+'</span><b>'+esc(h.lastPing?fmtDate(h.lastPing):"—")+'</b></div>'
+        +'<p class="small">'+esc(t("bridge_health_note"))+'</p></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("bridge_history_title"))+' ('+list.length+')</h2>'
+        +(list.map(function(r){ return '<div class="kv"><span>'+esc(r.action||"")+' · '+esc(timeAgo(r.createdAt))+'</span><b>'+esc((r.targetType||"")+" "+(r.targetId||""))+'</b></div>'; }).join("")||'<p>'+esc(t("no_audit"))+'</p>')
+        +'</div>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminWebhookLog(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_webhook"))+'</h1>'+adminNav("webhook-log")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/webhook-log");
+      var list=pickList(d,["deliveries"]);
+      body.innerHTML=(isOwner()
+        ? '<div class="card"><h2>'+esc(t("webhook_test"))+'</h2><p class="small">'+esc(t("webhook_test_note"))+'</p><button class="btn secondary" id="wh-test">'+esc(t("webhook_test"))+'</button></div>'
+        : "")
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("webhook_log"))+' ('+list.length+')</h2>'
+        +(list.map(function(w){
+          return '<div class="kv"><span>'+esc(w.event_type||w.event||"")+' · '+esc(timeAgo(w.created_at))+'</span><b>'+esc(w.status||"")+(w.status_code!=null?" ("+esc(w.status_code)+")":"")+'</b></div>'
+            +(w.error?'<p class="small" style="color:var(--bad)">'+esc(w.error)+'</p>':"");
+        }).join("")||'<p>'+esc(t("webhook_none"))+'</p>')
+        +'</div>';
+      var tb=$("#wh-test");
+      if(tb) tb.onclick=async function(){
+        var b=$("#wh-test"); b.disabled=true; b.textContent=t("loading");
+        try{ var r=await api("/admin/webhook/test", {method:"POST"}); toast(r.message||t("webhook_test_sent")); setTimeout(load, 2000); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ b.disabled=false; b.textContent=t("webhook_test"); }
+      };
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminLeaderboardAudit(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_leaderboard_audit"))+'</h1><p class="small">'+esc(t("leaderboard_audit_note"))+'</p>'+adminNav("leaderboard-audit")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/leaderboard-audit");
+      var list=pickList(d,["topGivers"]);
+      body.innerHTML='<p class="small">'+esc(t("weekly_generated"))+': '+esc(d.computedAt?fmtDate(d.computedAt):"")+'</p>'
+        +'<div class="card"><h2>'+esc(t("top_supporters"))+' ('+list.length+')</h2>'
+        +(list.map(function(g, i){
+          return '<div class="kv"><span>'+(i+1)+'. <a href="#/admin/users/'+encodeURIComponent(g.userId)+'">'+esc(g.displayName||g.username||"")+'</a>'
+            +(g.suspended?' <span class="chip bad">'+esc(t("suspend"))+'</span>':"")
+            +(g.banned?' <span class="chip bad">'+esc(t("user_banned"))+'</span>':"")
+            +'</span><b>'+esc(money(g.totalMinor, "NPR"))+' · '+esc(g.gifts)+' '+esc(t("analytics_gifts"))+'</b></div>';
+        }).join("")||'<p>'+esc(t("analytics_no_data"))+'</p>')
+        +'</div>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
   }
 }
 
