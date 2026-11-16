@@ -207,6 +207,29 @@ const EXTRA_COLUMNS = [
   ['bills', 'expires_at', 'TEXT'],
   ['bills', 'extension_used', 'INTEGER NOT NULL DEFAULT 0'],
   ['bills', 'repost_count', 'INTEGER NOT NULL DEFAULT 0'],
+  // Phase 2 (sections 7–8): referrals + moderation flags on users,
+  // notification delivery/broadcast columns, case severity/assignment,
+  // audit hash chain, per-admin session identity.
+  ['users', 'referral_code', 'TEXT'],
+  ['users', 'referred_by', 'TEXT'],
+  ['users', 'suspended_until', 'TEXT'],
+  ['users', 'suspension_reason', "TEXT DEFAULT ''"],
+  ['users', 'admin_notes', "TEXT DEFAULT ''"],
+  ['users', 'trusted_poster', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'watchlist', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'banned', 'INTEGER NOT NULL DEFAULT 0'],
+  ['notifications', 'deliver_at', 'TEXT'],
+  ['notifications', 'broadcast_id', 'TEXT'],
+  ['reports', 'severity', "TEXT DEFAULT 'low'"],
+  ['reports', 'assigned_to', "TEXT DEFAULT ''"],
+  ['reports', 'needs_legal', 'INTEGER NOT NULL DEFAULT 0'],
+  ['gifts', 'severity', "TEXT DEFAULT 'low'"],
+  ['gifts', 'assigned_to', "TEXT DEFAULT ''"],
+  ['gifts', 'needs_legal', 'INTEGER NOT NULL DEFAULT 0'],
+  ['audit_logs', 'prev_hash', 'TEXT'],
+  ['audit_logs', 'entry_hash', 'TEXT'],
+  ['admin_sessions', 'admin_user_id', 'TEXT'],
+  ['admin_sessions', 'user_agent', 'TEXT'],
 ];
 
 // Cold-start mitigation (checklist priority fix (g)): the full migrate is
@@ -251,6 +274,10 @@ async function migrate() {
   // not-yet-added column fails the whole migrate — this 502'd every live
   // API route on 2026-11-16 (idx_users_recovery ran before the ALTERs).
   await run('CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_code_lookup)');
+  // Phase 2 §7–8: indexes on columns added above (same rule — after ALTERs).
+  await run('CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code)');
+  await run('CREATE INDEX IF NOT EXISTS idx_notifications_broadcast ON notifications(broadcast_id)');
+  await run('CREATE INDEX IF NOT EXISTS idx_audit_hash ON audit_logs(entry_hash)');
   // Phase 2: bill edit history (new table — CREATE TABLE IF NOT EXISTS is
   // safe on old DBs; its index is created after the table, same rule).
   await run(`CREATE TABLE IF NOT EXISTS bill_edits (
