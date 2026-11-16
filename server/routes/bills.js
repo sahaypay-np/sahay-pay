@@ -203,6 +203,8 @@ function scanPrivacy(text) {
   }
   return [...found];
 }
+
+function validateBillFields(body, categories) {
   const title = cleanStr(body.title, 60);
   if (title.length < 3) return { error: 'Please give your request a title (3–60 characters).' };
   if (!categories.includes(body.category)) return { error: 'Please choose a valid category.' };
