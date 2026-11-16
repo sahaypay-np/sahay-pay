@@ -1250,6 +1250,14 @@ function renderSwipe(){
         }
       }
     }
+    // Item 663: draft reminder — a draft saved 24h+ ago and never posted
+    // (lazy, client-side only: drafts live in localStorage).
+    if(S.user){
+      var oldDrafts=loadDrafts().filter(function(dr){ return (Date.now()-(dr.updatedAt||0))>24*3600000; });
+      if(oldDrafts.length){
+        reengage+='<div class="notice warn" style="margin-bottom:10px"><strong>📝 '+esc(t("draft_reminder_title"))+'</strong> '+esc(t("draft_reminder_body"))+' <a href="#/drafts">'+esc(t("draft_resume"))+'</a></div>';
+      }
+    }
     var grid=counts? '<h2>'+esc(t("browse_categories"))+'</h2><div class="cat-grid\">'+cats.map(function(c){
       var n=(counts.byCategory||{})[c]||0;
       return '<a class="card cat-tile" href="#/category/'+encodeURIComponent(c)+'"><span class="ic">'+categoryIcon(c)+'</span><span class="n">'+esc(c)+'</span><span class="c">'+esc(t("category_open_bills",{n:n}))+'</span></a>';
@@ -3262,7 +3270,9 @@ function bindGiftRows(root){
         if(act==="thanks"){
           // Items 692–695: thank-you note for a confirmed gift.
           var billId=btn.getAttribute("data-bill");
-          openSheet('<h2>'+esc(t("thanks_write"))+'</h2><label for="th-body">'+esc(t("thanks_write"))+'</label><textarea id="th-body" maxlength="600"></textarea><label class="check-row"><input type="checkbox" id="th-public"> '+esc(t("thanks_public"))+'</label><button class="btn" id="th-send">'+esc(t("message_send"))+'</button>');
+          // Item 693: thank-you templates (tap to fill, then edit or send).
+          openSheet('<h2>'+esc(t("thanks_write"))+'</h2><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'+[t("thanks_tpl_1"),t("thanks_tpl_2"),t("thanks_tpl_3")].map(function(x){ return '<button class="btn secondary small" data-th-tpl="'+esc(x)+'">'+esc(x)+'</button>'; }).join("")+'</div><label for="th-body">'+esc(t("thanks_write"))+'</label><textarea id="th-body" maxlength="600"></textarea><label class="check-row"><input type="checkbox" id="th-public"> '+esc(t("thanks_public"))+'</label><button class="btn" id="th-send">'+esc(t("message_send"))+'</button>');
+          $all("[data-th-tpl]").forEach(function(b){ b.onclick=function(){ $("#th-body").value=b.getAttribute("data-th-tpl"); }; });
           $("#th-send").onclick=async function(){ var b2=$("#th-send"); b2.disabled=true; b2.textContent=t("loading"); try{ await api("/thanks", {method:"POST", body:{giftId:id, billId:billId, body:$("#th-body").value.trim(), isPublic:$("#th-public").checked}}); closeSheets(); toast(t("thanks_sent")); }catch(e){ b2.disabled=false; b2.textContent=t("message_send"); toast(e.message||t("err_generic"), true); } };
           return;
         }
@@ -3675,7 +3685,10 @@ function renderHelp(id, q){
     }
     return;
   }
-  view('<h1>'+esc(t("help_centre"))+'</h1><p>'+esc(t("help_centre_intro"))+'</p><p class="small">'+esc(t("help_topics_note"))+'</p>'
+  // Item 791: admin-status pill (from /config — the admin toggles it on
+  // the dashboard; shown here so users know whether help is at hand).
+  var avail=S.config&&S.config.adminAvailable;
+  view('<h1>'+esc(t("help_centre"))+'</h1><p><span class="chip '+(avail?"on":"")+'">'+(avail?"🟢 ":"⚪ ")+esc(avail?t("admin_available"):t("admin_unavailable"))+'</span></p><p>'+esc(t("help_centre_intro"))+'</p><p class="small">'+esc(t("help_topics_note"))+'</p>'
     +'<label class="sr-only" for="help-search">'+esc(t("search_help"))+'</label><input id="help-search" placeholder="'+esc(t("search_help"))+'" style="margin-bottom:10px">'
     +'<div id="help-list">'+HELP_TOPICS.map(function(tp){ return '<a class="card row-card" href="#/help?topic='+tp.id+'"><div class="grow"><div class="t">'+esc(t(tp.titleKey))+'</div></div><span>›</span></a>'; }).join("")+'</div>');
   $("#help-search").addEventListener("input", function(){
@@ -3818,8 +3831,14 @@ function renderMessages(){
 }
 function renderMessageThread(threadId){
   if(!S.user){ view(emptyState("💬", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
-  view('<a href="#/messages" class="small">← '+esc(t("messages"))+'</a><h1 id="msg-title" style="margin-top:8px">'+esc(t("messages"))+'</h1><div id="msg-body">'+skeleton(2)+'</div>'
-    +'<div class="card" style="margin-top:12px"><p class="small">'+esc(t("message_filter_note"))+'</p><label class="sr-only" for="msg-input">'+esc(t("message_placeholder"))+'</label><textarea id="msg-input" maxlength="2000" rows="2" placeholder="'+esc(t("message_placeholder"))+'"></textarea><div class="btn-row" style="margin-top:8px"><button class="btn" id="msg-send">'+esc(t("message_send"))+'</button><button class="btn secondary" id="msg-block">'+esc(t("message_block"))+'</button></div></div>');
+  view('<a href="#/messages" class="small">← '+esc(t("messages"))+'</a><h1 id="msg-title" style="margin-top:8px">'+esc(t("messages"))+'</h1>'
+    // Item 686: warning banner in every thread.
+    +'<div style="background:var(--warn-bg);color:var(--warn);border-radius:12px;padding:10px 12px;margin:8px 0;font-size:13px">⚠️ '+esc(t("message_filter_note"))+'</div>'
+    +'<div id="msg-body">'+skeleton(2)+'</div>'
+    +'<div class="card" style="margin-top:12px">'
+    // Item 683: pre-written quick replies (tap to send).
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"><button class="btn secondary small" data-qr="'+esc(t("qr_thanks"))+'">'+esc(t("qr_thanks"))+'</button><button class="btn secondary small" data-qr="'+esc(t("qr_sent"))+'">'+esc(t("qr_sent"))+'</button><button class="btn secondary small" data-qr="'+esc(t("qr_received"))+'">'+esc(t("qr_received"))+'</button></div>'
+    +'<label class="sr-only" for="msg-input">'+esc(t("message_placeholder"))+'</label><textarea id="msg-input" maxlength="2000" rows="2" placeholder="'+esc(t("message_placeholder"))+'"></textarea><div class="btn-row" style="margin-top:8px"><button class="btn" id="msg-send">'+esc(t("message_send"))+'</button><button class="btn secondary" id="msg-block">'+esc(t("message_block"))+'</button></div></div>');
   var blocked=false;
   load();
   async function load(){
@@ -3847,19 +3866,19 @@ function renderMessageThread(threadId){
       });
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
   }
-  $("#msg-send").onclick=async function(){
-    var inp=$("#msg-input");
-    var text=inp.value.trim();
+  async function sendMsg(text){
     if(!text) return;
     if(blocked){ toast(t("message_blocked"), true); return; }
     var btn=$("#msg-send"); btn.disabled=true;
     try{
       await api("/messages/"+encodeURIComponent(threadId), {method:"POST", body:{body:text}});
-      inp.value="";
+      var inp=$("#msg-input"); if(inp) inp.value="";
       load();
     }catch(e){ toast(e.message||t("err_generic"), true); }
     finally{ btn.disabled=false; }
-  };
+  }
+  $("#msg-send").onclick=function(){ var inp=$("#msg-input"); sendMsg(inp.value.trim()); };
+  $all("[data-qr]").forEach(function(b){ b.onclick=function(){ sendMsg(b.getAttribute("data-qr")); }; });
   $("#msg-block").onclick=async function(){
     try{
       if(blocked && $("#msg-block").textContent===t("message_unblock")){

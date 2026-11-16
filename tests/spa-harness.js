@@ -279,6 +279,14 @@ async function main() {
   check('updates page renders empty state', await waitFor(() => text().includes('Updates') && !!$('#up-body'), 5000, 'updates'));
   window.location.hash = '#/settings';
   check('settings has notification-prefs card (pause-all)', await waitFor(() => !!$('#st-pause'), 5000, 'notif prefs'));
+  // Item 791: the Help Centre shows the admin-status pill (away by default).
+  window.location.hash = '#/help';
+  check('help centre shows admin-status pill', await waitFor(() => text().includes('Admin away'), 5000, 'admin pill'));
+  // Item 663: a draft saved 24h+ ago shows a reminder card on the feed.
+  window.localStorage.setItem('sp_drafts', JSON.stringify([{ id: 'h1', updatedAt: Date.now() - 25 * 3600000, data: { title: 'Old harness draft', category: 'Electricity' } }]));
+  window.location.hash = '#/swipe';
+  check('draft reminder card shows for a 25h-old draft', await waitFor(() => text().includes('Unfinished draft'), 5000, 'draft reminder'));
+  window.localStorage.removeItem('sp_drafts');
 
   // 6. Admin: PIN setup (fresh DB) -> login -> dashboard metrics load.
   window.location.hash = '#/admin';

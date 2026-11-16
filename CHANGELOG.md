@@ -18,9 +18,10 @@ per deploy (checklist item 913).
   gift has been started; server-side filter blocks links, UPI IDs,
   phone numbers, bank details and OTP/PIN digits (plain warnings about
   scams are allowed); block/unblock; unread counts; hidden messages
-  stay in the thread as placeholders.
+  stay in the thread as placeholders; warning banner in every thread;
+  tap-to-send quick replies.
 - Thank-you notes: recipients can thank a giver on a confirmed gift,
-  optionally public on the bill's thank-you wall.
+  optionally public on the bill's thank-you wall; templates in EN/NE/HI.
 - Referrals: personal code + share link, public landing page (first
   name only), milestone badges (1/5/10 active referrals), leaders
   board, opt-out; self-referral is structurally impossible and
@@ -28,6 +29,8 @@ per deploy (checklist item 913).
 - Weekly + monthly activity summaries (given/received, bills helped,
   new bills in your city, leaderboard rank) with opt-out.
 - Announcements page; bill history now shows review decisions.
+  Drafts saved 24h+ ago show a reminder card on the feed. The Help
+  Centre shows an admin-status pill (available/away).
 - Admin: queue filters (type, oldest/newest, flagged, search) + bulk
   review (up to 50) + hold/unhold + colour-coded SLA age badge per
   queue item; user detail with suspension (reason required), 7/30-day
@@ -48,7 +51,7 @@ per deploy (checklist item 913).
 - New Help topics: how direct payments work, referrals, how
   moderation works, install the app (16 topics total).
 - Install prompt: offered after the third visit, once per device.
-- Tests: smoke 237, contract 152, SPA harness 84, migrate-old-db 23
+- Tests: smoke 237, contract 152, SPA harness 86, migrate-old-db 23
   (all green; migration verified against b8defcb, f3ec28a and 165bfac).
 
 ### Headers / SEO / docs workstream (checklist job, 16 Nov 2026)
