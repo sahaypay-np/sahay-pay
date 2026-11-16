@@ -1007,9 +1007,21 @@ function renderSwipe(){
       var helpers=$("#search-helpers"); if(!helpers) return;
       var recent=recentSearches();
       var popular=(S.facetCounts&&S.facetCounts.byCategory)? Object.keys(S.facetCounts.byCategory).sort(function(a,b){ return S.facetCounts.byCategory[b]-S.facetCounts.byCategory[a]; }).slice(0,5) : [];
-      helpers.innerHTML=(recent.length?'<p class="small" style="margin:2px 0">'+esc(t("search_recent"))+': '+recent.map(function(r){ return '<button type="button" class="chip" data-recent="'+esc(r)+'">'+esc(r)+'</button>'; }).join(" ")+'</p>':"")
+      var refine="";
+      if(S.searchQ){
+        // Search filters inside search results (item 69): refine the
+        // active search without opening the full filter sheet.
+        refine='<p class="small" style="margin:2px 0">'+esc(t("search_filters"))+': '
+          +'<button type="button" class="chip'+(S.filters.verifiedOnly?" on":"")+'" data-refine="verifiedOnly">✓ '+esc(t("verified_only"))+'</button> '
+          +'<button type="button" class="chip'+(S.filters.billShown?" on":"")+'" data-refine="billShown">📄 '+esc(t("bill_shown"))+'</button> '
+          +I.categories().slice(0,6).map(function(c){ return '<button type="button" class="chip'+(S.filters.categories.indexOf(c)>=0?" on":"")+'" data-refine-cat="'+esc(c)+'">'+categoryIcon(c)+' '+esc(c)+'</button>'; }).join(" ")+'</p>';
+      }
+      helpers.innerHTML=refine
+        +(recent.length?'<p class="small" style="margin:2px 0">'+esc(t("search_recent"))+': '+recent.map(function(r){ return '<button type="button" class="chip" data-recent="'+esc(r)+'">'+esc(r)+'</button>'; }).join(" ")+'</p>':"")
         +(popular.length?'<p class="small" style="margin:2px 0">'+esc(t("search_popular"))+': '+popular.map(function(r){ return '<button type="button" class="chip" data-recent="'+esc(r)+'">'+esc(r)+'</button>'; }).join(" ")+'</p>':"");
       $all("[data-recent]", helpers).forEach(function(b){ b.onclick=function(){ S.searchQ=b.getAttribute("data-recent"); inp.value=S.searchQ; applySearch(); }; });
+      $all("[data-refine]", helpers).forEach(function(b){ b.onclick=function(){ var k=b.getAttribute("data-refine"); S.filters[k]=!S.filters[k]; saveFilters(); S.seen={}; saveSeen(); draw(true); showHelpers(); }; });
+      $all("[data-refine-cat]", helpers).forEach(function(b){ b.onclick=function(){ var c=b.getAttribute("data-refine-cat"); var i=S.filters.categories.indexOf(c); if(i>=0) S.filters.categories.splice(i,1); else S.filters.categories=[c]; saveFilters(); S.seen={}; saveSeen(); draw(true); showHelpers(); }; });
     }
     function applySearch(){
       S.searchQ=inp.value.trim();
@@ -1053,6 +1065,7 @@ function renderSwipe(){
     m.innerHTML='<span>📋 '+esc(t("asks_left",{n:left}))+'</span>'
       +'<span>'+esc(t("viewed_progress",{a:viewed,b:S.feedTotal}))+'</span>'
       +(streak>1?'<span>🔥 '+esc(t("streak_days",{n:streak}))+'</span>':"")
+      +(S.filters.near?'<span>📍 '+esc(S.filters.near)+' · '+esc(t("near_me_radius",{n:S.filters.radiusKm||50}))+' · '+esc(t("search_results_count",{n:S.feedTotal}))+'</span>':"")
       +(S.feedUpdatedAt?'<span>'+esc(t("last_updated",{t:fmtClock(S.feedUpdatedAt)}))+'</span>':"")
       +(S.lastReshuffleAt?'<span>'+esc(t("reshuffled_at",{t:fmtClock(S.lastReshuffleAt)}))+'</span>':"");
     var fs=$("#filter-summary"); if(fs) fs.textContent=filterSummaryText();
@@ -2164,8 +2177,9 @@ function renderPost(arg, q){
       var wrap=$("#photo-thumbs"); if(!wrap) return;
       wrap.innerHTML=p.photos.map(function(ph,i){
         var src=ph.redactedUrl||ph.dataUrl||ph.url||"";
-        return '<div class="photo-thumb'+(i===p.activePhoto?" first":"")+'" data-ph="'+i+'"><img src="'+esc(src)+'" alt=""><button type="button" class="del" data-del="'+i+'" aria-label="'+esc(t("photo_delete"))+'">✕</button>'+(i===0?'<span style="position:absolute;bottom:2px;left:4px;font-size:11px">★</span>':"")+'</div>';
-      }).join("")+(p.photos.length<4?'<button type="button" class="btn secondary small" id="ph-add">＋ '+esc(t("photo_add"))+'</button>':"");
+        return '<div class="photo-thumb'+(i===p.activePhoto?" first":"")+'" data-ph="'+i+'"><img src="'+esc(src)+'" alt=""><button type="button" class="del" data-del="'+i+'" aria-label="'+esc(t("photo_delete"))+'">✕</button>'+(i===0?'<span style="position:absolute;bottom:2px;left:4px;font-size:11px">★ '+esc(t("photo_first"))+'</span>':"")+'</div>';
+      }).join("")+(p.photos.length<4?'<button type="button" class="btn secondary small" id="ph-add">＋ '+esc(t("photo_add"))+'</button>':"")
+      +(p.activePhoto>0?'<button type="button" class="btn secondary small" id="ph-first">★ '+esc(t("photo_first"))+'</button>':"");
       $all("[data-ph]", wrap).forEach(function(th){ th.onclick=function(e){
         if(e.target.getAttribute("data-del")!==null) return;
         p.activePhoto=parseInt(th.getAttribute("data-ph"),10);
@@ -2179,6 +2193,12 @@ function renderPost(arg, q){
         syncPhotoAliases(); drawThumbs(); showEditor(); saveDraft(p);
       }; });
       var add=$("#ph-add"); if(add) add.onclick=function(){ photoInput.click(); };
+      var first=$("#ph-first"); if(first) first.onclick=function(){
+        var ph=p.photos.splice(p.activePhoto,1)[0];
+        p.photos.unshift(ph);
+        p.activePhoto=0;
+        syncPhotoAliases(); drawThumbs(); showEditor(); saveDraft(p);
+      };
     }
     function syncPhotoAliases(){
       var first=p.photos[0];
