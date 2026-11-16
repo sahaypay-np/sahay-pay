@@ -186,7 +186,8 @@ mode (OS default + toggle), mobile-first, reduced-motion respected.
 Screens (hash routes): #/splash, #/welcome, #/country, #/onboarding, #/age-block,
 #/swipe, #/bill/:id, #/photo/:billId, #/post (6 steps), #/leaders, #/brands,
 #/brand/:id, #/brand-new, #/auctions, #/auction/:id, #/mybills, #/profile/:username,
-#/settings, #/help (6 topics: How helping works, How posting works, FAQ,
+#/settings, #/help (12 topics: About Sahay Pay, How helping works, How posting works, FAQ,
+Verification explained, Fees & founder tip, Refunds, Safety, Content rules,
 Complaints & appeals, Privacy Policy, Terms), #/notifications, #/verify,
 #/gift/:billId (4 steps: Amount/Check/Send/Confirmed), #/founder-tip,
 #/admin (login/setup), #/admin/dashboard, #/admin/queue, #/admin/users,
@@ -215,6 +216,36 @@ not-yet-configured; object-storage keys listed as future.)
 - Payout accounts: AES-256-GCM encrypted at rest; key from PAYOUT_ENCRYPTION_KEY, else
   derived from SESSION_SECRET, else ephemeral (startup warning). Never in logs.
 - Admin PIN: scrypt hash, fail-closed when unset (no PIN accepted), setup only once.
+- Security headers: CSP, X-Frame-Options DENY, X-Content-Type-Options nosniff,
+  Referrer-Policy, Permissions-Policy, HSTS — set in netlify.toml [[headers]] for /*.
+  The CSP keeps 'unsafe-inline' for script/style because the SPA uses inline
+  onclick handlers + inline styles. Express X-Powered-By is disabled
+  (server/index.js); CI checks it stays absent.
+- Vulnerability disclosure: public/.well-known/security.txt + SECURITY.md
+  (48-hour acknowledgement). Express serves security.txt explicitly because
+  express.static ignores dotfiles by default.
+- SEO/static assets: public/manifest.webmanifest, sitemap.xml, robots.txt
+  (Disallow /api/ + Sitemap line), favicons + app icons + OG image generated
+  by scripts/make-icons.py (PIL), Organization + FAQPage JSON-LD in index.html.
+
+## CI & docs (added 2026-11-16, checklist job)
+
+- CI: .github/workflows/ci.yml — on every push/PR: npm ci, all three suites
+  (each against a FRESH local server on port 3101, because the suites set the
+  admin PIN and flip the fee mode), npm audit --omit=dev, scripts/check-secrets.sh
+  (grep-based secret scan), X-Powered-By absence check. All steps must pass.
+- CodeQL SAST: .github/workflows/codeql.yml (JavaScript, security-extended).
+- Dependabot: .github/dependabot.yml (npm, weekly, target main).
+- Post-deploy live checks: tests/check-live.sh (read-only GETs only — health,
+  robots, sitemap, security.txt, manifest, security headers, JSON 404).
+  Never run the other suites against live.
+- Docs (docs/): RUNBOOK.md (operations + incident response + routines),
+  SECURITY.md (architecture + threat model), SECURITY-REVIEW-2026.md (first
+  annual review), OWASP-MAPPING.md, REVIEW-CHECKLIST.md,
+  DATA-CLASSIFICATION.md, DATA-REGISTER.md, VENDORS.md, DECISIONS.md,
+  HANDOVER.md, BRAND.md, MAINTENANCE-REPORT-TEMPLATE.md,
+  PERFORMANCE-REPORT-TEMPLATE.md, END-OF-LIFE.md, legal-archive/ (v1.0
+  Terms + Privacy Policy). CHANGELOG.md at the repo root.
 
 ## Integration notes (2026-11-16, coordinator pass)
 

@@ -4,10 +4,10 @@ Bill-support / gifting platform for Nepal (NPR: eSewa, Khalti, connectIPS,
 bank transfer) and India (INR: UPI, bank transfer). Inspired by OnlyBills,
 rebuilt from scratch as a deployable Node.js app.
 
-**Status: built and verified locally (Mon 2026-11-16). Not yet deployed.**
-This repo is the public version — it will live on a free subdomain.
-It is a separate codebase from the Muse artifact (`billsahay`); that
-artifact was not touched or read while building this.
+**Status: LIVE at https://sahay-pay.netlify.app (Mon 2026-11-16).**
+This repo is the public version. It is a separate codebase from the
+Muse artifact (`billsahay`); that artifact was not touched or read
+while building this.
 
 ## Standing rules (danish's orders — never break these)
 
@@ -185,13 +185,30 @@ only a banner, with no way to create a service.
    admin PIN (claiming the owner's first-run setup) and flip the fee
    mode. Wipe the test rows afterwards with `tests/live-wipe.sql`
    (Supabase SQL editor) before real use.
-4. Keep the site in Demo Mode until real authorised gateways/licences
+4. Run the read-only post-deploy checks: `./tests/check-live.sh`
+   (health, robots, sitemap, security headers, JSON 404). It creates
+   no data and touches no authenticated endpoints.
+5. Keep the site in Demo Mode until real authorised gateways/licences
    exist. Never present it as handling real payments.
+
+### 4. Every later deploy
+
+- Work on a branch; open a pull request to `main`. CI must be green
+  before merge: all three test suites + `npm audit` + secret scan
+  (see `.github/workflows/ci.yml`). A coordinator reviews the change.
+- Merge to `main` — Netlify auto-deploys. Watch the deploy until it
+  says Published, then run `./tests/check-live.sh` and spot-check the
+  site in a browser.
+- Rollback: Netlify dashboard → Deploys → publish the last good
+  deploy (fastest), or `git revert` on `main`. See
+  `docs/RUNBOOK.md` §3 for the full deploy + rollback procedure and
+  §4 for incident response.
+- Record the deploy in `CHANGELOG.md`.
 
 ### Free domain notes
 
 - `.co` is **not** free (~$15.50 first year). The free route is the
-  host's subdomain (Render/Koyeb) for now.
+  host's subdomain — the live site uses `sahay-pay.netlify.app`.
 - `.com.np` **is** free (register.com.np via Mercantile) but the name
   must match the applicant's legal name (personal) or a registered
   business/brand name — `sahaypay.com.np` needs a registered business
@@ -234,6 +251,14 @@ package.json / package-lock.json   deps: express, pg, multer
 render.yaml                        Render Blueprint (free web service)
 Dockerfile                         node:24-alpine
 ARCHITECTURE.md                    design + API contract + DB schema
+CHANGELOG.md                       release history (coordinator-maintained)
+SECURITY.md                        vulnerability disclosure policy
+docs/                              runbook, security, vendors, brand, legal
+                                   archive, report templates, end-of-life plan
+.github/workflows/                 CI (suites + audit + secret scan), CodeQL
+.github/dependabot.yml             weekly npm updates
+scripts/check-secrets.sh           grep-based secret scan (CI + local)
+scripts/make-icons.py              regenerates favicons/icons/OG image (PIL)
 server/index.js                    entry: static SPA + /api, error handler
 server/db.js                       pg/SQLite adapter + migrate() + defaults
 server/schema.postgres.sql         Postgres schema (17 tables)
@@ -245,25 +270,26 @@ server/routes/                     public, auth, profile, bills, gifts,
                                    notifications, reports, admin, bridge
 public/                            SPA: index.html, css/app.css,
                                    js/i18n.js (EN/NE/HI), js/app.js
-tests/smoke.sh                     backend smoke suite (56 checks; LOCAL ONLY)
+tests/smoke.sh                     backend smoke suite (57 checks; LOCAL ONLY)
 tests/smoke-live.sh                live-safe smoke suite (26 checks; never touches the PIN)
 tests/live-wipe.sql                wipe live test rows after a live-safe run
+tests/check-live.sh                read-only post-deploy live checks (no data created)
 tests/contract.sh                  frontend/backend contract suite (73; LOCAL ONLY)
-tests/spa-harness.js               jsdom SPA harness (18 checks)
+tests/spa-harness.js               jsdom SPA harness (20 checks)
 ```
 
-## Still missing / next for deployment
+## Still missing / next
 
-1. **Accounts needed:** a GitHub account (to host the repo) and a
-   Render or Koyeb account (to host the app), plus a Supabase or Neon
-   account (free Postgres). No paid service is required.
-2. **Env vars** (set in the host dashboard): `DATABASE_URL`,
+1. **Backups:** Supabase free has no scheduled backups — the live DB is
+   unbacked-up. Owner decision: paid plan or manual exports (see
+   `docs/RUNBOOK.md` §7).
+2. **Monitoring:** no uptime monitoring or alerting yet (owner to choose
+   an account; see `docs/RUNBOOK.md` §10).
+3. **Env vars** (set in the host dashboard): `DATABASE_URL`,
    `SESSION_SECRET`, `PAYOUT_ENCRYPTION_KEY` (base64, exactly 32 bytes),
    `CLAUDE_APPROVAL_BRIDGE_SECRET`; optional `ADMIN_SETUP_TOKEN`,
-   `OWNER_NOTIFICATION_WEBHOOK_URL`, `APP_BASE_URL`.
-3. **First-run owner steps on the live site:** set the admin PIN, decide
-   the fee model (supporter fee is live; zero-fee + founder tip is one
-   admin toggle away), smoke-test against the live URL, wipe test data.
+   `OWNER_NOTIFICATION_WEBHOOK_URL`, `APP_BASE_URL`. Set
+   `NODE_ENV=production` so cookies are marked Secure.
 4. **Known product gaps (not blockers):** object storage for uploads;
    Turnstile human check before reveal; admin screens for payment
    monitoring, refunds, brand applications, auction moderation,
