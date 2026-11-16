@@ -126,6 +126,14 @@ const DEFAULT_SETTINGS = {
     'Government fees', 'Charity', 'Other',
   ]),
   min_gift_minor: '1000',
+  // Phase 2 sections 4–6: velocity caps (admin-configurable) + featured
+  // brand of the week (rotated on read; no scheduler on the free tier).
+  bill_day_cap: '3',
+  bill_week_cap: '10',
+  gift_hour_cap: '10',
+  reveal_day_cap: '20',
+  featured_brand_id: '',
+  featured_brand_week: '',
 };
 
 async function getSetting(key) {
@@ -207,6 +215,39 @@ const EXTRA_COLUMNS = [
   ['bills', 'expires_at', 'TEXT'],
   ['bills', 'extension_used', 'INTEGER NOT NULL DEFAULT 0'],
   ['bills', 'repost_count', 'INTEGER NOT NULL DEFAULT 0'],
+  // Phase 2 (sections 4–6): verification expiry/hashing, fraud, anonymity,
+  // shares, suspension detail, brand asks, connects, auctions, reports.
+  ['verifications', 'expires_at', 'TEXT'],
+  ['verifications', 'doc_hash', 'TEXT'],
+  ['verifications', 'doc_type', "TEXT DEFAULT ''"],
+  ['bills', 'share_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['bills', 'doc_hash', 'TEXT'],
+  ['bills', 'ahash', 'TEXT'],
+  ['bills', 'fraud_score', 'INTEGER'],
+  ['bills', 'fraud_band', 'TEXT'],
+  ['bills', 'fraud_override', 'TEXT'],
+  ['bills', 'fraud_override_reason', "TEXT DEFAULT ''"],
+  ['gifts', 'anonymous', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'cover_url', 'TEXT'],
+  ['users', 'suspended_reason', "TEXT DEFAULT ''"],
+  ['users', 'suspended_until', 'TEXT'],
+  ['users', 'suspended_at', 'TEXT'],
+  ['brands', 'visual_url', 'TEXT'],
+  ['brands', 'tags', "TEXT DEFAULT ''"],
+  ['brands', 'closed_at', 'TEXT'],
+  ['brands', 'thank_you_note', "TEXT DEFAULT ''"],
+  ['brands', 'expires_at', 'TEXT'],
+  ['brand_connects', 'industry', "TEXT DEFAULT ''"],
+  ['brand_connects', 'offer', "TEXT DEFAULT ''"],
+  ['brand_connects', 'work_email', "TEXT DEFAULT ''"],
+  ['auctions', 'min_increment_minor', 'INTEGER'],
+  ['auctions', 'buyer_settled', 'INTEGER NOT NULL DEFAULT 0'],
+  ['auctions', 'seller_settled', 'INTEGER NOT NULL DEFAULT 0'],
+  ['auctions', 'settled_at', 'TEXT'],
+  ['reports', 'decision', "TEXT DEFAULT ''"],
+  ['reports', 'decision_reason', "TEXT DEFAULT ''"],
+  ['reports', 'decided_at', 'TEXT'],
+  ['complaints', 'category', "TEXT DEFAULT ''"],
 ];
 
 // Cold-start mitigation (checklist priority fix (g)): the full migrate is

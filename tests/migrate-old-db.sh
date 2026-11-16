@@ -71,6 +71,19 @@ const billCols = db.prepare(\"PRAGMA table_info(bills)\").all().map(r => r.name)
 const newBillCols = ['for_whom','relationship','for_other_consent','about_me','biller_instructions','photos_json','story_lang','not_paid_consequence','tried_to_pay','money_means','bill_type_other','charity_name','business','business_name','business_desc','dream','dream_desc','expires_at','extension_used','repost_count'];
 const editsTbl = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='bill_edits'\").all();
 const editsIdx = db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name='idx_bill_edits_bill'\").all();
+// Phase 2 sections 4–6: new tables + new columns on existing tables.
+const newTables = ['follows','user_blocks','achievements','thanks','thank_reactions','receiver_stories','brand_profiles','brand_responses','message_threads','messages','partnerships','drops','drop_entries','csr_updates','appeals','signin_history','fraud_flags','auction_watchlist','scam_notices','anon_stats'];
+const haveTables = new Set(db.prepare(\"SELECT name FROM sqlite_master WHERE type='table'\").all().map(r => r.name));
+const tableCols = (t) => db.prepare(\"PRAGMA table_info(\" + t + \")\").all().map(r => r.name);
+const newColsOk =
+  billCols.includes('share_count') && billCols.includes('fraud_band') &&
+  tableCols('gifts').includes('anonymous') &&
+  tableCols('verifications').includes('expires_at') &&
+  cols.includes('cover_url') && cols.includes('suspended_reason') &&
+  tableCols('brands').includes('visual_url') &&
+  tableCols('auctions').includes('buyer_settled') &&
+  tableCols('reports').includes('decision') &&
+  tableCols('complaints').includes('category');
 console.log([
   cols.includes('recovery_code_lookup') ? 'COL_OK' : 'COL_MISSING',
   cols.includes('terms_accepted_version') ? 'CONSENT_OK' : 'CONSENT_MISSING',
@@ -81,9 +94,11 @@ console.log([
   newBillCols.every(c => billCols.includes(c)) ? 'BILLCOLS_OK' : 'BILLCOLS_MISSING',
   editsTbl.length ? 'BILLEDITS_OK' : 'BILLEDITS_MISSING',
   editsIdx.length ? 'BILLEDITSIDX_OK' : 'BILLEDITSIDX_MISSING',
+  newTables.every(t => haveTables.has(t)) ? 'S46TABLES_OK' : 'S46TABLES_MISSING',
+  newColsOk ? 'S46COLS_OK' : 'S46COLS_MISSING',
 ].join(' '));
 db.close();")
-for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK; do
+for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK S46TABLES_OK S46COLS_OK; do
   if echo "$CHECKS" | grep -q "$want"; then echo "PASS: $want"; pass=$((pass+1)); else echo "FAIL: $want — checks: $CHECKS"; fail=$((fail+1)); fi
 done
 
