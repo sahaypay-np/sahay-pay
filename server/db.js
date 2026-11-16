@@ -233,15 +233,38 @@ async function migrate() {
   } catch {
     // No settings table yet (fresh DB) — run the full migrate below.
   }
+  const migrateStart = Date.now();
   if (usePostgres) {
     await pool.query(sql);
   } else {
     sqliteDb.exec(sql);
   }
+  // Probe existing columns ONCE, then ALTER only the missing ones. The old
+  // loop attempted every ALTER on every migrate (~42 sequential round trips
+  // to Supabase, most failing with "duplicate column"); that grew past the
+  // Netlify Functions 10s budget and took the live API down on 2026-11-16
+  // (merge 165bfac, reverted in f3ec28a) — the schema hash is written only
+  // after a successful migrate, so every invocation retried and timed out.
+  const existing = new Set();
+  if (usePostgres) {
+    const { rows } = await query(
+      "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
+    );
+    for (const r of rows) existing.add(`${r.table_name}.${r.column_name}`);
+  } else {
+    const tables = [...new Set(EXTRA_COLUMNS.map(([t]) => t))];
+    for (const t of tables) {
+      const { rows } = await query(`SELECT name FROM pragma_table_info('${t}')`);
+      for (const r of rows) existing.add(`${t}.${r.name}`);
+    }
+  }
+  let added = 0;
   for (const [table, column, ddl] of EXTRA_COLUMNS) {
+    if (existing.has(`${table}.${column}`)) continue;
     try {
       await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
       console.log(`[db] added column ${table}.${column}`);
+      added += 1;
     } catch (err) {
       if (!/duplicate column|already exists/i.test(err.message)) throw err;
     }
@@ -261,15 +284,20 @@ async function migrate() {
     created_at TEXT NOT NULL
   )`);
   await run('CREATE INDEX IF NOT EXISTS idx_bill_edits_bill ON bill_edits(bill_id, created_at)');
-  // Seed config defaults only (no content rows, ever).
-  for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-    await run(
-      'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT(key) DO NOTHING',
-      [key, value]
-    );
-  }
+  // Seed config defaults only (no content rows, ever) — one batched INSERT,
+  // not one round trip per key (same 10s-budget reason as the ALTER probe).
+  const seedEntries = Object.entries(DEFAULT_SETTINGS);
+  const seedParams = [];
+  const seedPlaceholders = seedEntries.map(([k, v], i) => {
+    seedParams.push(k, v);
+    return `($${2 * i + 1}, $${2 * i + 2})`;
+  }).join(', ');
+  await run(
+    `INSERT INTO settings (key, value) VALUES ${seedPlaceholders} ON CONFLICT(key) DO NOTHING`,
+    seedParams
+  );
   await setSetting('schema_hash', schemaHash);
-  console.log(`[db] migrated (${usePostgres ? 'postgres' : 'sqlite'})`);
+  console.log(`[db] migrated (${usePostgres ? 'postgres' : 'sqlite'}) in ${Date.now() - migrateStart}ms (${added} columns added)`);
 }
 
 function close() {
