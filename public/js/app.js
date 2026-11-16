@@ -664,6 +664,7 @@ var ROUTES = [
   {re:/^#\/admin\/complaints$/, fn:renderAdminComplaints, chrome:true},
   {re:/^#\/admin\/appeals$/, fn:renderAdminAppeals, chrome:true},
   {re:/^#\/admin\/disputes$/, fn:renderAdminDisputes, chrome:true},
+  {re:/^#\/admin\/auctions$/, fn:renderAdminAuctions, chrome:true},
   {re:/^#\/admin\/analytics$/, fn:renderAdminAnalytics, chrome:true},
   {re:/^#\/admin\/payouts$/, fn:renderAdminPayouts, chrome:true},
   {re:/^#\/admin\/broadcasts$/, fn:renderAdminBroadcasts, chrome:true},
@@ -4071,6 +4072,7 @@ function adminNav(active){
   // Phase 2 §8: the full console nav. .admin-nav scrolls horizontally.
   var links=[["dashboard",t("dashboard")],["queue",t("queue")],["users",t("users")],["verifications",t("verifications")],
     ["reports",t("reports")],["complaints",t("admin_complaints")],["appeals",t("admin_appeals")],["disputes",t("admin_disputes")],
+    ["auctions",t("admin_auctions")],
     ["escalations",t("admin_escalations")],["analytics",t("admin_analytics")],["payouts",t("admin_payouts")],
     ["broadcasts",t("admin_broadcasts")],["announcements",t("admin_announcements")],["activity",t("admin_activity")],
     ["admins",t("admin_admins")],["security",t("admin_security")],["weekly-report",t("admin_weekly")],
@@ -4369,9 +4371,17 @@ function renderAdminQueue(){
         var pay=pk.payload||pk.payload_json||{};
         if(typeof pay==="string"){ try{ pay=JSON.parse(pay); }catch(e){ pay={}; } }
         var typeLabel={bill:t("packet_bill"),brand:t("packet_brand"),auction:t("packet_auction"),photo:t("packet_photo")}[pk.target_type||pk.targetType]||(pk.target_type||"");
+        // Item 714: SLA clock — colour-coded age badge on open packets.
+        var ageBadge="";
+        if(pk.status==="pending"||pk.status==="held"){
+          var ageH=Math.max(0, Math.floor((Date.now()-new Date(pk.created_at||pk.createdAt).getTime())/3600000));
+          var ageTxt=ageH>=24? t("sla_age_days", {d:Math.floor(ageH/24)}) : t("sla_age_hours", {h:ageH});
+          var ageStyle=ageH>48?"color:var(--bad)":(ageH>24?"color:var(--warn)":"");
+          ageBadge='<span class="chip" style="'+ageStyle+'">⏱ '+esc(ageTxt)+'</span>';
+        }
         return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><span>'
           +(!isViewer()&&pk.status==="pending"?'<input type="checkbox" class="q-sel" data-id="'+esc(pk.id)+'" '+(selected[pk.id]?"checked":"")+' aria-label="'+esc(t("bulk_select"))+'"> ':"")
-          +'<strong>'+esc(typeLabel)+'</strong></span><span class="chip">'+esc(pk.status||"")+'</span></div>'
+          +'<strong>'+esc(typeLabel)+'</strong></span><span>'+ageBadge+'<span class="chip">'+esc(pk.status||"")+'</span></span></div>'
           +'<p class="small">'+esc(pay.title||pay.name||pk.target_id||"")+' · '+esc(timeAgo(pk.created_at||pk.createdAt))+'</p>'
           +(pay.amountMinor!=null?'<p class="small">'+esc(money(pay.amountMinor, pay.currency||"NPR"))+'</p>':"")
           +(pk.flagged?'<p class="small" style="color:var(--warn)">🚩 '+esc(t("queue_flagged_bill"))+'</p>':"")
@@ -4562,9 +4572,19 @@ function renderAdminReports(){
       var list=pickList(d,["reports"]);
       if(!list.length){ body.innerHTML=emptyState("🚩", t("no_reports"), ""); return; }
       body.innerHTML=list.map(function(r){
+        // Item 763: report SLA tracker — first response 24h, resolution 7d,
+        // computed lazily from the report's age.
+        var slaTxt="";
+        if(r.status==="open"){
+          var rh=Math.max(0, Math.floor((Date.now()-new Date(r.created_at||r.createdAt).getTime())/3600000));
+          if(rh>24*7) slaTxt='<span style="color:var(--bad)">🚨 '+esc(t("report_sla_res_overdue"))+'</span>';
+          else if(rh>24) slaTxt='<span style="color:var(--warn)">⏰ '+esc(t("report_sla_first_overdue"))+'</span>';
+          else slaTxt=esc(t("report_sla_first", {h:Math.max(1, 24-rh)}))+' · '+esc(t("report_sla_res_due", {d:Math.max(1, Math.ceil((24*7-rh)/24))}));
+        }
         return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(r.reason||"")+'</strong><span class="chip">'+esc(r.status||"")+'</span></div>'
           +'<p class="small">'+esc(t("reports_target"))+': '+esc(r.target_type||"")+' '+esc(r.target_id||"")+' · '+esc(timeAgo(r.created_at||r.createdAt))+'</p>'
           +(r.note?'<p>'+esc(r.note)+'</p>':"")
+          +(slaTxt?'<p class="small">'+slaTxt+'</p>':"")
           +'<p class="small">'+esc(t("report_severity"))+': <strong>'+esc(r.severity||"medium")+'</strong>'
           +(r.assigned_to?' · '+esc(t("report_assign"))+': '+esc(r.assigned_to):"")
           +(r.needs_legal? ' · ⚖️ '+esc(t("report_legal")):"")
@@ -4868,7 +4888,17 @@ function renderAdminReportDetail(id){
       var d=await api("/admin/reports/"+encodeURIComponent(id));
       var r=d.report||{}, reporter=d.reporter||{}, target=d.target||null;
       var notes=d.caseNotes||[], timeline=d.timeline||[];
+      // Item 763: SLA status — a case note counts as the first response.
+      var slaTxt="";
+      if(r.status==="open"){
+        var rh=Math.max(0, Math.floor((Date.now()-new Date(r.created_at||r.createdAt).getTime())/3600000));
+        if(rh>24*7) slaTxt='<span style="color:var(--bad)">🚨 '+esc(t("report_sla_res_overdue"))+'</span>';
+        else if(notes.length) slaTxt=esc(t("report_sla_first_done"))+' · '+esc(t("report_sla_res_due", {d:Math.max(1, Math.ceil((24*7-rh)/24))}));
+        else if(rh>24) slaTxt='<span style="color:var(--warn)">⏰ '+esc(t("report_sla_first_overdue"))+'</span>';
+        else slaTxt=esc(t("report_sla_first", {h:Math.max(1, 24-rh)}))+' · '+esc(t("report_sla_res_due", {d:Math.max(1, Math.ceil((24*7-rh)/24))}));
+      }
       body.innerHTML='<div class="card"><h2>'+esc(r.reason||"")+' <span class="chip">'+esc(r.status||"")+'</span></h2>'
+        +(slaTxt?'<p class="small">'+slaTxt+'</p>':"")
         +'<div class="kv"><span>'+esc(t("reports_reporter"))+'</span><b>'+esc(reporter.display_name||reporter.username||"")+'</b></div>'
         +'<div class="kv"><span>'+esc(t("reports_target"))+'</span><b>'+esc(r.target_type||"")+' '+esc(r.target_id||"")+'</b></div>'
         +'<div class="kv"><span>'+esc(t("report_severity"))+'</span><b>'+esc(r.severity||"medium")+'</b></div>'
@@ -5065,6 +5095,55 @@ function renderAdminDisputes(){
           btn.disabled=true;
           try{ await api("/admin/gifts/"+encodeURIComponent(gid)+"/dispute", {method:"POST", body:{action:action, note:$("#dp-note-"+CSS.escape(gid)).value.trim()||undefined}}); toast(t("decision_saved")); load(); }
           catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+/* ---------- admin: auction moderation (item 785) ---------- */
+function renderAdminAuctions(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_auctions"))+'</h1><p class="small">'+esc(t("admin_auctions_note"))+'</p>'+adminNav("auctions")
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><select id="au-status"><option value="">'+esc(t("queue_all_types"))+'</option><option value="approved">'+esc(t("approved"))+'</option><option value="pending_review">'+esc(t("pending_review"))+'</option><option value="paused">'+esc(t("paused"))+'</option><option value="removed">'+esc(t("removed"))+'</option></select></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  $("#au-status").onchange=load;
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var st=$("#au-status").value;
+      var d=await api("/admin/auctions"+(st?"?status="+encodeURIComponent(st):""));
+      var list=pickList(d,["auctions"]);
+      if(!list.length){ body.innerHTML=emptyState("🔨", t("no_auctions"), ""); return; }
+      body.innerHTML=list.map(function(a){
+        var seller=a.seller||{};
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(a.title||"")+'</strong><span class="chip">'+esc(a.status||"")+'</span></div>'
+          +'<p class="small">'+esc(t("packet_poster"))+': '+esc(seller.displayName||seller.username||"")+' · '+esc(t("packet_category"))+': '+esc(a.category||"")+' · '+esc(timeAgo(a.createdAt))+'</p>'
+          +'<p class="small">'+esc(t("auction_start_bid"))+': '+esc(money(a.startBidMinor||0, a.currency||"NPR"))
+          +(a.highestBidMinor!=null?' · '+esc(t("auction_highest_bid"))+': '+esc(money(a.highestBidMinor, a.currency||"NPR")):"")
+          +' · '+esc(a.bidCount||0)+' '+esc(t("auction_bids"))+'</p>'
+          +(a.description?'<p>'+esc(a.description)+'</p>':"")
+          +(isViewer()?"":'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
+          +(a.status==="paused"||a.status==="removed"?'<button class="btn secondary small" data-au="'+esc(a.id)+'" data-a="restore">'+esc(t("restore_bill"))+'</button>':"")
+          +(a.status==="approved"?'<button class="btn secondary small" data-au="'+esc(a.id)+'" data-a="pause">'+esc(t("pause_bill"))+'</button>':"")
+          +(a.status!=="removed"?'<button class="btn secondary small" data-au="'+esc(a.id)+'" data-a="remove">'+esc(t("remove_bill"))+'</button>':"")
+          +'</div>')
+          +'</div>';
+      }).join("");
+      $all("[data-au]", body).forEach(function(btn){
+        btn.onclick=function(){
+          var action=btn.getAttribute("data-a"), aid=btn.getAttribute("data-au");
+          var run=async function(){
+            btn.disabled=true;
+            try{ await api("/admin/auctions/"+encodeURIComponent(aid)+"/"+action, {method:"POST"}); toast(t("decision_saved")); load(); }
+            catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          };
+          if(action==="remove"){ confirmDialog(t("remove_bill"), t("auction_remove_confirm"), t("remove_bill"), run, true); }
+          else run();
         };
       });
     }catch(e){

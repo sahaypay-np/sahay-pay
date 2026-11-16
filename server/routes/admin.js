@@ -957,6 +957,86 @@ router.post('/reports/:id', async (req, res, next) => {
   }
 });
 
+// --- Auction moderation (item 785) ---
+// Auctions reach the public list only via review packets (status
+// 'approved'); there were no admin auction endpoints at all. Pause and
+// remove both hide the auction from the public list and block new bids
+// (the public routes require status 'approved'), and the seller is
+// notified in-app. Restore returns a paused/removed auction to
+// 'approved' (the public list still hides it once ends_at passes).
+
+router.get('/auctions', async (req, res, next) => {
+  try {
+    const status = req.query.status;
+    const params = [];
+    let where = '';
+    if (status && ['pending_review', 'approved', 'paused', 'removed'].includes(status)) {
+      params.push(status);
+      where = `WHERE a.status = $${params.length}`;
+    }
+    const { rows } = await db.query(
+      `SELECT a.*, u.display_name AS seller_name, u.username AS seller_username,
+              (SELECT COUNT(*) FROM auction_bids b WHERE b.auction_id = a.id) AS bid_count,
+              (SELECT MAX(amount_minor) FROM auction_bids b WHERE b.auction_id = a.id) AS highest_bid_minor
+       FROM auctions a JOIN users u ON u.id = a.user_id ${where}
+       ORDER BY a.created_at DESC LIMIT 100`,
+      params
+    );
+    res.json({
+      auctions: rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        category: r.category,
+        currency: r.currency,
+        startBidMinor: r.start_bid_minor,
+        highestBidMinor: r.highest_bid_minor,
+        bidCount: Number(r.bid_count),
+        status: r.status,
+        endsAt: r.ends_at,
+        createdAt: r.created_at,
+        seller: { id: r.user_id, displayName: r.seller_name, username: r.seller_username },
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/auctions/:id/:action', async (req, res, next) => {
+  try {
+    const { action } = req.params;
+    if (!['pause', 'remove', 'restore'].includes(action)) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Action must be pause, remove or restore.' } });
+    }
+    const auction = await db.get('SELECT * FROM auctions WHERE id = $1', [req.params.id]);
+    if (!auction) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Auction not found.' } });
+    const nextStatus = action === 'pause' ? 'paused' : action === 'remove' ? 'removed' : 'approved';
+    if (auction.status === nextStatus) {
+      return res.status(409).json({ error: { code: 'INVALID_STATE', message: `Auction is already ${nextStatus}.` } });
+    }
+    await db.run(`UPDATE auctions SET status = $1 WHERE id = $2`, [nextStatus, auction.id]);
+    await logAudit('admin', req.admin.actor, `auction_${action}`, 'auction', auction.id, {
+      from: auction.status, to: nextStatus,
+    });
+    const kind = action === 'pause' ? 'auction_paused' : action === 'remove' ? 'auction_removed' : 'auction_restored';
+    const title = action === 'pause'
+      ? 'Your auction was paused'
+      : action === 'remove'
+        ? 'Your auction was removed'
+        : 'Your auction is live again';
+    const body = action === 'pause'
+      ? `Your auction "${auction.title}" was paused by a moderator and is hidden for now.`
+      : action === 'remove'
+        ? `Your auction "${auction.title}" was removed by a moderator.`
+        : `Your auction "${auction.title}" was reviewed and restored.`;
+    await createNotification(auction.user_id, kind, title, body, `#/auction/${auction.id}`);
+    res.json({ ok: true, status: nextStatus });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // --- Complaints (items 768–770) ---
 
 router.get('/complaints', async (req, res, next) => {

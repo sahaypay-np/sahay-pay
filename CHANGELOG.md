@@ -29,13 +29,15 @@ per deploy (checklist item 913).
   new bills in your city, leaderboard rank) with opt-out.
 - Announcements page; bill history now shows review decisions.
 - Admin: queue filters (type, oldest/newest, flagged, search) + bulk
-  review (up to 50) + hold/unhold; user detail with suspension (reason
-  required), 7/30-day temporary suspension, typed-BAN ban, admin notes,
-  trusted-poster and watchlist flags; report detail with case notes,
-  severity/assignment/legal flags, request-changes and escalate;
-  complaints inbox with template responses; appeals with content
-  restore; admin dispute queue; analytics + CSV export; payouts
-  summary + gift-status override; admin accounts (owner/moderator/
+  review (up to 50) + hold/unhold + colour-coded SLA age badge per
+  queue item; user detail with suspension (reason required), 7/30-day
+  temporary suspension, typed-BAN ban, admin notes, trusted-poster
+  and watchlist flags; report detail with case notes, severity/
+  assignment/legal flags, request-changes and escalate, and a report
+  SLA tracker (first response 24h, resolution 7d); auction moderation
+  (pause/remove/restore with seller notification); complaints inbox
+  with template responses; appeals with content restore; admin dispute
+  queue; analytics + CSV export; payouts summary + gift-status override; admin accounts (owner/moderator/
   viewer roles, one-time invite codes, per-account lockout, viewers
   read-only); security settings (PIN length, idle timeout, lockout)
   + security-events log; admin availability toggle; broadcasts with
@@ -46,7 +48,7 @@ per deploy (checklist item 913).
 - New Help topics: how direct payments work, referrals, how
   moderation works, install the app (16 topics total).
 - Install prompt: offered after the third visit, once per device.
-- Tests: smoke 224, contract 152, SPA harness 83, migrate-old-db 23
+- Tests: smoke 237, contract 152, SPA harness 84, migrate-old-db 23
   (all green; migration verified against b8defcb, f3ec28a and 165bfac).
 
 ### Headers / SEO / docs workstream (checklist job, 16 Nov 2026)

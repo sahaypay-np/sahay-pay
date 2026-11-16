@@ -498,6 +498,36 @@ GIFT3_ID=$(echo "$r" | jget "['gift']['id']")
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/gifts/$GIFT3_ID/status" $J -d '{"status":"failed","note":"Smoke test override."}'); c=$(code "$r")
 t "gift status override" 200 "$c"
 
+# auction moderation (785): create + approve an auction, then pause/restore/remove
+ENDS=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=2)).isoformat())")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/auctions" $J -d "{\"title\":\"Smoke test vase\",\"description\":\"A handmade vase, auctioned to test moderation end to end.\",\"category\":\"Other\",\"startBidMinor\":50000,\"endsAt\":\"$ENDS\"}")
+t "create auction" 201 "$(code "$r")"
+AUC_ID=$(body "$r" | jget "['auction']['id']")
+AUC_PACKET=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/queue?target_type=auction" | python3 -c "import sys,json;ps=json.load(sys.stdin)['packets'];print(next((p['id'] for p in ps if p.get('targetId')=='$AUC_ID'),''))")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/review/$AUC_PACKET" $J -d '{"decision":"approve"}')
+t "approve auction packet" 200 "$(code "$r")"
+r=$(curl -s "$B/auctions")
+echo "$r" | grep -q "$AUC_ID" && { echo "PASS: approved auction is public"; pass=$((pass+1)); } || { echo "FAIL: auction public list: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/auctions?status=approved")
+echo "$r" | grep -q "$AUC_ID" && echo "$r" | grep -q 'seller' && { echo "PASS: admin auctions list with seller"; pass=$((pass+1)); } || { echo "FAIL: admin auctions: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/$AUC_ID/pause" $J -d '{}')
+t "pause auction" 200 "$(code "$r")"
+echo "$(body "$r")" | grep -q '"status":"paused"' && { echo "PASS: pause returns paused"; pass=$((pass+1)); } || { echo "FAIL: pause: $(body "$r")"; fail=$((fail+1)); }
+r=$(curl -s "$B/auctions")
+echo "$r" | grep -q "$AUC_ID" && { echo "FAIL: paused auction still public"; fail=$((fail+1)); } || { echo "PASS: paused auction hidden from public list"; pass=$((pass+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/$AUC_ID/pause" $J -d '{}')
+t "double pause -> 409" 409 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/$AUC_ID/restore" $J -d '{}')
+t "restore auction" 200 "$(code "$r")"
+r=$(curl -s "$B/auctions")
+echo "$r" | grep -q "$AUC_ID" && { echo "PASS: restored auction public again"; pass=$((pass+1)); } || { echo "FAIL: restore public: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/$AUC_ID/remove" $J -d '{}')
+t "remove auction" 200 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/no-such-auction/pause" $J -d '{}')
+t "pause missing auction -> 404" 404 "$(code "$r")"
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/notifications?kind=account")
+echo "$r" | grep -q 'auction_paused' && echo "$r" | grep -q 'auction_removed' && { echo "PASS: seller notified of pause + remove"; pass=$((pass+1)); } || { echo "FAIL: auction seller notifications: $r"; fail=$((fail+1)); }
+
 # admin accounts (771-773): create, invite, redeem, delete
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/admins" $J -d '{"displayName":"Smoke Mod","role":"moderator","pin":"222222"}'); c=$(code "$r")
 t "create admin account" 201 "$c"

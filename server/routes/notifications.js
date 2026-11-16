@@ -32,7 +32,8 @@ const KIND_GROUPS = {
     'appeal_decided', 'report_decided', 'user_notice', 'digest_weekly',
     'digest_monthly', 'referral_milestone', 'referral_friend', 'message_received',
     'announcement', 'broadcast', 'payout_edited', 'verification_reminder',
-    'thank_you_reminder',
+    'thank_you_reminder', 'auction_outbid', 'auction_paused', 'auction_removed',
+    'auction_restored',
   ],
 };
 

@@ -60,6 +60,10 @@ const KIND_EVENT = {
   confirm_reminder: 'gifts',
   verification_reminder: 'verification',
   thank_you_reminder: 'thanks',
+  auction_outbid: 'account',
+  auction_paused: 'account',
+  auction_removed: 'account',
+  auction_restored: 'account',
 };
 const SECURITY_EVENTS = new Set(['security']);
 // Legacy notifyPrefs fallback: posts -> bill events, gifts -> gift events,

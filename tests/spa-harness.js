@@ -311,6 +311,8 @@ async function main() {
   check('admin audit log renders with verify + export', await waitFor(() => !!$('#audit-verify') && !!$('#audit-export'), 5000, 'admin audit'));
   $('#audit-verify').click();
   check('audit hash-chain verify reports ok', await waitFor(() => $('#audit-verify-out') && $('#audit-verify-out').textContent.includes('verified'), 5000, 'audit verify'), $('#audit-verify-out') ? $('#audit-verify-out').textContent : 'no output');
+  window.location.hash = '#/admin/auctions';
+  check('admin auctions page renders with status filter', await waitFor(() => !!$('#au-status') && text().includes('Auctions'), 5000, 'admin auctions'));
 
   // 6b. Logout resets the header (a): avatar back to '?', badge hidden.
   window.location.hash = '#/settings';
