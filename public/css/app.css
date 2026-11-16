@@ -260,3 +260,11 @@ body.has-chrome .site-footer{padding-bottom:calc(var(--dock-h) + 28px + env(safe
 .pe-toolbar input[type=range]{width:110px}
 .chip .cnt{opacity:.75;font-weight:600}
 .progress-thin{height:6px}
+
+/* Receipt print (item 262): hide chrome + buttons, clean card. */
+@media print {
+  #topbar, #dock, .skip-link, .no-print { display:none !important; }
+  body { background:#fff; }
+  #view { max-width:640px; margin:0 auto; }
+  .receipt-print .card { box-shadow:none; border:1px solid #ddd; }
+}

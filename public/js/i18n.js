@@ -1352,6 +1352,7 @@ en: {
   dispute_resolve:"Mark resolved",
   dispute_message_both:"Message both parties",
   dispute_stale:"{n} dispute(s) unanswered for 48h+",
+  dispute_stale_label:"Stale disputes (48h+)",
   dispute_none:"No open disputes.",
   dispute_parties:"Helper and recipient",
   billers_title:"Biller directory",

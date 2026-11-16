@@ -152,7 +152,7 @@ var S = {
   feedTotal:0, feedUpdatedAt:null, lastSwiped:null, lastSwipeAt:0, lastReshuffleAt:0,
   viewMode:"deck", searchQ:"", facetCounts:null,
   post:null, gift:null, basket:loadBasket(), blocked:loadBlocked(), saved:loadSaved(),
-  leadersTab:"top_supporters", leadersPeriod:"all", leadersScope:"all",
+  leadersTab:"top_supporters", leadersPeriod:"all", leadersScope:"all", leadersCurrency:"all",
   mybillsTab:"active", notifCache:[], giftStatusFilter:"all", basketQueue:[]
 };
 function defaultFilters(){ return {country:"own", categories:[], band:"", verifiedOnly:false, idVerifiedOnly:false, nameVerifiedOnly:false, verifiedFirst:false, payDirectOnly:false, charity:false, billShown:false, fundedOnly:false, posted:"any", city:"", near:"", radiusKm:50, amountMin:"", amountMax:"", askType:"", sort:"recommended"}; }
@@ -3067,16 +3067,19 @@ function renderLeaders(){
     +'</div>'
     +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="ld-period" aria-label="'+esc(t("posted"))+'" style="flex:1"><option value="7d" '+(S.leadersPeriod==="7d"?"selected":"")+'>'+esc(t("last_7"))+'</option><option value="30d" '+(S.leadersPeriod==="30d"?"selected":"")+'>'+esc(t("last_30"))+'</option><option value="all" '+(S.leadersPeriod==="all"?"selected":"")+'>'+esc(t("all_time"))+'</option></select>'
     +'<select id="ld-scope" aria-label="'+esc(t("filter_country"))+'" style="flex:1"><option value="all" '+(S.leadersScope==="all"?"selected":"")+'>'+esc(t("scope_all"))+'</option><option value="NP" '+(S.leadersScope==="NP"?"selected":"")+'>🇳🇵 '+esc(t("nepal"))+'</option><option value="IN" '+(S.leadersScope==="IN"?"selected":"")+'>🇮🇳 '+esc(t("india"))+'</option></select></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center"><span class="small">'+esc(t("leaders_currency"))+':</span><div class="seg" id="ld-currency"><button type="button" data-c="all" class="'+((S.leadersCurrency||"all")==="all"?"on":"")+'">'+esc(t("leaders_all_cur"))+'</button><button type="button" data-c="NPR" class="'+(S.leadersCurrency==="NPR"?"on":"")+'">रू NPR</button><button type="button" data-c="INR" class="'+(S.leadersCurrency==="INR"?"on":"")+'">₹ INR</button></div></div>'
     +'<div id="ld-body">'+skeleton(2)+'</div>');
   $all("#ld-tabs .tab-btn").forEach(function(b){ b.onclick=function(){ S.leadersTab=b.getAttribute("data-t"); renderLeaders(); }; });
   $("#ld-period").onchange=function(){ S.leadersPeriod=$("#ld-period").value; load(); };
   $("#ld-scope").onchange=function(){ S.leadersScope=$("#ld-scope").value; load(); };
+  $all("#ld-currency button").forEach(function(b){ b.onclick=function(){ S.leadersCurrency=b.getAttribute("data-c"); $all("#ld-currency button").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
   load();
   async function load(){
     var body=$("#ld-body"); if(!body) return;
     body.innerHTML=skeleton(2);
     try{
       var q=new URLSearchParams({tab:S.leadersTab, period:S.leadersPeriod, scope:S.leadersScope});
+      if(S.leadersCurrency&&S.leadersCurrency!=="all") q.set("currency", S.leadersCurrency);
       var d=await api("/leaders?"+q.toString());
       // Brands tab returns two lists (mostResponded / mostAsked), not leaders.
       if(S.leadersTab==="brands"){
@@ -3338,7 +3341,8 @@ function renderMyBills(){
         var statuses=["initiated","details_shown","donor_reported_sent","verification_pending","confirmed","disputed","expired","failed","reversed"];
         var curFilter=S.giftStatusFilter||"all";
         var shown=curFilter==="all"?gifts:gifts.filter(function(x){ return x.status===curFilter; });
-        body.innerHTML='<label for="mb-gift-filter">'+esc(t("filter_status"))+'</label><select id="mb-gift-filter"><option value="all">'+esc(t("status_all"))+'</option>'+statuses.map(function(s){ return '<option value="'+s+'"'+(curFilter===s?" selected":"")+'>'+esc(giftStatusLabel(s))+'</option>'; }).join("")+'</select>'
+        body.innerHTML='<p class="small"><a href="#/summary">'+esc(t("month_summary_title"))+'</a> · <a href="#/pledges">'+esc(t("my_pledges"))+'</a></p>'
+          +'<label for="mb-gift-filter">'+esc(t("filter_status"))+'</label><select id="mb-gift-filter"><option value="all">'+esc(t("status_all"))+'</option>'+statuses.map(function(s){ return '<option value="'+s+'"'+(curFilter===s?" selected":"")+'>'+esc(giftStatusLabel(s))+'</option>'; }).join("")+'</select>'
           +(shown.length? shown.map(function(g){ return giftRowHtml(g); }).join("") : '<p class="small">'+esc(t("empty_gifts"))+'</p>');
         var gf=$("#mb-gift-filter");
         if(gf) gf.onchange=function(){ S.giftStatusFilter=gf.value; load(); };
@@ -3559,16 +3563,26 @@ function renderProfile(username){
     if(tok!==NAV) return;
     var u=d.profile||d.user||d;
     var bills=pickList(d,["bills","liveAsks"])||[];
+    var totals=d.totals||{};
+    var showTotals=d.showTotals!==false && u.show_totals!==false;
+    var impact=d.impact||null;
     var blocked=S.blocked.indexOf(u.id||username)>=0;
     view('<div class="card" style="text-align:center"><div class="avatar" style="width:84px;height:84px;font-size:32px;margin:0 auto">'+(u.photo_url||u.photoUrl?'<img src="'+esc(u.photo_url||u.photoUrl)+'" alt="">':esc(initials(u.display_name||u.displayName)))+'</div>'
       +'<h1 style="margin-top:10px">'+esc(u.display_name||u.displayName||"")+'</h1><p class="small">@'+esc(u.username||username)+' · '+flag(u.country)+' '+esc(u.city||"")+'</p>'
       +'<p>'+esc(u.about||"")+'</p>'
-      +'<p class="small">'+esc(t("member_since"))+' '+esc(u.created_at?fmtDate(u.created_at):"")+'</p>'
+      +'<p class="small">'+esc(t("member_since"))+' '+esc((u.memberSince||u.created_at)?fmtDate(u.memberSince||u.created_at):"")+'</p>'
       +'<div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">'+(u.verifications?badgesHtml({verifications:u.verifications}):"")+'</div>'
       +'<div class="grid2" style="margin-top:12px"><div class="card stat"><div class="n">'+esc(u.live_asks!=null?u.live_asks:bills.length)+'</div><div class="l">'+esc(t("live_asks"))+'</div></div>'
-      +'<div class="card stat"><div class="n">'+esc(u.completed_asks||0)+'</div><div class="l">'+esc(t("completed_asks"))+'</div></div></div>'
+      +'<div class="card stat"><div class="n">'+esc(d.completedAsks!=null?d.completedAsks:(u.completed_asks||0))+'</div><div class="l">'+esc(t("completed_asks"))+'</div></div></div>'
       +(S.user&&(u.username===S.user.username||u.id===S.user.id)?'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(S.saved.length)+'</div><div class="l">'+esc(t("saved_title"))+'</div></div><div class="card stat"><div class="n">'+esc(loadDrafts().length)+'</div><div class="l">'+esc(t("drafts_title"))+'</div></div></div>':"")
-      +(u.show_totals===false?'<p class="small">'+esc(t("totals_private"))+'</p>':'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(money(u.total_given_minor||0, curOf(u.country)))+'</div><div class="l">'+esc(t("given"))+'</div></div><div class="card stat"><div class="n">'+esc(money(u.total_received_minor||0, curOf(u.country)))+'</div><div class="l">'+esc(t("received_total"))+'</div></div></div>')
+      +(showTotals?'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(money(totals.givenMinor!=null?totals.givenMinor:(u.total_given_minor||0), curOf(u.country)))+'</div><div class="l">'+esc(t("given"))+'</div></div><div class="card stat"><div class="n">'+esc(money(totals.receivedMinor!=null?totals.receivedMinor:(u.total_received_minor||0), curOf(u.country)))+'</div><div class="l">'+esc(t("received_total"))+'</div></div></div>':'<p class="small">'+esc(t("totals_private"))+'</p>')
+      +(impact&&showTotals?'<div class="card" style="margin-top:10px;text-align:left"><h2>'+esc(t("impact_title"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("impact_confirmed"))+'</span><b>'+esc(impact.confirmedGifts||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("impact_helped"))+'</span><b>'+esc(impact.billsHelped||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("impact_streak"))+'</span><b>'+esc(t("impact_days",{n:impact.currentStreakDays||0}))+'</b></div>'
+        +(impact.byCurrency&&impact.byCurrency.NPR?'<div class="kv"><span>'+esc(t("impact_npr"))+'</span><b>'+esc(money(impact.byCurrency.NPR.totalMinor||0,"NPR"))+'</b></div>':"")
+        +(impact.byCurrency&&impact.byCurrency.INR?'<div class="kv"><span>'+esc(t("impact_inr"))+'</span><b>'+esc(money(impact.byCurrency.INR.totalMinor||0,"INR"))+'</b></div>':"")
+        +'</div>':"")
       +'<div class="btn-row"><button class="btn secondary small" id="pf-share">🔗 '+esc(t("share_profile"))+'</button><button class="btn secondary small" id="pf-report">🚩 '+esc(t("report_user"))+'</button><button class="btn secondary small" id="pf-block">'+esc(blocked?t("unblock"):t("block_user"))+'</button></div></div>'
       +'<h2>'+esc(t("live_asks"))+'</h2><div id="pf-bills">'
       +(bills.length? bills.map(function(b){ return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amount_minor||b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.category||"")+'</div></div><span>›</span></a>'; }).join("") : '<p>'+esc(t("empty_mybills"))+'</p>')
@@ -3777,13 +3791,20 @@ var ABOUT_HTML=
  +'<p>Every post is reviewed by the owner before it goes public. The service is run from Bhairahawa, Nepal, and is currently in Demo Mode: no real payment integration is connected yet, so fees shown are quotes and are not collected.</p>';
 var REFUNDS_HTML=
  '<p>No payments are taken while Demo Mode is active, so no refunds arise. Gifts go directly from supporter to recipient, outside Sahay Pay, and Sahay Pay cannot refund or reverse them (see Terms §6).</p>'
- +'<p>When real payments launch, any fee collected through a payment provider will be refunded through that provider, under that provider\'s rules. If a post was fake or the payout details were wrong, report it through the Help Centre complaint form — the owner reviews every report.</p>';
+ +'<p>When real payments launch, the platform fee will be refunded in three cases only: (1) the payout details were never shown, (2) the post was removed before you could pay, or (3) the payout details didn\'t work. Otherwise the fee is non-refundable once shown. Any fee refund goes through the payment provider, under that provider\'s rules. If a post was fake or the payout details were wrong, report it through the Help Centre complaint form — the owner reviews every report.</p>';
 var CONTENT_RULES_HTML=
  '<p>Do not post: fake bills or false claims; defamation; hate speech; threats, harassment, or bullying; misinformation; illegal goods or services; sexual content involving minors (reported to the authorities); other people\'s private details; content you do not have the right to share; spam or scams.</p>'
  +'<p>To report content, use the Help Centre complaint form: include a link to the post, which rule it breaks, and why. Reported content is reviewed by a human. Posts that break these rules are removed, and accounts that break them may be suspended. Copyright reports go through the same form (see Terms §11).</p>';
 var HELP_TOPICS=[
   {id:"about", titleKey:"topic_about", body:function(){ return '<p>'+esc(t("about_body"))+'</p>'+ABOUT_HTML; }},
   {id:"helping", titleKey:"topic_helping", body:function(){ return '<p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'<p class="small">'+esc(t("fee_sentence_supporter"))+' '+esc(t("fee_sentence_zero"))+'</p>'+crossBorderHtml(); }},
+  {id:"gifting-guide", titleKey:"topic_gifting_guide", body:function(){
+    return '<div style="display:grid;gap:12px">'
+      +'<div class="card"><div class="slide-ic" style="font-size:28px">🧾</div><h2>'+esc(t("gifting_guide_step1_t"))+'</h2><p>'+esc(t("gifting_guide_step1_b"))+'</p></div>'
+      +'<div class="card"><div class="slide-ic" style="font-size:28px">💰</div><h2>'+esc(t("gifting_guide_step2_t"))+'</h2><p>'+esc(t("gifting_guide_step2_b"))+'</p></div>'
+      +'<div class="card"><div class="slide-ic" style="font-size:28px">✅</div><h2>'+esc(t("gifting_guide_step3_t"))+'</h2><p>'+esc(t("gifting_guide_step3_b"))+'</p></div></div>';
+  }},
+  {id:"direct-payments", titleKey:"topic_direct_payments", body:function(){ return '<p>'+esc(t("direct_payments_body"))+'</p><p><a href="#/billers">🏦 '+esc(t("billers_title"))+'</a></p>'+neverHoldsHtml(); }},
   {id:"posting", titleKey:"topic_posting", body:function(){ return '<p>'+esc(t("how_posting_body"))+'</p><p>'+esc(t("owner_approval_note"))+'</p>'; }},
   {id:"ranking", titleKey:"topic_ranking", body:function(){ return '<p>'+esc(t("ranking_body"))+'</p><p class="small">'+esc(t("ranking_note_settings"))+'</p>'; }},
   {id:"faq", titleKey:"topic_faq", body:function(){
@@ -3949,7 +3970,7 @@ function renderFounderTip(q){
 
 /* ---------- admin ---------- */
 function adminNav(active){
-  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["users",t("users")],["verifications",t("verifications")],["reports",t("reports")],["fees",t("fees")],["audit",t("audit_log")]];
+  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["users",t("users")],["verifications",t("verifications")],["reports",t("reports")],["fees",t("fees")],["disputes",t("admin_disputes")],["billers",t("admin_billers")],["currency",t("admin_currency")],["audit",t("audit_log")]];
   return '<div class="admin-nav">'+links.map(function(l){ return '<a href="#/admin/'+l[0]+'" class="'+(active===l[0]?"on":"")+'">'+esc(l[1])+'</a>'; }).join("")+'</div>';
 }
 function adminGuard(){
@@ -4074,7 +4095,11 @@ async function renderAdminDashboard(){
       +statBox(t("metrics_confirmed_inr"), money(volFor("INR")||m.confirmedInrMinor||m.confirmed_inr_minor||0,"INR"))
       +statBox(t("open_reports"), m.openReports||m.open_reports||0)
       +statBox(t("open_complaints"), m.openComplaints!=null?m.openComplaints:(m.open_complaints||0))
+      +statBox(t("dispute_open"), m.openDisputes!=null?m.openDisputes:0)
+      +statBox(t("dispute_stale_label"), m.staleDisputes||0)
       +'</div>'
+      +((m.staleDisputes||0)>0?'<div class="notice warn" style="margin-top:12px">⚠️ '+esc(t("dispute_stale",{n:m.staleDisputes}))+' — <a href="#/admin/disputes">'+esc(t("dispute_centre"))+'</a></div>':"")
+      +'<div class="card" style="margin-top:12px"><h2>'+esc(t("analytics_title"))+'</h2><div id="ad-funnel">'+esc(t("loading"))+'</div></div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("fee_mode"))+'</h2><p>'+esc(t("current_mode"))+': <strong>'+esc((S.config&&S.config.feeMode)||"supporter_fee")+'</strong></p><p class="small">'+esc(feeSentence())+'</p><a class="btn secondary small" href="#/admin/fees">'+esc(t("fees"))+'</a></div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("maintenance_mode"))+'</h2><p class="small">'+esc(t("maintenance_note"))+'</p><p id="mt-state" class="small">'+esc(t("loading"))+'</p><button class="btn secondary small" id="mt-toggle" disabled>'+esc(t("maintenance_toggle"))+'</button></div>'
 
@@ -4100,6 +4125,16 @@ async function renderAdminDashboard(){
           btn.disabled=false;
         };
       }catch(e){ stEl.textContent=t("err_generic"); }
+    })();
+    // Gift-flow funnel (item 297): sheet opened -> confirmed.
+    (async function(){
+      var f=$("#ad-funnel"); if(!f) return;
+      try{
+        var a=await api("/admin/analytics/gifts");
+        var fn=a.funnel||a;
+        var steps=[["sheetOpened","analytics_sheet"],["amountChosen","analytics_amount"],["detailsShown","analytics_details"],["markedSent","analytics_sent"],["confirmed","analytics_confirmed"],["disputed","analytics_disputed"]];
+        f.innerHTML=steps.map(function(s){ return '<div class="kv"><span>'+esc(t(s[1]))+'</span><b>'+esc(fn[s[0]]!=null?fn[s[0]]:0)+'</b></div>'; }).join("");
+      }catch(e){ f.textContent=t("err_generic"); }
     })();
     function statBox(l, v){ return '<div class="card stat"><div class="n">'+esc(v)+'</div><div class="l">'+esc(l)+'</div></div>'; }
   }catch(e){
@@ -4310,6 +4345,7 @@ function renderAdminFees(){
       var tipCfg=d.founderTipConfig||{};
       var tipEnabled=tipCfg.enabled!==false;
       var tipPcts=Array.isArray(tipCfg.optionsPercent)&&tipCfg.optionsPercent.length?tipCfg.optionsPercent.filter(function(x){ return x>0; }).join(","):"5,10";
+      var charityFree=Array.isArray(d.charityFeeFreeCategories)?d.charityFeeFreeCategories:[];
       body.innerHTML='<div class="card"><h2>'+esc(t("fee_mode"))+'</h2>'
         +'<p>'+esc(t("current_mode"))+': <strong>'+esc(mode==="zero_fee_plus_tip"?t("fee_mode_zero"):t("fee_mode_supporter"))+'</strong></p>'
         +'<p class="small">'+esc(t("staged_mode"))+': '+esc(mode==="zero_fee_plus_tip"?t("fee_mode_supporter"):t("fee_mode_zero"))+' · '+esc(t("pending_decision"))+'</p>'
@@ -4326,7 +4362,16 @@ function renderAdminFees(){
         +'<label class="check-row"><input type="checkbox" id="tip-enabled" '+(tipEnabled?"checked":"")+'> '+esc(t("tip_enabled"))+'</label>'
         +'<label for="tip-pcts">'+esc(t("tip_percents"))+'</label><input id="tip-pcts" value="'+esc(tipPcts)+'" placeholder="5,10">'
         +'<button class="btn secondary" id="tip-save" style="margin-top:8px">'+esc(t("save_config"))+'</button></div>'
-        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("payment_methods"))+'</h2><p class="small">'+esc(t("methods_note"))+'</p><div id="methods-body">'+esc(t("loading"))+'</div></div>';
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("payment_methods"))+'</h2><p class="small">'+esc(t("methods_note"))+'</p><div id="methods-body">'+esc(t("loading"))+'</div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("fee_preview"))+'</h2>'
+        +'<label for="fp-amt">'+esc(t("fee_preview_amount"))+'</label><input id="fp-amt" type="number" min="0" step="1" value="1000">'
+        +'<label for="fp-cur">'+esc(t("leaders_currency"))+'</label><select id="fp-cur"><option value="NPR">NPR</option><option value="INR">INR</option></select>'
+        +'<button class="btn secondary" id="fp-btn" style="margin-top:8px">'+esc(t("fee_preview_btn"))+'</button><p id="fp-out" style="margin-top:8px"></p></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("charity_fee_free"))+'</h2><p class="small">'+esc(t("charity_fee_free_note"))+'</p>'
+        +'<div style="display:flex;flex-wrap:wrap;gap:6px">'+I.categories().map(function(c){ return '<label class="check-row" style="flex:1 1 40%"><input type="checkbox" class="cff-cat" value="'+esc(c)+'" '+(charityFree.indexOf(c)>=0?"checked":"")+'> '+esc(c)+'</label>'; }).join("")+'</div>'
+        +'<button class="btn secondary" id="cff-save" style="margin-top:8px">'+esc(t("save_config"))+'</button></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("fee_history"))+'</h2><div id="fee-history-body">'+esc(t("loading"))+'</div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("tip_report"))+'</h2><div id="tip-report-body">'+esc(t("loading"))+'</div></div>';
       $("#fee-switch").onclick=function(){
         var next=mode==="zero_fee_plus_tip"?"supporter_fee":"zero_fee_plus_tip";
         confirmDialog(t("switch_mode"), t("fee_switch_warn"), t("switch_mode"), async function(){
@@ -4353,6 +4398,50 @@ function renderAdminFees(){
         catch(e){ toast(e.message||t("err_generic"), true); }
         finally{ b.disabled=false; b.textContent=t("save_config"); }
       };
+      // Item 215: fee preview from the form's current values.
+      $("#fp-btn").onclick=function(){
+        var amt=toMinor($("#fp-amt").value);
+        var cur=$("#fp-cur").value;
+        var flat=toMinor(cur==="INR"?$("#fee-inr-flat").value:$("#fee-npr-flat").value);
+        var thr=toMinor(cur==="INR"?$("#fee-inr-thr").value:$("#fee-npr-thr").value);
+        var pct=parseFloat($("#fee-pct").value)||10;
+        var fee=amt<=thr?flat:Math.round(amt*pct/100);
+        fee=Math.max(fee, flat);
+        $("#fp-out").textContent=t("fee_preview_result",{fee:money(fee,cur), total:money(amt+fee,cur)});
+      };
+      // Item 217: charity fee-free categories.
+      $("#cff-save").onclick=async function(){
+        var b=$("#cff-save"); b.disabled=true; b.textContent=t("loading");
+        try{
+          var cats=$all(".cff-cat").filter(function(c){ return c.checked; }).map(function(c){ return c.value; });
+          await api("/admin/fees", {method:"PUT", body:{charityFeeFreeCategories:cats}}); toast(t("config_saved"));
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ b.disabled=false; b.textContent=t("save_config"); }
+      };
+      // Item 219: fee-change history.
+      (async function(){
+        var hb=$("#fee-history-body"); if(!hb) return;
+        try{
+          var hd=await api("/admin/fees/history");
+          var list=pickList(hd,["history"]);
+          if(!list.length){ hb.innerHTML='<p class="small">'+esc(t("fee_history_empty"))+'</p>'; return; }
+          hb.innerHTML=list.slice(0,20).map(function(h){
+            return '<div class="kv"><span>'+esc(h.action||"")+' · '+esc(fmtDate(h.changedAt||h.createdAt))+'</span><b>'+esc(JSON.stringify(h.newValue))+'</b></div>';
+          }).join("");
+        }catch(e){ hb.innerHTML=errBox(e.message); }
+      })();
+      // Item 225: founder-tip totals by week.
+      (async function(){
+        var tb=$("#tip-report-body"); if(!tb) return;
+        try{
+          var td=await api("/admin/tips");
+          var weeks=pickList(td,["weeks"]);
+          if(!weeks.length){ tb.innerHTML='<p class="small">'+esc(t("tip_report_empty"))+'</p>'; return; }
+          tb.innerHTML=weeks.map(function(w){
+            return '<div class="kv"><span>'+esc(w.weekStart||"")+' ('+esc(w.currency||"")+") · "+esc(w.gifts||0)+' '+esc(t("month_gifts"))+'</span><b>'+esc(money(w.totalMinor||0, w.currency||"NPR"))+'</b></div>';
+          }).join("");
+        }catch(e){ tb.innerHTML=errBox(e.message); }
+      })();
       try{
         var md=await api("/admin/methods");
         var pm=md.paymentMethods||{};
@@ -4421,14 +4510,291 @@ function renderAdminAudit(){
 }
 
 /* ---------- boot ---------- */
-/* ---------- phase 2 s3: receipts / summary / pledges / billers / admin (stubs — replaced in the next commit) ---------- */
-function renderReceipt(id){ view(emptyState("🧾", t("receipt_title"), "", "")); }
-function renderSummary(){ view(emptyState("📊", t("month_summary_title"), "", "")); }
-function renderPledges(){ view(emptyState("🤝", t("my_pledges"), "", "")); }
-function renderBillers(){ view(emptyState("🏦", t("billers_title"), "", "")); }
-function renderAdminDisputes(){ view(emptyState("⚖️", t("dispute_centre"), "", "")); }
-function renderAdminBillers(){ view(emptyState("🏦", t("admin_billers"), "", "")); }
-function renderAdminCurrency(){ view(emptyState("💱", t("currency_settings"), "", "")); }
+/* ---------- phase 2 s3: receipts / summary / pledges / billers ---------- */
+function renderReceipt(id){
+  if(!S.user){ view(emptyState("🧾", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  var tok=view(skeleton(2));
+  api("/gifts/"+encodeURIComponent(id)+"/receipt").then(function(d){
+    if(tok!==NAV) return;
+    var r=d.receipt||d;
+    var cur=r.currency||"NPR";
+    view('<div class="receipt-print"><div class="card" style="text-align:center"><div class="logo-big"><img src="logo.svg" alt="" width="64" height="64"></div>'
+      +'<h1>'+esc(t("receipt_title"))+'</h1><p class="small">'+esc(t("receipt_demo"))+'</p>'
+      +'<p><strong>'+esc(t("receipt_number"))+':</strong> '+esc(r.receiptNumber||"")+'</p>'
+      +'<div class="kv"><span>'+esc(t("receipt_for"))+'</span><b>'+esc(r.billTitle||"")+(r.billRequestCode?" ("+esc(r.billRequestCode)+")":"")+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("sender_helper"))+'</span><b>'+esc(r.supporterName||"")+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("sender_poster"))+'</span><b>'+esc(r.recipientName||"")+'</b></div>'
+      +(r.directPay?'<div class="kv"><span>'+esc(t("receipt_biller"))+'</span><b>'+esc(r.billerName||"")+(r.billerRef?" — "+esc(r.billerRef):"")+'</b></div>':"")
+      +'<div class="kv"><span>'+esc(t("your_help"))+'</span><b>'+esc(money(r.amountMinor||0,cur))+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("fee_label"))+'</span><b>'+esc(money(r.feeMinor||0,cur))+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("tip_label"))+'</span><b>'+esc(money(r.tipMinor||0,cur))+'</b></div>'
+      +'<div class="kv"><span><strong>'+esc(t("total_send"))+'</strong></span><b>'+esc(money(r.totalMinor||0,cur))+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("tl_confirmed"))+'</span><b>'+esc(r.confirmedAt?fmtDate(r.confirmedAt):"—")+'</b></div>'
+      +(r.message?'<p class="small">💬 “'+esc(r.message)+'”</p>':"")
+      +'<div class="btn-row no-print"><button class="btn secondary" id="rc-print">🖨️ '+esc(t("receipt_download"))+'</button><button class="btn secondary" id="rc-share">🔗 '+esc(t("receipt_share"))+'</button></div>'
+      +'<div class="btn-row no-print"><a class="btn" href="#/gift/'+encodeURIComponent(r.billId||"")+'?amount='+encodeURIComponent(r.amountMinor||"")+'">💙 '+esc(t("gift_again"))+'</a><a class="btn secondary" href="#/mybills">'+esc(t("my_bills"))+'</a></div></div></div>');
+    $("#rc-print").onclick=function(){ window.print(); };
+    $("#rc-share").onclick=function(){
+      // Item 263: share a summary only — never payout details.
+      var text=t("receipt_title")+" "+(r.receiptNumber||"")+" — "+money(r.amountMinor||0,cur)+" "+t("receipt_for")+" "+(r.billTitle||"")+" ("+t("receipt_demo")+")";
+      if(navigator.share){ navigator.share({title:t("receipt_title"), text:text}).catch(function(){}); }
+      else copyText(text, t("receipt_shared"));
+    };
+  }).catch(function(e){
+    if(tok!==NAV) return;
+    view(emptyState("🧾", t("receipt_not_found"), e.message||"", '<a class="btn small" href="#/mybills">'+esc(t("my_bills"))+'</a>', "h1"));
+  });
+}
+function renderSummary(){
+  if(!S.user){ view(emptyState("📊", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<h1>'+esc(t("month_summary_title"))+'</h1><div id="sum-body">'+skeleton(2)+'</div>');
+  api("/gifts/mine/monthly").then(function(d){
+    var body=$("#sum-body"); if(!body) return;
+    var months=pickList(d,["months"]);
+    if(!months.length){ body.innerHTML=emptyState("📊", t("month_summary_empty"), "", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>'); return; }
+    body.innerHTML=months.map(function(m){
+      return '<div class="card" style="margin-top:12px"><h2>'+esc(m.month||"")+' ('+esc(m.currency||"")+")</h2>"
+        +'<div class="kv"><span>'+esc(m.count||0)+' '+esc(t("month_gifts"))+'</span><b>'+esc(money(m.totalMinor||0,m.currency||"NPR"))+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("fee_label"))+'</span><b>'+esc(money(m.feeMinor||0,m.currency||"NPR"))+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("tip_label"))+'</span><b>'+esc(money(m.tipMinor||0,m.currency||"NPR"))+'</b></div>'
+        +(m.gifts||[]).map(function(g){
+          return '<div class="kv"><span><a href="#/bill/'+encodeURIComponent(g.billId||"")+'">'+esc(g.billTitle||"")+'</a> · '+esc(g.confirmedAt?fmtDate(g.confirmedAt):"")+'</span><b>'+esc(money(g.amountMinor||0,m.currency||"NPR"))+' <a class="small" href="#/receipt/'+encodeURIComponent(g.id)+'">🧾</a></b></div>';
+        }).join("")+'</div>';
+    }).join("");
+  }).catch(function(e){ var body=$("#sum-body"); if(body) body.innerHTML=errBox(e.message); });
+}
+function renderPledges(){
+  if(!S.user){ view(emptyState("🤝", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<h1>'+esc(t("my_pledges"))+'</h1><p class="small">'+esc(t("pledge_note"))+'</p><div id="pl-body">'+skeleton(2)+'</div>');
+  load();
+  async function load(){
+    var body=$("#pl-body"); if(!body) return;
+    try{
+      var d=await api("/pledges/mine");
+      var list=pickList(d,["pledges"]);
+      if(!list.length){ body.innerHTML=emptyState("🤝", t("pledge_empty"), t("pledge_empty_body"), '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>'); return; }
+      body.innerHTML=list.map(function(p){
+        var cur=p.currency||"NPR";
+        var due=p.nextDueAt?fmtDate(p.nextDueAt):"—";
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(p.billTitle||"")+'</strong><span class="chip">'+esc(p.status==="paused"?t("pledge_paused"):p.status==="cancelled"?t("pledge_cancelled"):p.frequency==="weekly"?t("pledge_weekly"):t("pledge_monthly"))+'</span></div>'
+          +'<p class="small">'+esc(money(p.amountMinor||0,cur))+' · '+esc(t("pledge_next_due"))+': '+esc(due)+'</p>'
+          +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+          +'<a class="btn secondary small" href="#/bill/'+encodeURIComponent(p.billId||"")+'">'+esc(t("view_bill"))+'</a>'
+          +(p.status==="active"?'<button class="btn small" data-pl="mark-sent" data-id="'+esc(p.id)+'">✅ '+esc(t("pledge_mark_sent"))+'</button><button class="btn secondary small" data-pl="pause" data-id="'+esc(p.id)+'">'+esc(t("pledge_pause"))+'</button>':"")
+          +(p.status==="paused"?'<button class="btn small" data-pl="resume" data-id="'+esc(p.id)+'">'+esc(t("pledge_resume"))+'</button>':"")
+          +(p.status!=="cancelled"?'<button class="btn secondary small" data-pl="cancel" data-id="'+esc(p.id)+'">'+esc(t("pledge_cancel"))+'</button>':"")
+          +'</div></div>';
+      }).join("");
+      $all("[data-pl]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          var act=btn.getAttribute("data-pl"), id=btn.getAttribute("data-id");
+          btn.disabled=true;
+          try{ await api("/pledges/"+encodeURIComponent(id)+"/"+act, {method:"POST"}); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
+  }
+}
+function renderBillers(){
+  view('<h1>'+esc(t("billers_title"))+'</h1>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="bl-country" style="flex:1"><option value="">'+esc(t("scope_all"))+'</option><option value="NP">🇳🇵 '+esc(t("nepal"))+'</option><option value="IN">🇮🇳 '+esc(t("india"))+'</option></select>'
+    +'<select id="bl-cat" style="flex:1"><option value="">'+esc(t("status_all"))+'</option>'+["electricity","water","internet","school","hospital","other"].map(function(c){ return '<option value="'+c+'">'+esc(c)+'</option>'; }).join("")+'</select></div>'
+    +'<div id="bl-body">'+skeleton(2)+'</div>');
+  $("#bl-country").onchange=load; $("#bl-cat").onchange=load;
+  load();
+  async function load(){
+    var body=$("#bl-body"); if(!body) return;
+    try{
+      var q=new URLSearchParams();
+      var cc=$("#bl-country").value, cat=$("#bl-cat").value;
+      if(cc) q.set("country", cc);
+      if(cat) q.set("category", cat);
+      var d=await api("/billers"+(q.toString()?"?"+q.toString():""));
+      var list=pickList(d,["billers"]);
+      if(!list.length){ body.innerHTML=emptyState("🏦", t("billers_empty"), ""); return; }
+      body.innerHTML=list.map(function(b){
+        return '<div class="card list-item"><strong>'+esc(b.name||"")+'</strong> <span class="chip">'+esc(b.category||"")+' · '+esc(b.country||"")+'</span>'
+          +(b.refFormat?'<p class="small"><strong>'+esc(t("billers_ref_format"))+':</strong> '+esc(b.refFormat)+'</p>':"")
+          +(b.refHint?'<p class="small"><strong>'+esc(t("billers_ref_hint"))+':</strong> '+esc(b.refHint)+'</p>':"")+'</div>';
+      }).join("");
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
+  }
+}
+
+/* ---------- phase 2 s3: admin dispute centre / billers / currency ---------- */
+function renderAdminDisputes(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("dispute_centre"))+'</h1>'+adminNav("disputes")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  var status="open";
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/disputes?status="+status);
+      var list=pickList(d,["disputes"]);
+      body.innerHTML='<div class="seg" style="margin-bottom:10px"><button type="button" data-s="open" class="'+(status==="open"?"on":"")+'">'+esc(t("dispute_open"))+'</button><button type="button" data-s="resolved" class="'+(status==="resolved"?"on":"")+'">'+esc(t("dispute_resolved"))+'</button></div>'
+        +(list.length? list.map(function(x){
+          var stale=x.disputedAt&&Date.now()-new Date(x.disputedAt).getTime()>48*3600000&&(!x.lastAdminMessageAt||new Date(x.lastAdminMessageAt).getTime()<new Date(x.disputedAt).getTime());
+          return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(x.billTitle||"")+'</strong>'+(stale?'<span class="chip">⚠️ 48h+</span>':"")+'</div>'
+            +'<p class="small">'+esc(money(x.amountMinor||0,x.currency||"NPR"))+' · '+esc(x.supporterName||"")+' · '+esc(x.status||"")+(x.feeReviewStatus&&x.feeReviewStatus!=="none"?" · "+esc(t("fee_review_btn"))+": "+esc(x.feeReviewStatus):"")+'</p>'
+            +(x.disputeNote?'<p>'+esc(x.disputeNote)+'</p>':"")
+            +'<p class="small">'+esc(x.messageCount||0)+' '+esc(t("gift_messages"))+(x.lastAdminMessage?" · "+esc(t("sender_admin"))+": “"+esc(x.lastAdminMessage.slice(0,80))+"”":"")+'</p>'
+            +'<div class="btn-row"><button class="btn secondary small" data-disp="'+esc(x.giftId)+'">'+esc(t("view_bill"))+'</button></div></div>';
+        }).join("") : '<p>'+esc(t("dispute_none"))+'</p>');
+      $all("[data-s]", body).forEach(function(b){ b.onclick=function(){ status=b.getAttribute("data-s"); load(); }; });
+      $all("[data-disp]", body).forEach(function(b){ b.onclick=function(){ openDisputeDetail(b.getAttribute("data-disp")); }; });
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+  function openDisputeDetail(giftId){
+    openSheet('<h2>'+esc(t("dispute_centre"))+'</h2><div id="dd-body">'+skeleton(1)+'</div>');
+    api("/admin/disputes/"+encodeURIComponent(giftId)).then(function(d){
+      var body=$("#dd-body"); if(!body) return;
+      var g=d.gift||{}, b=d.bill||{};
+      var cur=g.currency||"NPR";
+      var msgs=pickList(d,["messages"]);
+      body.innerHTML='<p><strong>'+esc(b.title||"")+'</strong> ('+esc(b.requestCode||"")+')</p>'
+        +'<div class="kv"><span>'+esc(t("your_help"))+'</span><b>'+esc(money(g.amountMinor||0,cur))+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("dispute_parties"))+'</span><b>'+esc((d.supporter&&d.supporter.displayName)||"")+' ↔ '+esc((d.poster&&d.poster.displayName)||"")+'</b></div>'
+        +(g.feeReviewStatus&&g.feeReviewStatus!=="none"?'<div class="kv"><span>'+esc(t("fee_review_title"))+'</span><b>'+esc(g.feeReviewStatus)+(g.feeReviewCase?" ("+esc(g.feeReviewCase)+")":"")+'</b></div>':"")
+        +(g.disputeNote?'<p>'+esc(g.disputeNote)+'</p>':"")
+        +'<h3>'+esc(t("gift_messages"))+'</h3>'
+        +(msgs.length? msgs.map(function(m){
+          var role=m.senderType==="admin"?"sender_admin":m.senderType==="poster"?"sender_poster":"sender_helper";
+          return '<div style="margin-bottom:8px"><p class="small"><strong>'+esc(t(role))+'</strong> · '+esc(timeAgo(m.createdAt))+'</p><p>'+esc(m.body||"")+'</p></div>';
+        }).join("") : '<p class="small">'+esc(t("gift_thread_empty"))+'</p>')
+        +'<label for="dd-msg">'+esc(t("dispute_message_both"))+'</label><textarea id="dd-msg" maxlength="600"></textarea>'
+        +'<div class="btn-row"><button class="btn secondary" id="dd-send">'+esc(t("gift_thread_send"))+'</button></div>'
+        +'<div class="btn-row"><button class="btn secondary" id="dd-ack">'+esc(t("dispute_ack"))+'</button><button class="btn" id="dd-resolve">'+esc(t("dispute_resolve"))+'</button></div>';
+      $("#dd-send").onclick=async function(){
+        var text=$("#dd-msg").value.trim(); if(!text) return;
+        var btn=$("#dd-send"); btn.disabled=true;
+        try{ await api("/admin/disputes/"+encodeURIComponent(giftId)+"/message", {method:"POST", body:{body:text}}); closeSheets(); toast(t("gift_thread_send")); load(); }
+        catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+      };
+      $("#dd-ack").onclick=async function(){
+        var btn=$("#dd-ack"); btn.disabled=true;
+        try{ await api("/admin/disputes/"+encodeURIComponent(giftId)+"/acknowledge", {method:"POST"}); closeSheets(); toast(t("dispute_ack")); load(); }
+        catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+      };
+      $("#dd-resolve").onclick=function(){
+        confirmDialog(t("dispute_resolve"), t("dispute_resolve"), t("dispute_resolve"), async function(){
+          try{ await api("/admin/disputes/"+encodeURIComponent(giftId)+"/resolve", {method:"POST", body:{}}); closeSheets(); toast(t("dispute_resolve")); load(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        });
+      };
+    }).catch(function(e){ var body=$("#dd-body"); if(body) body.innerHTML=errBox(e.message); });
+  }
+}
+function renderAdminBillers(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_billers"))+'</h1>'+adminNav("billers")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/billers");
+      var list=pickList(d,["billers"]);
+      body.innerHTML='<div class="card"><h2>'+esc(t("biller_add"))+'</h2>'
+        +'<label for="bl-name">'+esc(t("biller_name"))+'</label><input id="bl-name" maxlength="120">'
+        +'<label for="bl-cat2">'+esc(t("biller_category"))+'</label><select id="bl-cat2">'+["electricity","water","internet","school","hospital","other"].map(function(c){ return '<option value="'+c+'">'+esc(c)+'</option>'; }).join("")+'</select>'
+        +'<label for="bl-cc">'+esc(t("country"))+'</label><select id="bl-cc"><option value="NP">NP</option><option value="IN">IN</option></select>'
+        +'<label for="bl-fmt">'+esc(t("billers_ref_format"))+'</label><input id="bl-fmt" maxlength="120">'
+        +'<label for="bl-hint">'+esc(t("billers_ref_hint"))+'</label><input id="bl-hint" maxlength="300">'
+        +'<button class="btn" id="bl-add" style="margin-top:8px">'+esc(t("biller_add"))+'</button></div>'
+        +(list.length? list.map(function(b){
+          return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(b.name||"")+'</strong><span class="chip">'+esc(b.active?"active":"inactive")+'</span></div>'
+            +'<p class="small">'+esc(b.category||"")+' · '+esc(b.country||"")+(b.refFormat?" · "+esc(b.refFormat):"")+'</p>'
+            +(b.refHint?'<p class="small">'+esc(b.refHint)+'</p>':"")
+            +'<div class="btn-row"><button class="btn secondary small" data-bl-edit="'+esc(b.id)+'">'+esc(t("edit"))+'</button>'
+            +(b.active?'<button class="btn secondary small" data-bl-del="'+esc(b.id)+'">'+esc(t("remove"))+'</button>'
+              :'<button class="btn secondary small" data-bl-restore="'+esc(b.id)+'">'+esc(t("restore"))+'</button>')+'</div></div>';
+        }).join("") : '<p class="small">'+esc(t("billers_empty"))+'</p>');
+      $("#bl-add").onclick=async function(){
+        var btn=$("#bl-add"); btn.disabled=true; btn.textContent=t("loading");
+        try{
+          await api("/admin/billers", {method:"POST", body:{name:$("#bl-name").value.trim(), category:$("#bl-cat2").value, country:$("#bl-cc").value, refFormat:$("#bl-fmt").value.trim()||undefined, refHint:$("#bl-hint").value.trim()||undefined}});
+          toast(t("biller_saved")); load();
+        }catch(e){ btn.disabled=false; btn.textContent=t("biller_add"); toast(e.message||t("err_generic"), true); }
+      };
+      $all("[data-bl-edit]", body).forEach(function(btn){
+        btn.onclick=function(){
+          var b=list.find(function(x){ return String(x.id)===String(btn.getAttribute("data-bl-edit")); });
+          if(!b) return;
+          openSheet('<h2>'+esc(t("edit"))+'</h2>'
+            +'<label for="be-name">'+esc(t("biller_name"))+'</label><input id="be-name" maxlength="120" value="'+esc(b.name||"")+'">'
+            +'<label for="be-fmt">'+esc(t("billers_ref_format"))+'</label><input id="be-fmt" maxlength="120" value="'+esc(b.refFormat||"")+'">'
+            +'<label for="be-hint">'+esc(t("billers_ref_hint"))+'</label><input id="be-hint" maxlength="300" value="'+esc(b.refHint||"")+'">'
+            +'<div class="btn-row"><button class="btn secondary" id="be-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="be-save">'+esc(t("save"))+'</button></div>');
+          $("#be-cancel").onclick=closeSheets;
+          $("#be-save").onclick=async function(){
+            var sb=$("#be-save"); sb.disabled=true;
+            try{ await api("/admin/billers/"+encodeURIComponent(b.id), {method:"PUT", body:{name:$("#be-name").value.trim(), refFormat:$("#be-fmt").value.trim(), refHint:$("#be-hint").value.trim()}}); closeSheets(); toast(t("biller_saved")); load(); }
+            catch(e){ sb.disabled=false; toast(e.message||t("err_generic"), true); }
+          };
+        };
+      });
+      $all("[data-bl-del]", body).forEach(function(btn){
+        btn.onclick=function(){
+          confirmDialog(t("remove"), t("remove"), t("remove"), async function(){
+            try{ await api("/admin/billers/"+encodeURIComponent(btn.getAttribute("data-bl-del")), {method:"DELETE"}); toast(t("biller_saved")); load(); }
+            catch(e){ toast(e.message||t("err_generic"), true); }
+          }, true);
+        };
+      });
+      $all("[data-bl-restore]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          try{ await api("/admin/billers/"+encodeURIComponent(btn.getAttribute("data-bl-restore")), {method:"PUT", body:{active:true}}); toast(t("biller_saved")); load(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+function renderAdminCurrency(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("currency_settings"))+'</h1>'+adminNav("currency")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/fees");
+      var chips=d.giftChips||{NPR:[10000,25000,50000,100000],INR:[10000,25000,50000,100000]};
+      body.innerHTML='<div class="card"><h2>'+esc(t("currency_settings"))+'</h2>'
+        +'<label for="cu-min-npr">'+esc(t("min_gift_npr"))+'</label><input id="cu-min-npr" type="number" min="1" step="1" value="'+esc(fromMinor(d.minGiftMinorNPR||1000))+'">'
+        +'<label for="cu-min-inr">'+esc(t("min_gift_inr"))+'</label><input id="cu-min-inr" type="number" min="1" step="1" value="'+esc(fromMinor(d.minGiftMinorINR||1000))+'">'
+        +'<label for="cu-chips-npr">'+esc(t("gift_chips_npr"))+'</label><input id="cu-chips-npr" value="'+esc((chips.NPR||[]).map(function(c){ return c/100; }).join(","))+'" placeholder="100,250,500,1000">'
+        +'<label for="cu-chips-inr">'+esc(t("gift_chips_inr"))+'</label><input id="cu-chips-inr" value="'+esc((chips.INR||[]).map(function(c){ return c/100; }).join(","))+'" placeholder="100,250,500,1000">'
+        +'<p class="small">'+esc(t("fee_rule_label"))+': <a href="#/admin/fees">'+esc(t("fees"))+'</a></p>'
+        +'<button class="btn" id="cu-save" style="margin-top:8px">'+esc(t("save_config"))+'</button></div>';
+      $("#cu-save").onclick=async function(){
+        var btn=$("#cu-save"); btn.disabled=true; btn.textContent=t("loading");
+        try{
+          var parseChips=function(v){ return v.split(",").map(function(x){ return Math.round(parseFloat(x.trim())*100); }).filter(function(x){ return !isNaN(x)&&x>0; }); };
+          await api("/admin/fees", {method:"PUT", body:{
+            minGiftMinorNPR: toMinor($("#cu-min-npr").value),
+            minGiftMinorINR: toMinor($("#cu-min-inr").value),
+            giftChips: {NPR: parseChips($("#cu-chips-npr").value), INR: parseChips($("#cu-chips-inr").value)}
+          }});
+          toast(t("config_saved")); load();
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ btn.disabled=false; btn.textContent=t("save_config"); }
+      };
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
 
 async function boot(){
   if(S.booted) return; S.booted=true;
