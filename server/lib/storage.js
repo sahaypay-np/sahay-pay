@@ -13,12 +13,19 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const multer = require('multer');
 
 const ROOT = path.join(__dirname, '..', '..');
-const PUBLIC_DIR = path.join(ROOT, 'uploads', 'public');
-const PRIVATE_DIR = path.join(ROOT, 'uploads', 'private');
+// Vercel serverless: the project filesystem is read-only at runtime; only
+// /tmp is writable. Uploads there are ephemeral (lost between invocations)
+// until object storage lands — same caveat as redeploys on other hosts.
+const UPLOAD_BASE = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'sahay-pay-uploads')
+  : path.join(ROOT, 'uploads');
+const PUBLIC_DIR = path.join(UPLOAD_BASE, 'public');
+const PRIVATE_DIR = path.join(UPLOAD_BASE, 'private');
 fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 fs.mkdirSync(PRIVATE_DIR, { recursive: true });
 

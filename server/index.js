@@ -12,7 +12,7 @@ const express = require('express');
 
 const db = require('./db');
 const { attachUser } = require('./lib/auth');
-const { payoutKeySource } = require('./lib/storage');
+const { payoutKeySource, PUBLIC_DIR } = require('./lib/storage');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = Number(process.env.PORT) || 3000;
@@ -67,7 +67,8 @@ app.get('/api/health', (req, res) => {
 });
 
 // Public uploaded images (redacted bill photos, avatars, support photos).
-app.use('/uploads/public', express.static(path.join(ROOT, 'uploads', 'public'), { maxAge: '7d' }));
+// Served from the same resolved dir multer writes to (/tmp on Vercel).
+app.use('/uploads/public', express.static(PUBLIC_DIR, { maxAge: '7d' }));
 
 // Frontend SPA (built by the frontend agent; served as-is here).
 app.use(express.static(path.join(ROOT, 'public')));
