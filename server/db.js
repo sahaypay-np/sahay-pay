@@ -186,6 +186,17 @@ const EXTRA_COLUMNS = [
   ['sessions', 'user_agent', 'TEXT'],
   ['admin_sessions', 'csrf_token', 'TEXT'],
   ['admin_sessions', 'last_seen_at', 'TEXT'],
+  // Phase 2 (sections 9–10): session hardening, payout consent/edit,
+  // gift payment method, complaint category, admin elevation, device fp.
+  ['sessions', 'ua_family_hash', 'TEXT'],
+  ['sessions', 'trusted_note', 'TEXT'],
+  ['sessions', 'reauthed_at', 'TEXT'],
+  ['users', 'device_fp', 'TEXT'],
+  ['bills', 'payout_edited_at', 'TEXT'],
+  ['bills', 'payout_consent_at', 'TEXT'],
+  ['gifts', 'payment_method', "TEXT DEFAULT ''"],
+  ['complaints', 'category', "TEXT DEFAULT 'general'"],
+  ['admin_sessions', 'elevated_until', 'TEXT'],
 ];
 
 // Cold-start mitigation (checklist priority fix (g)): the full migrate is

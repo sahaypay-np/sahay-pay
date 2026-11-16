@@ -10,12 +10,13 @@ const crypto = require('crypto');
 const db = require('../db');
 const { nowIso, logAudit } = require('../lib/audit');
 const {
-  createSession, destroySession, destroyAllUserSessions,
-  listUserSessions, destroyUserSessionById,
-  requireAuth, sessionCookieOptions, SESSION_DAYS, rateLimit,
+  createSession, destroySession, destroyAllUserSessions, destroyOtherUserSessions,
+  listUserSessions, destroyUserSessionById, rotateSession, hashToken,
+  requireAuth, sessionCookieOptions, SESSION_DAYS, rateLimit, checkRateLimit,
   generateRecoveryCode, hashSecret, recoveryLookupKey, findUserByRecoveryCode,
   getOrCreateCsrfToken,
 } = require('../lib/auth');
+const { deviceFingerprint } = require('../lib/device');
 const { TERMS_VERSION, PRIVACY_VERSION, consentIsCurrent } = require('../lib/policy');
 const { validateOnboarding, cleanStr } = require('../lib/validate');
 
@@ -69,6 +70,8 @@ function publicUser(u) {
     consentCurrent: consentIsCurrent(u),
     termsAcceptedVersion: u.terms_accepted_version || null,
     privacyAcceptedVersion: u.privacy_accepted_version || null,
+    termsAcceptedAt: u.terms_accepted_at || null,
+    privacyAcceptedAt: u.privacy_accepted_at || null,
   };
 }
 
@@ -94,6 +97,18 @@ router.post('/onboard', rateLimit('onboard', 10, 60 * 60 * 1000), async (req, re
     const username = await generateUsername(displayName);
     const id = crypto.randomUUID();
     const now = nowIso();
+    // Item 855: per-device account cap — one device (coarse user-agent
+    // fingerprint; no IP is stored) may create at most 5 accounts a day.
+    const fp = deviceFingerprint(req.headers['user-agent']);
+    const recentSameDevice = await db.get(
+      `SELECT COUNT(*) AS c FROM users WHERE device_fp = $1 AND created_at >= $2`,
+      [fp, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()]
+    );
+    if (Number(recentSameDevice?.c || 0) >= 5) {
+      return res.status(429).json({
+        error: { code: 'DEVICE_LIMIT', message: 'Too many accounts were created from this device today. Please try again tomorrow.' },
+      });
+    }
     // Optional onboarding photo: only an uploaded image is accepted.
     const photoUrl = typeof req.body.photoUrl === 'string' && req.body.photoUrl.startsWith('/uploads/public/')
       ? cleanStr(req.body.photoUrl, 500)
@@ -106,14 +121,15 @@ router.post('/onboard', rateLimit('onboard', 10, 60 * 60 * 1000), async (req, re
       `INSERT INTO users (id, display_name, username, age, country, city, about, language, photo_url,
         recovery_code_hash, recovery_code_lookup,
         terms_accepted_version, terms_accepted_at, privacy_accepted_version, privacy_accepted_at,
-        suspended, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, $16)`,
+        device_fp, suspended, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 0, $17)`,
       [
         id, displayName, username, age, req.body.country, cleanStr(req.body.city, 120),
         cleanStr(req.body.about || '', 500), req.body.language || 'en', photoUrl,
         hashSecret(recoveryCode.replace(/-/g, '')),
         recoveryLookupKey(recoveryCode),
         TERMS_VERSION, now, PRIVACY_VERSION, now,
+        fp,
         now,
       ]
     );
@@ -121,6 +137,8 @@ router.post('/onboard', rateLimit('onboard', 10, 60 * 60 * 1000), async (req, re
     const session = await createSession(id, req.headers['user-agent']);
     res.cookie('sp_session', session.token, sessionCookieOptions(SESSION_DAYS * 24 * 60 * 60 * 1000, req));
     await logAudit('user', id, 'user_onboarded', 'user', id, { country: req.body.country });
+    // Item 923: the 18+ age-gate pass is an audit-logged event (timestamped).
+    await logAudit('user', id, 'age_gate_passed', 'user', id, { age });
     res.status(201).json({
       user: publicUser(user),
       sessionExpiresAt: session.expiresAt,
@@ -237,6 +255,8 @@ router.delete('/sessions/:id', requireAuth, async (req, res, next) => {
 // POST /api/auth/logout — end this device's session.
 router.post('/logout', async (req, res, next) => {
   try {
+    // Item 814: plain logout is audit-logged (login events already were).
+    if (req.user) await logAudit('user', req.user.id, 'user_logout', 'user', req.user.id, {});
     await destroySession(req.cookies?.sp_session);
     res.clearCookie('sp_session', { path: '/' });
     res.json({ ok: true });
@@ -246,12 +266,152 @@ router.post('/logout', async (req, res, next) => {
 });
 
 // POST /api/auth/logout-all — revoke every session for this profile.
+// Item 813: rate-limited per account (3/hour) so a stolen token cannot
+// lock the owner out repeatedly.
 router.post('/logout-all', requireAuth, async (req, res, next) => {
   try {
+    const result = await checkRateLimit(`logout-all:user:${req.user.id}`, 3, 60 * 60 * 1000);
+    if (!result.allowed) {
+      res.set('Retry-After', String(result.retryAfterSec));
+      return res.status(429).json({
+        error: { code: 'RATE_LIMITED', message: 'You logged out of all devices too often — please wait a little and try again.' },
+      });
+    }
     await destroyAllUserSessions(req.user.id);
     res.clearCookie('sp_session', { path: '/' });
     await logAudit('user', req.user.id, 'user_logout_all', 'user', req.user.id, {});
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/logout-others — item 821: revoke every session EXCEPT
+// this one (the "someone else is in my account" button).
+router.post('/logout-others', requireAuth, async (req, res, next) => {
+  try {
+    const revoked = await destroyOtherUserSessions(req.user.id, req.cookies?.sp_session);
+    await logAudit('user', req.user.id, 'user_logout_others', 'user', req.user.id, { revoked });
+    res.json({ ok: true, revoked });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/auth/sessions/:id/note — item 816: a "trusted device" note the
+// owner can set per session ("My phone", "Shared tablet — do not trust").
+router.patch('/sessions/:id/note', requireAuth, async (req, res, next) => {
+  try {
+    const note = cleanStr(req.body?.note || '', 60);
+    const idPrefix = String(req.params.id || '');
+    if (!/^[0-9a-f]{12}$/.test(idPrefix)) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Session not found.' } });
+    }
+    const result = await db.run(
+      'UPDATE sessions SET trusted_note = $1 WHERE user_id = $2 AND token_hash LIKE $3',
+      [note || null, req.user.id, `${idPrefix}%`]
+    );
+    if ((result.changes || 0) === 0) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Session not found.' } });
+    }
+    res.json({ ok: true, note: note || null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/recovery-code/regenerate — item 823: issue a fresh
+// recovery code (shown once, like onboarding) and invalidate the old one.
+// The session token is rotated too (item 802).
+router.post('/recovery-code/regenerate', requireAuth, async (req, res, next) => {
+  try {
+    const recoveryCode = generateRecoveryCode();
+    await db.run(
+      'UPDATE users SET recovery_code_hash = $1, recovery_code_lookup = $2 WHERE id = $3',
+      [hashSecret(recoveryCode.replace(/-/g, '')), recoveryLookupKey(recoveryCode), req.user.id]
+    );
+    await rotateSession(req, res);
+    await logAudit('user', req.user.id, 'recovery_code_regenerated', 'user', req.user.id, {});
+    res.json({ recoveryCode });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/confirm-identity {code} — item 839 support: re-prove who
+// you are with your recovery code. Marks this session freshly authenticated
+// for 15 minutes, which sensitive edits (payout details) require.
+router.post('/confirm-identity', requireAuth, async (req, res, next) => {
+  try {
+    const user = await findUserByRecoveryCode(req.body?.code);
+    if (!user || user.id !== req.user.id) {
+      return res.status(401).json({
+        error: { code: 'INVALID_CODE', message: 'That recovery code was not recognised. Check it and try again.' },
+      });
+    }
+    await db.run(
+      'UPDATE sessions SET reauthed_at = $1 WHERE token_hash = $2',
+      [nowIso(), hashToken(req.cookies?.sp_session || '')]
+    );
+    await logAudit('user', req.user.id, 'identity_reconfirmed', 'user', req.user.id, {});
+    res.json({ ok: true, freshUntilMinutes: 15 });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/auth/security-activity — item 825: the user's own security
+// timeline (logins, payout reveals, PIN-adjacent events) from the audit log.
+router.get('/security-activity', requireAuth, async (req, res, next) => {
+  try {
+    const ACTIONS = [
+      'user_onboarded', 'user_recovered', 'user_logout', 'user_logout_all',
+      'user_logout_others', 'session_revoked', 'session_fingerprint_changed',
+      'payout_revealed', 'payout_reveal_blocked', 'payout_reveal_anomaly',
+      'recovery_code_regenerated', 'identity_reconfirmed', 'consent_accepted',
+      'bill_payout_changed', 'profile_updated', 'age_gate_passed',
+    ];
+    const ph = ACTIONS.map((_, i) => `$${i + 2}`).join(',');
+    const { rows } = await db.query(
+      `SELECT action, target_type, target_id, meta_json, created_at FROM audit_logs
+       WHERE actor_type = 'user' AND actor_id = $1 AND action IN (${ph})
+       ORDER BY created_at DESC LIMIT 50`,
+      [req.user.id, ...ACTIONS]
+    );
+    res.json({
+      events: rows.map((r) => ({
+        action: r.action,
+        targetType: r.target_type,
+        targetId: r.target_id,
+        createdAt: r.created_at,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/delete-by-recovery {code, confirm:"DELETE"} — item 916:
+// "delete my data" for users who lost access (logged out, no session).
+// Verified by the recovery code; same full deletion as /profile/delete.
+router.post('/delete-by-recovery', rateLimit('delete-by-recovery', 5, 60 * 60 * 1000), async (req, res, next) => {
+  try {
+    if (req.body?.confirm !== 'DELETE') {
+      return res.status(400).json({
+        error: { code: 'VALIDATION', message: 'Type DELETE to confirm permanent deletion.' },
+      });
+    }
+    const user = await findUserByRecoveryCode(req.body?.code);
+    if (!user) {
+      return res.status(401).json({
+        error: { code: 'INVALID_CODE', message: 'That recovery code was not recognised. Check it and try again.' },
+      });
+    }
+    const userId = user.id;
+    await destroyAllUserSessions(userId);
+    await db.run('DELETE FROM users WHERE id = $1', [userId]);
+    await logAudit('user', userId, 'user_deleted', 'user', userId, { via: 'recovery_code' });
+    res.json({ ok: true, message: 'Your account and its data have been deleted.' });
   } catch (err) {
     next(err);
   }

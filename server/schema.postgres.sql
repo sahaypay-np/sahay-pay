@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
   terms_accepted_at TEXT,
   privacy_accepted_version TEXT,
   privacy_accepted_at TEXT,
+  device_fp TEXT,
   suspended INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
@@ -38,7 +39,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL,
   csrf_token TEXT,
-  user_agent TEXT
+  user_agent TEXT,
+  ua_family_hash TEXT,
+  trusted_note TEXT,
+  reauthed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 -- NOTE: idx_users_recovery (users.recovery_code_lookup) is NOT created here:
@@ -78,6 +82,8 @@ CREATE TABLE IF NOT EXISTS bills (
   approved_at TEXT,
   approved_by TEXT,
   completed_at TEXT,
+  payout_edited_at TEXT,
+  payout_consent_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -107,6 +113,7 @@ CREATE TABLE IF NOT EXISTS gifts (
   status TEXT NOT NULL DEFAULT 'initiated',
   reference TEXT DEFAULT '',
   dispute_note TEXT DEFAULT '',
+  payment_method TEXT DEFAULT '',
   created_at TEXT NOT NULL,
   confirmed_at TEXT
 );
@@ -208,6 +215,7 @@ CREATE TABLE IF NOT EXISTS complaints (
   subject TEXT NOT NULL,
   body TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'open',
+  category TEXT DEFAULT 'general',
   created_at TEXT NOT NULL
 );
 
@@ -228,7 +236,8 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   csrf_token TEXT,
-  last_seen_at TEXT
+  last_seen_at TEXT,
+  elevated_until TEXT
 );
 
 -- DB-backed rate-limit buckets (survive serverless cold starts).
@@ -248,3 +257,14 @@ CREATE TABLE IF NOT EXISTS review_packets (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_packets_status ON review_packets(status, created_at);
+
+-- Upload ledger (Phase 2 item 870): per-account storage quota.
+CREATE TABLE IF NOT EXISTS uploads (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  kind TEXT NOT NULL DEFAULT 'public_bill',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id, created_at);
