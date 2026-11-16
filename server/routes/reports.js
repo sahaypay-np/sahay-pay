@@ -85,6 +85,12 @@ router.post('/reports', requireActive, rateLimit('report', 20, 60 * 60 * 1000), 
 
 router.post('/complaints', requireActive, rateLimit('complaint', 10, 60 * 60 * 1000), async (req, res, next) => {
   try {
+    // Honeypot (item 788): the form carries a hidden "website" field no
+    // human ever sees; bots fill it. Reject those submissions outright.
+    // (The value is never logged or stored.)
+    if (typeof req.body?.website === 'string' && req.body.website.trim() !== '') {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Submission rejected.' } });
+    }
     const subject = cleanStr(req.body?.subject, 200);
     const body = cleanStr(req.body?.body, 2000);
     if (subject.length < 3) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please give your complaint a subject.' } });

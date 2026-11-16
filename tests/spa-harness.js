@@ -75,6 +75,7 @@ async function main() {
   check('welcome slides render', await waitFor(() => !!$('#w-next'), 5000, 'welcome'));
 
   // 2. Welcome -> country -> onboarding.
+  check('welcome offers recovery-code sign-in', !!$('#w-recover'));
   $('#w-skip').click();
   check('country screen renders', await waitFor(() => !!$('.country-card'), 3000, 'country'));
   doc.querySelector('.country-card[data-c="NP"]').click();
@@ -82,16 +83,22 @@ async function main() {
   $('#c-next').click();
   check('onboarding form renders', await waitFor(() => !!$('#ob-form'), 3000, 'onboarding'));
 
-  // 3. Fill + submit onboarding (age 25, NP).
+  // 3. Fill + submit onboarding (age 25, NP). Consent is two separate
+  // checkboxes now (Terms; Privacy Policy) plus the 18+ checkbox.
+  check('onboarding has split consent checkboxes', !!$('#ob-c2') && !!$('#ob-c3'));
   $('#ob-name').value = 'Harness User';
   $('#ob-age').value = '25';
   $('#ob-city').value = 'Bhairahawa';
   $('#ob-about').value = 'Testing the app end to end.';
   $('#ob-c1').checked = true;
   $('#ob-c2').checked = true;
+  $('#ob-c3').checked = true;
   $('#ob-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
   const inOk = await waitFor(() => !!$('#in-go') || text().includes('Start swiping') || text().includes('swiping'), 8000, 'youre-in');
   check('onboarding submits and lands on success screen', inOk, text().slice(0, 200));
+  // Recovery code is shown ONCE on the success screen.
+  const rcEl = $('#rc-code');
+  check('recovery code shown once on success screen', !!rcEl && /^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(rcEl.textContent.trim()), rcEl ? rcEl.textContent.trim() : 'no #rc-code');
   if ($('#in-go')) $('#in-go').click();
 
   // 4. Swipe: honest empty state (no approved bills on a fresh DB).
@@ -110,6 +117,8 @@ async function main() {
   check('privacy page renders full text', await waitFor(() => text().includes('Your rights') && text().includes('Individual Privacy Act 2075'), 5000, 'privacy'));
   window.location.hash = '#/settings';
   check('settings renders with prefs', await waitFor(() => !!$('#st-save-prefs') && !!$('#st-save-priv'), 5000, 'settings'));
+  check('settings has download-my-data button', !!$('#st-export'));
+  check('settings lists sessions', await waitFor(() => !!$('#st-sessions') && text().includes('This device'), 5000, 'sessions list'));
   window.location.hash = '#/mybills';
   check('my bills renders', await waitFor(() => text().includes('My Bills'), 5000, 'mybills'));
   window.location.hash = '#/post';

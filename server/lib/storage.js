@@ -120,6 +120,71 @@ const upload = multer({
   },
 });
 
+// ---- Magic-byte sniffing (checklist item 135) ----
+// The multer fileFilter only sees the client-claimed MIME type, which is
+// trivially faked. After the file lands on disk, sniff its real signature
+// and require it to match the declared MIME type.
+// Returns 'jpeg' | 'png' | 'webp' | 'pdf' | null.
+function sniffFileType(filePath) {
+  let head;
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    head = Buffer.alloc(12);
+    const n = fs.readSync(fd, head, 0, 12, 0);
+    fs.closeSync(fd);
+    head = head.subarray(0, n);
+  } catch {
+    return null;
+  }
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'jpeg';
+  if (
+    head.length >= 8 &&
+    head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47 &&
+    head[4] === 0x0d && head[5] === 0x0a && head[6] === 0x1a && head[7] === 0x0a
+  ) return 'png';
+  if (
+    head.length >= 12 &&
+    head.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    head.subarray(8, 12).toString('latin1') === 'WEBP'
+  ) return 'webp';
+  if (head.length >= 5 && head.subarray(0, 5).toString('latin1') === '%PDF-') return 'pdf';
+  return null;
+}
+
+const MIME_TO_TYPE = {
+  'image/jpeg': 'jpeg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'application/pdf': 'pdf',
+};
+
+// True when the file's real signature matches its declared MIME type.
+function fileMatchesMime(filePath, mime) {
+  const expected = MIME_TO_TYPE[mime];
+  if (!expected) return false;
+  return sniffFileType(filePath) === expected;
+}
+
+function deleteStoredFile(filePath) {
+  try {
+    fs.unlinkSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Delete a private file by its stored reference (/api/uploads/private/<file>).
+// Used when a verification document is deleted after review (checklist
+// item 255). The basename is re-derived so a crafted ref cannot escape
+// PRIVATE_DIR. Returns true if a file was removed.
+function deletePrivateFile(docUrl) {
+  if (typeof docUrl !== 'string' || !docUrl.startsWith('/api/uploads/private/')) return false;
+  const filename = path.basename(docUrl);
+  if (!filename || filename.includes('/') || filename.includes('\\')) return false;
+  return deleteStoredFile(path.join(PRIVATE_DIR, filename));
+}
+
 function isPrivateKind(kind) {
   return PRIVATE_KINDS.has(kind);
 }
@@ -145,6 +210,10 @@ module.exports = {
   privateRefFor,
   encryptAccount,
   decryptAccount,
+  sniffFileType,
+  fileMatchesMime,
+  deleteStoredFile,
+  deletePrivateFile,
   payoutKeySource: PAYOUT_KEY_SOURCE,
   PUBLIC_DIR,
   PRIVATE_DIR,

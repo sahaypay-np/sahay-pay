@@ -103,6 +103,7 @@ function progressHtml(bill){
 /* ---------- state ---------- */
 var S = {
   user:null, config:null, admin:false, booted:false,
+  csrfToken:null, adminCsrf:null,
   country: (function(){ try{ return localStorage.getItem("sp_country")||null; }catch(e){ return null; } })(),
   feed:[], feedCursor:null, feedLoading:false, seen:{}, filters:loadFilters(),
   post:null, gift:null, basket:loadBasket(), blocked:loadBlocked(),
@@ -130,8 +131,18 @@ applyTheme();
 /* ---------- API client ---------- */
 async function api(path, opts){
   opts=opts||{};
+  var method=(opts.method||"GET").toUpperCase();
+  var isWrite=method!=="GET"&&method!=="HEAD"&&method!=="OPTIONS";
+  var isAdminPath=path.indexOf("/admin/")===0;
   var headers={"Content-Type":"application/json"};
-  var init={method:opts.method||"GET", credentials:"include", headers:headers};
+  // CSRF synchronizer token (item 129): the user token for user paths,
+  // the admin token for admin paths. Fetched at boot/login; refreshed
+  // automatically once if the server rejects it.
+  if(isWrite){
+    var tok=isAdminPath?S.adminCsrf:S.csrfToken;
+    if(tok) headers["X-CSRF-Token"]=tok;
+  }
+  var init={method:method, credentials:"include", headers:headers};
   if(opts.body!==undefined) init.body=JSON.stringify(opts.body);
   var res;
   try{ res=await fetch("/api"+path, init); }
@@ -140,16 +151,30 @@ async function api(path, opts){
   var text=await res.text();
   if(text){ try{ data=JSON.parse(text); }catch(e){ data={raw:text}; } }
   if(!res.ok){
-    var msg=(data&&data.error&&data.error.message)||t("err_generic");
     var code=(data&&data.error&&data.error.code)||("HTTP_"+res.status);
+    if(res.status===403 && code==="CSRF_INVALID" && isWrite && !opts._csrfRetried){
+      try{
+        var fresh=await api(isAdminPath?"/admin/csrf":"/auth/csrf", {method:"GET"});
+        if(fresh&&fresh.csrfToken){
+          if(isAdminPath) S.adminCsrf=fresh.csrfToken; else S.csrfToken=fresh.csrfToken;
+          opts._csrfRetried=true;
+          return api(path, opts);
+        }
+      }catch(e){ /* fall through to the original error */ }
+    }
+    var msg=(data&&data.error&&data.error.message)||t("err_generic");
     var err2=new Error(msg); err2.code=code; err2.status=res.status; err2.data=data; throw err2;
   }
   return data;
 }
 async function uploadFile(file, kind){
-  var fd=new FormData(); fd.append("file", file); fd.append("kind", kind||"public_bill");
+  // kind FIRST: multer picks the destination dir from it, and fields sent
+  // after the file part aren't parsed yet when the file stream starts.
+  var fd=new FormData(); fd.append("kind", kind||"public_bill"); fd.append("file", file);
   var res;
-  try{ res=await fetch("/api/uploads", {method:"POST", credentials:"include", body:fd}); }
+  var upHeaders={};
+  if(S.csrfToken) upHeaders["X-CSRF-Token"]=S.csrfToken;
+  try{ res=await fetch("/api/uploads", {method:"POST", credentials:"include", headers:upHeaders, body:fd}); }
   catch(e){ var err=new Error(t("err_network")); err.code="NETWORK"; throw err; }
   var data=null; try{ data=await res.json(); }catch(e){}
   if(!res.ok){ var e2=new Error((data&&data.error&&data.error.message)||t("upload_failed")); e2.code=(data&&data.error&&data.error.code)||"UPLOAD"; e2.status=res.status; throw e2; }
@@ -263,7 +288,7 @@ $("#theme-toggle").addEventListener("click", function(){
 });
 async function doLogout(all){
   try{ await api(all?"/auth/logout-all":"/auth/logout", {method:"POST"}); }catch(e){}
-  S.user=null; toast(t("logged_out")); go("#/welcome");
+  S.user=null; S.csrfToken=null; toast(t("logged_out")); go("#/welcome");
 }
 
 /* ---------- payout validation (mirrors server rules) ---------- */
@@ -318,6 +343,8 @@ var ROUTES = [
   {re:/^#\/welcome$/, fn:renderWelcome, chrome:false},
   {re:/^#\/country$/, fn:renderCountry, chrome:false},
   {re:/^#\/onboarding$/, fn:renderOnboarding, chrome:false},
+  {re:/^#\/recover$/, fn:renderRecover, chrome:false},
+  {re:/^#\/consent$/, fn:renderConsent, chrome:false},
   {re:/^#\/age-block$/, fn:renderAgeBlock, chrome:false},
   {re:/^#\/swipe$/, fn:renderSwipe, chrome:true, tab:"swipe"},
   {re:/^#\/bill\/([^\/\?]+)$/, fn:renderBill, chrome:true},
@@ -357,6 +384,13 @@ function route(){
   closeSheets();
   var h=location.hash||"#/splash";
   var path=h.split("?")[0];
+  // Consent re-acceptance (item 492): a signed-in user on an old Terms /
+  // Privacy version must re-accept before using the app (they may still
+  // read the Help Centre to see what changed).
+  if(S.user && S.user.consentCurrent===false && path!=="#/consent" && path!=="#/help" && path!=="#/splash"){
+    go("#/consent");
+    return;
+  }
   for(var i=0;i<ROUTES.length;i++){
     var m=path.match(ROUTES[i].re);
     if(m){
@@ -396,6 +430,7 @@ function renderWelcome(){
       +'<div style="width:100%;max-width:360px;display:grid;gap:10px;margin-top:14px">'
       +'<button class="btn" id="w-next">'+esc(idx<2?t("next"):t("get_started"))+'</button>'
       +'<button class="btn ghost" id="w-skip">'+esc(t("skip"))+'</button></div>'
+      +'<p class="small" style="margin-top:12px"><a href="#/recover" id="w-recover">'+esc(t("returning_user"))+'</a></p>'
       +'<p class="small">'+esc(t("welcome_slide_hint"))+'</p></div>');
     $("#w-next").onclick=function(){ if(idx<2){ idx++; draw(); } else finish(); };
     $("#w-skip").onclick=finish;
@@ -409,6 +444,7 @@ function renderCountry(){
     +'<button type="button" class="card country-card'+(sel==="NP"?" on":"")+'" data-c="NP"><span class="flag">🇳🇵</span><span><strong>'+esc(t("nepal"))+' — नेपाल</strong><br><span class="small">'+esc(t("country_np_desc"))+'</span></span></button>'
     +'<button type="button" class="card country-card'+(sel==="IN"?" on":"")+'" data-c="IN"><span class="flag">🇮🇳</span><span><strong>'+esc(t("india"))+' — भारत</strong><br><span class="small">'+esc(t("country_in_desc"))+'</span></span></button>'
     +'<button class="btn" id="c-next" '+(sel?"":"disabled")+'>'+esc(t("continue_btn"))+'</button>'
+    +'<p class="small" style="text-align:center;margin-top:12px"><a href="#/recover">'+esc(t("returning_user"))+'</a></p>'
     +'<p class="small" style="text-align:center;margin-top:12px"><a href="#/help">'+esc(t("help_centre"))+'</a> · <a href="#/admin">'+esc(t("admin"))+'</a></p></div>');
   $all(".country-card").forEach(function(b){
     b.onclick=function(){
@@ -434,7 +470,8 @@ function renderOnboarding(){
     +'<label>'+esc(t("q_lang"))+'</label><div class="seg" id="ob-lang"><button type="button" data-l="en" class="'+(lang==="en"?"on":"")+'">English</button><button type="button" data-l="ne" class="'+(lang==="ne"?"on":"")+'">नेपाली</button><button type="button" data-l="hi" class="'+(lang==="hi"?"on":"")+'">हिन्दी</button></div>'
     +'<label>'+esc(t("q_photo"))+'</label><input id="ob-photo" type="file" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("photo_skip"))+'</p>'
     +'<label class="check-row"><input type="checkbox" id="ob-c1"><span>'+esc(t("consent_age"))+'</span></label>'
-    +'<label class="check-row"><input type="checkbox" id="ob-c2"><span>'+esc(t("consent_terms"))+' — <a href="#/help?topic=terms">'+esc(t("terms"))+'</a> · <a href="#/help?topic=privacy">'+esc(t("privacy"))+'</a></span></label>'
+    +'<label class="check-row"><input type="checkbox" id="ob-c2"><span>'+esc(t("consent_terms_only"))+' <a href="#/help?topic=terms">'+esc(t("terms"))+'</a></span></label>'
+    +'<label class="check-row"><input type="checkbox" id="ob-c3"><span>'+esc(t("consent_privacy_only"))+' <a href="#/help?topic=privacy">'+esc(t("privacy"))+'</a></span></label>'
     +'<div class="field-err" id="e-consent"></div>'
     +'<button class="btn" type="submit" id="ob-submit">'+esc(t("create_profile"))+'</button>'
     +'<p class="small" style="text-align:center;margin-top:10px">'+esc(t("username_generated"))+'</p>'
@@ -451,7 +488,7 @@ function renderOnboarding(){
     if(name.length<2||name.length>60){ $("#e-name").textContent=t("name_short"); ok=false; }
     if(isNaN(age)||age<1||age>120){ $("#e-age").textContent=t("age_invalid"); ok=false; }
     if(!city){ $("#e-city").textContent=t("city_required"); ok=false; }
-    if(!$("#ob-c1").checked||!$("#ob-c2").checked){ $("#e-consent").textContent=t("consent_required"); ok=false; }
+    if(!$("#ob-c1").checked||!$("#ob-c2").checked||!$("#ob-c3").checked){ $("#e-consent").textContent=t("consent_both_required"); ok=false; }
     if(!ok) return;
     if(age<18){ go("#/age-block"); return; }
     var btn=$("#ob-submit"); btn.disabled=true; btn.textContent=t("loading");
@@ -463,12 +500,30 @@ function renderOnboarding(){
         var up=await uploadFile(f, "avatar");
         photoUrl=up.url||up.fileUrl||up.path||null;
       }
-      var payload={displayName:name, age:age, country:chosenCountry, city:city, about:about, language:chosenLang};
+      var payload={displayName:name, age:age, country:chosenCountry, city:city, about:about, language:chosenLang, termsAccepted:true, privacyAccepted:true};
       if(photoUrl) payload.photoUrl=photoUrl;
       var res=await api("/auth/onboard", {method:"POST", body:payload});
       S.user=res.user||res;
+      if(res.csrfToken) S.csrfToken=res.csrfToken;
       try{ localStorage.setItem("sp_lang", chosenLang); }catch(e){}
-      view('<div class="center-page"><div class="slide-ic">🎉</div><h1>'+esc(t("youre_in"))+'</h1><p>'+esc(t("youre_in_body"))+'</p><button class="btn" id="in-go" style="max-width:360px">'+esc(t("start_swiping"))+'</button></div>');
+      // Recovery code: shown ONCE, here only. The server stores only a
+      // hash, so this screen is the only time the code ever exists.
+      var rc=res.recoveryCode||"";
+      var rcHtml="";
+      if(rc){
+        rcHtml='<div class="card" style="max-width:420px;margin-top:14px"><h3>'+esc(t("recovery_code_title"))+'</h3>'
+          +'<p class="small">'+esc(t("recovery_code_body"))+'</p>'
+          +'<p id="rc-code" style="font-size:22px;font-weight:700;letter-spacing:2px;text-align:center;margin:12px 0;word-break:break-all">'+esc(rc)+'</p>'
+          +'<button class="btn secondary" id="rc-copy">'+esc(t("recovery_code_copy"))+'</button></div>';
+      }
+      view('<div class="center-page"><div class="slide-ic">🎉</div><h1>'+esc(t("youre_in"))+'</h1><p>'+esc(t("youre_in_body"))+'</p>'+rcHtml+'<button class="btn" id="in-go" style="max-width:360px;margin-top:14px">'+esc(t("start_swiping"))+'</button></div>');
+      if(rc){
+        $("#rc-copy").onclick=function(){
+          var done=function(){ toast(t("recovery_code_copied")); };
+          if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(rc).then(done, function(){ toast(rc, false); }); }
+          else { try{ var ta=document.createElement("textarea"); ta.value=rc; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); done(); }catch(e){ toast(rc, false); } }
+        };
+      }
       $("#in-go").onclick=function(){ go("#/swipe"); };
     }catch(err){
       btn.disabled=false; btn.textContent=t("create_profile");
@@ -479,6 +534,67 @@ function renderOnboarding(){
 }
 function renderAgeBlock(){
   view('<div class="center-page"><div class="slide-ic">🔞</div><h1>'+esc(t("age_block_title"))+'</h1><p>'+esc(t("age_block_body"))+'</p><a class="btn" style="max-width:360px" href="#/welcome">'+esc(t("back_to_welcome"))+'</a></div>');
+}
+/* ---------- account recovery (no email, no password — recovery code only) ---------- */
+function renderRecover(){
+  if(S.user){ go("#/swipe"); return; }
+  view('<div style="max-width:480px;margin:0 auto"><h1>'+esc(t("recover_title"))+'</h1><p>'+esc(t("recover_body"))+'</p>'
+    +'<form id="rc-form" class="card" style="margin-top:12px">'
+    +'<label>'+esc(t("recover_code_label"))+'</label><input id="rc-input" maxlength="19" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" style="letter-spacing:2px;text-transform:uppercase">'
+    +'<div class="field-err" id="rc-err"></div>'
+    +'<button class="btn" type="submit" id="rc-submit">'+esc(t("recover_btn"))+'</button>'
+    +'<p class="small" style="text-align:center;margin-top:10px"><a href="#/welcome">'+esc(t("back_to_welcome"))+'</a></p>'
+    +'</form></div>');
+  $("#rc-form").addEventListener("submit", async function(e){
+    e.preventDefault();
+    var code=$("#rc-input").value.trim();
+    $("#rc-err").textContent="";
+    if(code.replace(/[^A-Za-z0-9]/g,"").length!==16){ $("#rc-err").textContent=t("recover_invalid"); return; }
+    var btn=$("#rc-submit"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      var res=await api("/auth/recover", {method:"POST", body:{code:code}});
+      S.user=res.user||null;
+      if(res.csrfToken) S.csrfToken=res.csrfToken;
+      if(S.user&&S.user.language) I.setLang(S.user.language);
+      if(S.user&&S.user.country) S.country=countryCode(S.user.country);
+      toast(t("welcome_back"));
+      go("#/swipe");
+    }catch(err){
+      btn.disabled=false; btn.textContent=t("recover_btn");
+      $("#rc-err").textContent=err.message||t("err_generic");
+    }
+  });
+}
+/* ---------- consent re-acceptance (Terms/Privacy version bump) ---------- */
+function renderConsent(){
+  if(!S.user){ go("#/welcome"); return; }
+  view('<div style="max-width:520px;margin:0 auto"><h1>'+esc(t("consent_update_title"))+'</h1><p>'+esc(t("consent_update_body"))+'</p>'
+    +'<form id="cn-form" class="card" style="margin-top:12px">'
+    +'<label class="check-row"><input type="checkbox" id="cn-c1"><span>'+esc(t("consent_terms_only"))+' <a href="#/help?topic=terms">'+esc(t("terms"))+'</a></span></label>'
+    +'<label class="check-row"><input type="checkbox" id="cn-c2"><span>'+esc(t("consent_privacy_only"))+' <a href="#/help?topic=privacy">'+esc(t("privacy"))+'</a></span></label>'
+    +'<div class="field-err" id="cn-err"></div>'
+    +'<button class="btn" type="submit" id="cn-submit">'+esc(t("consent_accept_btn"))+'</button>'
+    +'</form></div>');
+  $("#cn-form").addEventListener("submit", async function(e){
+    e.preventDefault();
+    if(!$("#cn-c1").checked||!$("#cn-c2").checked){ $("#cn-err").textContent=t("consent_both_required"); return; }
+    var btn=$("#cn-submit"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      var res=await api("/auth/re-consent", {method:"POST", body:{termsAccepted:true, privacyAccepted:true}});
+      if(res.user) S.user=res.user;
+      else if(S.user) S.user.consentCurrent=true;
+      toast(t("saved"));
+      go("#/swipe");
+    }catch(err){
+      btn.disabled=false; btn.textContent=t("consent_accept_btn");
+      $("#cn-err").textContent=err.message||t("err_generic");
+    }
+  });
+}
+/* ---------- maintenance state (kill switch on) ---------- */
+function renderMaintenance(message){
+  view('<div class="center-page"><div class="slide-ic">🔧</div><h1>'+esc(t("maintenance_title"))+'</h1><p>'+esc(message||t("maintenance_body"))+'</p><button class="btn" id="mt-retry" style="max-width:360px">'+esc(t("maintenance_retry"))+'</button></div>');
+  $("#mt-retry").onclick=function(){ location.reload(); };
 }
 
 /* ---------- swipe feed ---------- */
@@ -1783,8 +1899,44 @@ function renderSettings(){
     +'<div style="display:grid;gap:8px"><a class="btn secondary" href="#/help">'+esc(t("help_centre"))+'</a><a class="btn secondary" href="#/verify">'+esc(t("verify_centre"))+'</a><a class="btn secondary" href="#/admin">'+esc(t("open_console"))+'</a></div>'
     +'<p class="small" style="margin-top:10px">'+esc(t("sessions_note"))+'</p></div>'
     +'<div class="card" style="margin-top:12px"><h3>'+esc(t("account_section"))+'</h3>'
-    +'<div style="display:grid;gap:8px"><button class="btn secondary" id="st-logout">'+esc(t("logout"))+'</button><button class="btn secondary" id="st-logout-all">'+esc(t("logout_all"))+'</button><button class="btn danger" id="st-delete">'+esc(t("delete_account"))+'</button></div>'
+    +'<div style="display:grid;gap:8px"><button class="btn secondary" id="st-export">'+esc(t("download_data"))+'</button><button class="btn secondary" id="st-logout">'+esc(t("logout"))+'</button><button class="btn secondary" id="st-logout-all">'+esc(t("logout_all"))+'</button><button class="btn danger" id="st-delete">'+esc(t("delete_account"))+'</button></div>'
+    +'<h3 style="margin-top:14px">'+esc(t("sessions_title"))+'</h3><div id="st-sessions"><p class="small">'+esc(t("loading"))+'</p></div>'
     +'<p class="small legal" style="margin-top:12px">'+esc(t("version_note"))+'</p></div>');
+  // Data export (items 183/273/429): download profile, bills, gifts,
+  // notifications as one JSON file.
+  $("#st-export").onclick=async function(){
+    var btn=$("#st-export"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      var d=await api("/profile/export");
+      var blob=new Blob([JSON.stringify(d, null, 2)], {type:"application/json"});
+      var a=document.createElement("a");
+      a.href=URL.createObjectURL(blob); a.download="sahay-pay-my-data.json";
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      toast(t("data_downloaded"));
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ btn.disabled=false; btn.textContent=t("download_data"); }
+  };
+  // Active sessions list with per-session revoke (item 112).
+  (async function loadSessions(){
+    var box=$("#st-sessions"); if(!box) return;
+    try{
+      var d=await api("/auth/sessions");
+      var list=pickList(d, ["sessions"]);
+      if(!list.length){ box.innerHTML='<p class="small">'+esc(t("sessions_none"))+'</p>'; return; }
+      box.innerHTML=list.map(function(s){
+        var dev=(s.userAgent||"").slice(0, 80)||t("session_device_unknown");
+        return '<div class="kv"><span><strong>'+(s.current?esc(t("session_current")):esc(dev))+'</strong><br><span class="small">'+esc(t("session_last_seen"))+' '+esc(s.lastSeenAt?timeAgo(s.lastSeenAt):"—")+'</span></span>'
+          +(s.current?"":'<button class="btn secondary small" data-revoke="'+esc(s.id)+'">'+esc(t("session_revoke"))+'</button>')+'</div>';
+      }).join("");
+      $all("[data-revoke]", box).forEach(function(b){
+        b.onclick=async function(){
+          try{ await api("/auth/sessions/"+encodeURIComponent(b.getAttribute("data-revoke")), {method:"DELETE"}); toast(t("session_revoked")); loadSessions(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){ box.innerHTML='<p class="small">'+esc(t("err_generic"))+'</p>'; }
+  })();
   var newCountry=countryCode(u.country);
   $all("#st-country button").forEach(function(b){ b.onclick=function(){ newCountry=b.getAttribute("data-c"); $all("#st-country button").forEach(function(x){ x.classList.toggle("on", x===b); }); }; });
   $all("#st-lang button").forEach(function(b){ b.onclick=function(){ I.setLang(b.getAttribute("data-l")); $all("#st-lang button").forEach(function(x){ x.classList.toggle("on", x===b); }); applyI18nStatic(); toast(t("language_changed")); route(); }; });
@@ -1923,13 +2075,15 @@ function renderHelp(id, q){
     view('<a href="#/help" class="small">← '+esc(t("back_to_help"))+'</a><h1 style="margin-top:8px">'+esc(t(tp.titleKey))+'</h1><div class="card">'+tp.body()+'</div>');
     if(topic==="complaints"){
       var form=$("#complaint-form");
-      form.innerHTML='<label>'+esc(t("complaint_subject"))+'</label><input id="cp-subject" maxlength="120"><label>'+esc(t("complaint_body"))+'</label><textarea id="cp-body" maxlength="2000"></textarea><button class="btn" id="cp-send" style="margin-top:10px">'+esc(t("file_complaint"))+'</button>';
+      // Honeypot (item 788): hidden "website" field no human ever sees —
+      // bots fill it and the server rejects the submission.
+      form.innerHTML='<label>'+esc(t("complaint_subject"))+'</label><input id="cp-subject" maxlength="120"><label>'+esc(t("complaint_body"))+'</label><textarea id="cp-body" maxlength="2000"></textarea><input id="cp-website" name="website" autocomplete="off" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0"><button class="btn" id="cp-send" style="margin-top:10px">'+esc(t("file_complaint"))+'</button>';
       $("#cp-send").onclick=async function(){
         if(!needUser()) return;
         var s=$("#cp-subject").value.trim(), b=$("#cp-body").value.trim();
         if(!s||!b){ toast(t("err_required"), true); return; }
         var btn=$("#cp-send"); btn.disabled=true;
-        try{ await api("/complaints", {method:"POST", body:{subject:s, body:b}}); toast(t("complaint_sent")); $("#cp-subject").value=""; $("#cp-body").value=""; }
+        try{ await api("/complaints", {method:"POST", body:{subject:s, body:b, website:($("#cp-website").value||"")}}); toast(t("complaint_sent")); $("#cp-subject").value=""; $("#cp-body").value=""; }
         catch(e){ toast(e.message||t("err_generic"), true); }
         finally{ btn.disabled=false; }
       };
@@ -2109,7 +2263,8 @@ function renderAdminLogin(){
         if(!pin){ $("#ad-err").textContent=t("err_required"); return; }
         var btn=$("#ad-login"); btn.disabled=true; btn.textContent=t("loading");
         try{
-          await api("/admin/login", {method:"POST", body:{pin:pin}});
+          var lr=await api("/admin/login", {method:"POST", body:{pin:pin}});
+          if(lr&&lr.csrfToken) S.adminCsrf=lr.csrfToken;
           S.admin=true; toast(t("admin_welcome")); go("#/admin/dashboard");
         }catch(e){ btn.disabled=false; btn.textContent=t("login"); $("#ad-err").textContent=(e.status===401||e.status===403)?t("wrong_pin"):(e.message||t("err_generic")); }
       };
@@ -2154,7 +2309,30 @@ async function renderAdminDashboard(){
       +statBox(t("open_complaints"), m.openComplaints!=null?m.openComplaints:(m.open_complaints||0))
       +'</div>'
       +'<div class="card" style="margin-top:12px"><h3>'+esc(t("fee_mode"))+'</h3><p>'+esc(t("current_mode"))+': <strong>'+esc((S.config&&S.config.feeMode)||"supporter_fee")+'</strong></p><p class="small">'+esc(feeSentence())+'</p><a class="btn secondary small" href="#/admin/fees">'+esc(t("fees"))+'</a></div>'
+      +'<div class="card" style="margin-top:12px"><h3>'+esc(t("maintenance_mode"))+'</h3><p class="small">'+esc(t("maintenance_note"))+'</p><p id="mt-state" class="small">'+esc(t("loading"))+'</p><button class="btn secondary small" id="mt-toggle" disabled>'+esc(t("maintenance_toggle"))+'</button></div>'
       +'<div class="btn-row"><a class="btn" href="#/admin/queue">'+esc(t("admin_queue_cta"))+'</a><a class="btn secondary" href="#/swipe">'+esc(t("back_to_app"))+'</a></div>';
+    // Maintenance kill-switch toggle (item 194).
+    (async function(){
+      var stEl=$("#mt-state"), btn=$("#mt-toggle"); if(!stEl||!btn) return;
+      try{
+        var cur=await api("/admin/maintenance");
+        var on=!!(cur.enabled||cur.maintenance);
+        stEl.textContent=on?t("maintenance_is_on"):t("maintenance_is_off");
+        btn.disabled=false;
+        btn.textContent=on?t("maintenance_turn_off"):t("maintenance_turn_on");
+        btn.onclick=async function(){
+          btn.disabled=true;
+          try{
+            var r=await api("/admin/maintenance", {method:"PUT", body:{enabled:!on}});
+            on=!!(r.enabled||r.maintenance);
+            stEl.textContent=on?t("maintenance_is_on"):t("maintenance_is_off");
+            btn.textContent=on?t("maintenance_turn_off"):t("maintenance_turn_on");
+            toast(on?t("maintenance_is_on"):t("maintenance_is_off"));
+          }catch(e){ toast(e.message||t("err_generic"), true); }
+          btn.disabled=false;
+        };
+      }catch(e){ stEl.textContent=t("err_generic"); }
+    })();
     function statBox(l, v){ return '<div class="card stat"><div class="n">'+esc(v)+'</div><div class="l">'+esc(l)+'</div></div>'; }
   }catch(e){
     if(e.status===401){ S.admin=false; go("#/admin"); return; }
@@ -2467,13 +2645,21 @@ function renderAdminAudit(){
 /* ---------- boot ---------- */
 async function boot(){
   if(S.booted) return; S.booted=true;
-  try{ S.config=await api("/config"); }catch(e){ S.config=null; }
-  try{
-    var me=await api("/auth/me");
-    S.user=(me&&me.user)||null;
-    if(S.user&&S.user.language) I.setLang(S.user.language);
-    if(S.user&&S.user.country) S.country=countryCode(S.user.country);
-  }catch(e){ S.user=null; }
+  // /config and /auth/me are independent — fetch in parallel (each is a
+  // slow serverless round trip; sequential boot cost ~2s+ even warm).
+  var settled=await Promise.allSettled([api("/config"), api("/auth/me")]);
+  var cfgR=settled[0], meR=settled[1];
+  // Maintenance kill switch on (item 194): show the maintenance state
+  // instead of the app.
+  var maint=null;
+  [cfgR, meR].forEach(function(r){ if(r.status==="rejected"&&r.reason&&r.reason.status===503&&r.reason.code==="MAINTENANCE") maint=r.reason; });
+  if(maint){ renderMaintenance(maint.message); return; }
+  S.config=cfgR.status==="fulfilled"?cfgR.value:null;
+  var me=meR.status==="fulfilled"?meR.value:null;
+  S.user=(me&&me.user)||null;
+  if(me&&me.csrfToken) S.csrfToken=me.csrfToken;
+  if(S.user&&S.user.language) I.setLang(S.user.language);
+  if(S.user&&S.user.country) S.country=countryCode(S.user.country);
   if(!location.hash) location.hash="#/splash";
   route();
   window.addEventListener("online", function(){ toast(t("session_restored")); });

@@ -9,6 +9,7 @@
 const express = require('express');
 const db = require('../db');
 const { feeModelSentence } = require('../lib/fees');
+const { TERMS_VERSION, PRIVACY_VERSION, POLICY_EFFECTIVE_DATE } = require('../lib/policy');
 
 const router = express.Router();
 
@@ -22,13 +23,21 @@ const CROSS_BORDER_NOTE = [
 
 router.get('/config', async (req, res, next) => {
   try {
-    const feeMode = (await db.getSetting('fee_mode')) || 'supporter_fee';
-    const feeConfig = await db.getSettingJson('fee_config', {});
-    const brandPackages = await db.getSettingJson('brand_packages', []);
-    const founderTipConfig = await db.getSettingJson('founder_tip_config', {});
-    const paymentMethods = await db.getSettingJson('payment_methods', {});
-    const categories = await db.getSettingJson('categories', []);
-    const minGiftMinor = Number(await db.getSetting('min_gift_minor')) || 1000;
+    // Parallel: these 7 settings reads are independent, and each is a
+    // ~200ms round trip to Supabase from the serverless function — run
+    // sequentially, /config cost ~1.9s even warm (measured 2026-11-16).
+    const [feeModeRaw, feeConfig, brandPackages, founderTipConfig, paymentMethods, categories, minGiftRaw] =
+      await Promise.all([
+        db.getSetting('fee_mode'),
+        db.getSettingJson('fee_config', {}),
+        db.getSettingJson('brand_packages', []),
+        db.getSettingJson('founder_tip_config', {}),
+        db.getSettingJson('payment_methods', {}),
+        db.getSettingJson('categories', []),
+        db.getSetting('min_gift_minor'),
+      ]);
+    const feeMode = feeModeRaw || 'supporter_fee';
+    const minGiftMinor = Number(minGiftRaw) || 1000;
     res.json({
       appName: 'Sahay Pay',
       tagline: 'Small acts. Real help.',
@@ -42,6 +51,7 @@ router.get('/config', async (req, res, next) => {
       paymentMethods,
       categories,
       minGiftMinor,
+      policyVersion: { terms: TERMS_VERSION, privacy: PRIVACY_VERSION, effective: POLICY_EFFECTIVE_DATE },
       crossBorderNote: CROSS_BORDER_NOTE,
       giftAmountChips: { NPR: [10000, 50000, 100000], INR: [10000, 50000, 100000] },
     });

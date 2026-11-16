@@ -21,6 +21,12 @@ CREATE TABLE IF NOT EXISTS users (
   language TEXT NOT NULL DEFAULT 'en',
   photo_url TEXT,
   prefs_json TEXT DEFAULT '{}',
+  recovery_code_hash TEXT,
+  recovery_code_lookup TEXT,
+  terms_accepted_version TEXT,
+  terms_accepted_at TEXT,
+  privacy_accepted_version TEXT,
+  privacy_accepted_at TEXT,
   suspended INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
@@ -30,9 +36,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
-  last_seen_at TEXT NOT NULL
+  last_seen_at TEXT NOT NULL,
+  csrf_token TEXT,
+  user_agent TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_code_lookup);
 
 CREATE TABLE IF NOT EXISTS bills (
   id TEXT PRIMARY KEY,
@@ -214,7 +223,17 @@ CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
 CREATE TABLE IF NOT EXISTS admin_sessions (
   token_hash TEXT PRIMARY KEY,
   created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL
+  expires_at TEXT NOT NULL,
+  csrf_token TEXT,
+  last_seen_at TEXT
+);
+
+-- DB-backed rate-limit buckets (survive serverless cold starts).
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 0,
+  reset_at TEXT NOT NULL,
+  violations INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS review_packets (
