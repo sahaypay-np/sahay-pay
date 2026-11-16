@@ -71,6 +71,7 @@ app.use('/api/referrals', require('./routes/referrals')); // Phase 2 §7: referr
 app.use('/api/announcements', require('./routes/announcements')); // Phase 2 §7: updates channel
 app.use('/api/thanks', require('./routes/thanks')); // Phase 2 §7: thank-you notes
 app.use('/api/digest', require('./routes/digest')); // Phase 2 §7: weekly digest + monthly summary
+app.use('/api/appeals', require('./routes/appeals')); // Phase 2 §8: user appeals
 app.use('/api', require('./routes/reports')); // /api/reports, /api/complaints
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/bridge', require('./routes/bridge'));

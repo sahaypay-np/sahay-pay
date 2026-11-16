@@ -9,6 +9,7 @@
 
 const express = require('express');
 const crypto = require('crypto');
+const db = require('../db');
 const { applyReviewDecision } = require('../lib/notify');
 const { cleanStr } = require('../lib/validate');
 
@@ -43,7 +44,30 @@ router.post('/approve', async (req, res, next) => {
     if (!result.ok) {
       return res.status(result.status || 400).json({ error: { code: 'REVIEW_FAILED', message: result.error } });
     }
+    // Item 795: every successful bridge decision counts as a ping for the
+    // health check.
+    await db.setSetting('bridge_last_ping', new Date().toISOString());
     res.json({ ok: true, packetStatus: result.packetStatus });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/bridge/ping — item 795: the bridge (Muse) checks in so the
+// admin console can show bridge health. Same secret as /approve.
+router.post('/ping', async (req, res, next) => {
+  try {
+    const expected = process.env.CLAUDE_APPROVAL_BRIDGE_SECRET;
+    if (!expected) {
+      return res.status(503).json({
+        error: { code: 'BRIDGE_DISABLED', message: 'The approval bridge is not configured (no bridge secret set).' },
+      });
+    }
+    if (!secretsMatch(req.get('X-Sahay-Bridge-Secret'), expected)) {
+      return res.status(401).json({ error: { code: 'BRIDGE_UNAUTHORIZED', message: 'Invalid bridge secret.' } });
+    }
+    await db.setSetting('bridge_last_ping', new Date().toISOString());
+    res.json({ ok: true, pingedAt: new Date().toISOString() });
   } catch (err) {
     next(err);
   }
