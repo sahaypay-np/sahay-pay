@@ -14,6 +14,7 @@
 const crypto = require('crypto');
 const db = require('../db');
 const { logAudit, nowIso } = require('./audit');
+const { trustScoreForUser } = require('./abuse');
 
 async function createNotification(userId, kind, title, body, link = '') {
   if (!userId) return null;
@@ -76,7 +77,7 @@ async function billPacketPayload(bill, payoutHints) {
        (SELECT COUNT(*) FROM reports WHERE target_type = 'bill' AND target_id IN (SELECT id FROM bills WHERE user_id = $3)) AS reports`,
     [bill.user_id, bill.user_id, bill.user_id]
   );
-  return {
+  const payload = {
     kind: 'bill',
     billId: bill.id,
     requestCode: bill.request_code,
@@ -106,8 +107,12 @@ async function billPacketPayload(bill, payoutHints) {
           reportsAgainst: Number(counts?.reports || 0),
         }
       : null,
+    // Item 857: trust score (account age, verified actions, report
+    // history) — a hint for the reviewer, never a decision.
+    trustScore: await trustScoreForUser(bill.user_id),
     aiNote: 'AI-suggested — not a decision: no automated checks ran on this post. A human (the owner) decides.',
   };
+  return payload;
 }
 
 // Apply an owner decision to a review packet. Shared by admin + bridge.

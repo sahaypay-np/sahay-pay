@@ -12,7 +12,7 @@ const express = require('express');
 
 const db = require('./db');
 const { attachUser, verifyOrigin, verifyCsrf } = require('./lib/auth');
-const { maintenanceGate } = require('./lib/maintenance');
+const { maintenanceGate, freezeGate } = require('./lib/maintenance');
 const { sanitizeText } = require('./lib/sanitize');
 const { payoutKeySource, PUBLIC_DIR } = require('./lib/storage');
 
@@ -52,6 +52,7 @@ app.use(attachUser);
 // while maintenance_mode is on. Then Origin/Referer verification (item 130)
 // and CSRF synchronizer tokens (item 129) for state-changing API requests.
 app.use(maintenanceGate);
+app.use(freezeGate);
 app.use(verifyOrigin);
 app.use(verifyCsrf);
 

@@ -95,13 +95,40 @@ router.post('/complaints', requireActive, rateLimit('complaint', 10, 60 * 60 * 1
     const body = cleanStr(req.body?.body, 2000);
     if (subject.length < 3) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please give your complaint a subject.' } });
     if (body.length < 10) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please describe what happened (10+ characters).' } });
+    // Item 882: "security incident" category on the complaint form — the
+    // admin complaints log flags these for priority review.
+    const category = ['general', 'security', 'legal', 'privacy', 'press'].includes(req.body?.category)
+      ? req.body.category
+      : 'general';
     const id = crypto.randomUUID();
     await db.run(
-      `INSERT INTO complaints (id, user_id, subject, body, status, created_at) VALUES ($1, $2, $3, $4, 'open', $5)`,
-      [id, req.user.id, subject, body, nowIso()]
+      `INSERT INTO complaints (id, user_id, subject, body, status, category, created_at) VALUES ($1, $2, $3, $4, 'open', $5, $6)`,
+      [id, req.user.id, subject, body, category, nowIso()]
     );
-    await logAudit('user', req.user.id, 'complaint_filed', 'complaint', id, {});
+    await logAudit('user', req.user.id, 'complaint_filed', 'complaint', id, { category });
     res.status(201).json({ ok: true, complaintId: id, message: 'We review every complaint.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/complaints/:id/status — item 908: track a complaint by its case
+// number (the complaint id). Owner-only; the id is unguessable (UUID).
+router.get('/complaints/:id/status', requireAuth, async (req, res, next) => {
+  try {
+    const row = await db.get('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
+    if (!row || row.user_id !== req.user.id) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No complaint matches that case number.' } });
+    }
+    res.json({
+      complaint: {
+        id: row.id,
+        subject: row.subject,
+        status: row.status,
+        category: row.category || 'general',
+        createdAt: row.created_at,
+      },
+    });
   } catch (err) {
     next(err);
   }
