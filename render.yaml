@@ -1,0 +1,32 @@
+# Sahay Pay on Render (free web service).
+# Postgres comes from Supabase or Neon free tier — paste its connection string
+# as DATABASE_URL in the Render dashboard (never in this file).
+services:
+  - type: web
+    name: sahay-pay
+    env: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: node server/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      # PAYOUT_ENCRYPTION_KEY must be base64 (or hex) of EXACTLY 32 bytes —
+      # Render's generateValue is NOT the right format and the server refuses
+      # to start with it. Generate one locally and paste it in the dashboard:
+      #   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+      # If left unset, the key is derived from SESSION_SECRET instead (safe as
+      # long as SESSION_SECRET never changes). Never rotate either key after
+      # real payout accounts exist — old accounts become unreadable.
+      - key: PAYOUT_ENCRYPTION_KEY
+        sync: false
+      - key: CLAUDE_APPROVAL_BRIDGE_SECRET
+        generateValue: true
+      - key: OWNER_NOTIFICATION_WEBHOOK_URL
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
