@@ -78,11 +78,40 @@ CREATE TABLE IF NOT EXISTS bills (
   approved_at TEXT,
   approved_by TEXT,
   completed_at TEXT,
+  for_whom TEXT DEFAULT 'myself',
+  relationship TEXT DEFAULT '',
+  for_other_consent INTEGER NOT NULL DEFAULT 0,
+  about_me TEXT DEFAULT '',
+  biller_instructions TEXT DEFAULT '',
+  photos_json TEXT DEFAULT '[]',
+  story_lang TEXT DEFAULT 'en',
+  not_paid_consequence TEXT DEFAULT '',
+  tried_to_pay TEXT DEFAULT '',
+  money_means TEXT DEFAULT '',
+  bill_type_other TEXT DEFAULT '',
+  charity_name TEXT DEFAULT '',
+  business INTEGER NOT NULL DEFAULT 0,
+  business_name TEXT DEFAULT '',
+  business_desc TEXT DEFAULT '',
+  dream INTEGER NOT NULL DEFAULT 0,
+  dream_desc TEXT DEFAULT '',
+  expires_at TEXT,
+  extension_used INTEGER NOT NULL DEFAULT 0,
+  repost_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bills_feed ON bills(status, country, created_at);
 CREATE INDEX IF NOT EXISTS idx_bills_user ON bills(user_id, status);
+
+CREATE TABLE IF NOT EXISTS bill_edits (
+  id TEXT PRIMARY KEY,
+  bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  changed_fields TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bill_edits_bill ON bill_edits(bill_id, created_at);
 
 CREATE TABLE IF NOT EXISTS payout_methods (
   id TEXT PRIMARY KEY,
