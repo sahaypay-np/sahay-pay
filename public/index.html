@@ -5,14 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#101827">
 <meta name="description" content="Sahay Pay — Small acts. Real help. People in Nepal and India post bills they need help with; others help directly. Sahay Pay never holds gift money.">
+<meta property="og:title" content="Sahay Pay — Small acts. Real help.">
+<meta property="og:description" content="People in Nepal and India post bills they need help with; others help directly. Sahay Pay never holds gift money.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Sahay Pay">
+<meta property="og:image" content="https://sahay-pay.netlify.app/logo.svg">
+<meta name="twitter:card" content="summary">
 <title>Sahay Pay — Small acts. Real help.</title>
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
+<a class="skip-link" href="#view" data-i18n="skip_content">Skip to main content</a>
 <div class="bg-orbs" aria-hidden="true"><i class="orb orb-a"></i><i class="orb orb-b"></i><i class="orb orb-c"></i></div>
+<div id="offline-banner" class="offline-banner" role="alert" hidden><span id="offline-text"></span><button id="offline-retry" type="button" data-i18n="retry">Retry</button></div>
 <header id="topbar" class="topbar glass" hidden>
   <a class="brand" href="#/swipe" aria-label="Sahay Pay home">
-    <span class="logo-mark" aria-hidden="true">S</span>
+    <span class="logo-mark" aria-hidden="true"><img src="logo.svg" alt="" width="38" height="38"></span>
     <span class="brand-text"><strong>Sahay Pay</strong><small data-i18n="tagline">Small acts. Real help.</small></span>
   </a>
   <div class="topbar-right">
@@ -22,7 +32,19 @@
     <button id="avatar-btn" class="avatar-btn" type="button" aria-label="Profile and settings"><span id="avatar-initial">?</span></button>
   </div>
 </header>
-<main id="view" class="view" aria-live="polite"></main>
+<main id="view" class="view" tabindex="-1" aria-live="polite"></main>
+<footer id="site-footer" class="site-footer">
+  <div class="footer-brand"><img src="logo.svg" alt="" width="24" height="24" aria-hidden="true"><span>Sahay Pay</span></div>
+  <nav class="footer-nav" aria-label="Footer">
+    <a href="#/help" data-i18n="help_centre">Help Centre</a>
+    <a href="#/help?topic=terms" data-i18n="terms">Terms of Service</a>
+    <a href="#/help?topic=privacy" data-i18n="privacy">Privacy Policy</a>
+    <a href="#/help?topic=refunds" data-i18n="footer_refunds">Refunds</a>
+    <a href="#/help?topic=about" data-i18n="footer_about">About</a>
+  </nav>
+  <p class="legal">© 2026 Sahay Pay · <span data-i18n="tagline">Small acts. Real help.</span></p>
+  <p class="legal" data-i18n="footer_demo">Demo Mode — no real money moves through Sahay Pay.</p>
+</footer>
 <nav id="dock" class="dock glass" hidden aria-label="Main navigation">
   <a href="#/swipe" data-tab="swipe" class="dock-tab"><span class="dock-ic">🔥</span><span data-i18n="tab_swipe">Swipe</span></a>
   <a href="#/post" data-tab="post" class="dock-tab dock-tab-plus"><span class="dock-ic">＋</span><span data-i18n="tab_post">Post</span></a>

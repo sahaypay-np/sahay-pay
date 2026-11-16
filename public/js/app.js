@@ -38,41 +38,84 @@ function toast(msg, isErr){
   d.className="toast"+(isErr?" err":""); d.textContent=msg; root.appendChild(d);
   setTimeout(function(){ d.remove(); }, 3600);
 }
+function showOfflineBanner(isOffline){
+  var b=$("#offline-banner"); if(!b) return;
+  $("#offline-text").textContent=isOffline?t("offline_msg"):t("conn_err_msg");
+  b.hidden=false;
+}
+function hideOfflineBanner(){ var b=$("#offline-banner"); if(b) b.hidden=true; }
 function copyText(text, msg){
   function done(){ toast(msg||t("copied")); }
   if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done, function(){ fallback(); }); }
   else fallback();
   function fallback(){ var ta=document.createElement("textarea"); ta.value=text; document.body.appendChild(ta); ta.select(); try{ document.execCommand("copy"); done(); }catch(e){ toast(t("err_generic"), true); } ta.remove(); }
 }
-function closeSheets(){ $("#sheet-root").innerHTML=""; $("#modal-root").innerHTML=""; }
+var lastFocus=null;
+function closeSheets(){
+  $("#sheet-root").innerHTML=""; $("#modal-root").innerHTML="";
+  if(lastFocus && lastFocus.focus){ try{ lastFocus.focus(); }catch(e){} }
+  lastFocus=null;
+}
+document.addEventListener("keydown", function(e){
+  if(e.key==="Escape" && ($("#sheet-root").firstChild || $("#modal-root").firstChild)){ e.preventDefault(); closeSheets(); return; }
+  if(e.key!=="Tab") return;
+  var dlg=document.querySelector("#sheet-root [role=dialog], #modal-root [role=dialog]");
+  if(!dlg) return;
+  var f=Array.prototype.slice.call(dlg.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")).filter(function(n){ return !n.disabled; });
+  if(!f.length) return;
+  var first=f[0], last=f[f.length-1];
+  if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+  else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+});
 function openSheet(html){
+  var prev=document.activeElement;
   closeSheets();
+  lastFocus=prev;
   var root=$("#sheet-root");
-  var bd=el('<div class="sheet-backdrop"><div class="sheet" role="dialog" aria-modal="true"><div class="sheet-handle"></div>'+html+'</div></div>');
+  var bd=el('<div class="sheet-backdrop"><div class="sheet" role="dialog" aria-modal="true" tabindex="-1"><button type="button" class="sheet-close" aria-label="'+esc(t("close"))+'">✕</button><div class="sheet-handle"></div>'+html+'</div></div>');
   bd.addEventListener("click", function(e){ if(e.target===bd) closeSheets(); });
+  bd.querySelector(".sheet-close").addEventListener("click", closeSheets);
   root.appendChild(bd);
+  var dlg=bd.querySelector(".sheet"); if(dlg) dlg.focus();
 }
 function openModal(html){
+  var prev=document.activeElement;
   closeSheets();
+  lastFocus=prev;
   var root=$("#modal-root");
-  var bd=el('<div class="modal-backdrop"><div class="modal glass" role="dialog" aria-modal="true">'+html+'</div></div>');
+  var bd=el('<div class="modal-backdrop"><div class="modal glass" role="dialog" aria-modal="true" tabindex="-1"><button type="button" class="modal-close" aria-label="'+esc(t("close"))+'">✕</button>'+html+'</div></div>');
   bd.addEventListener("click", function(e){ if(e.target===bd) closeSheets(); });
+  bd.querySelector(".modal-close").addEventListener("click", closeSheets);
   root.appendChild(bd);
+  var dlg=bd.querySelector(".modal"); if(dlg) dlg.focus();
 }
 function confirmDialog(title, body, okLabel, onOk, danger){
   openModal('<h2>'+esc(title)+'</h2><p>'+esc(body)+'</p><div class="btn-row"><button class="btn secondary" data-act="no">'+esc(t("cancel"))+'</button><button class="btn'+(danger?" danger":"")+'" data-act="yes">'+esc(okLabel)+'</button></div>');
   $("[data-act=no]", $("#modal-root")).onclick=closeSheets;
   $("[data-act=yes]", $("#modal-root")).onclick=function(){ closeSheets(); onOk(); };
 }
-function emptyState(icon, title, body, ctaHtml){
-  return '<div class="card empty"><div class="big">'+icon+'</div><h2>'+esc(title)+'</h2><p>'+esc(body)+'</p>'+(ctaHtml||"")+'</div>';
+function emptyState(icon, title, body, ctaHtml, heading){
+  var h=heading||"h2";
+  return '<div class="card empty"><div class="big">'+icon+'</div><'+h+'>'+esc(title)+'</'+h+'><p>'+esc(body)+'</p>'+(ctaHtml||"")+'</div>';
 }
-function errBox(msg, retryFn){
-  return '<div class="card empty"><div class="big">⚠️</div><h2>'+esc(t("err_generic"))+'</h2><p>'+esc(msg||t("try_later"))+'</p><button class="btn small" id="err-retry">'+esc(t("retry"))+'</button></div>';
+function errBox(msg, heading){
+  var h=heading||"h2";
+  return '<div class="card empty"><div class="big">⚠️</div><'+h+'>'+esc(t("err_generic"))+'</'+h+'><p>'+esc(msg||t("try_later"))+'</p><button class="btn small" id="err-retry">'+esc(t("retry"))+'</button></div>';
 }
 function bindErrRetry(fn){ var b=$("#err-retry"); if(b) b.onclick=fn; }
 function skeleton(n){
-  var h=""; for(var i=0;i<(n||2);i++) h+='<div class="skel"></div>'; return h;
+  var h="";
+  for(var i=0;i<(n||2);i++){
+    if(i===0) h+='<div class="skel" role="status" aria-busy="true"><span class="skel-text">'+esc(t("loading"))+'</span></div>';
+    else h+='<div class="skel" aria-hidden="true"></div>';
+  }
+  return h;
+}
+function reqStar(){ return '<span class="req" aria-hidden="true">*</span><span class="sr-only"> ('+esc(t("required_word"))+')</span>'; }
+function setFieldErr(inputId, errId, msg){
+  var inp=document.getElementById(inputId), err=document.getElementById(errId);
+  if(err) err.textContent=msg||"";
+  if(inp) inp.setAttribute("aria-invalid", msg?"true":"false");
 }
 function badgeHtml(b){
   if(!b) return "";
@@ -135,7 +178,7 @@ async function api(path, opts){
   if(opts.body!==undefined) init.body=JSON.stringify(opts.body);
   var res;
   try{ res=await fetch("/api"+path, init); }
-  catch(e){ var err=new Error(t("err_network")); err.code="NETWORK"; throw err; }
+  catch(e){ showOfflineBanner(false); var err=new Error(t("err_network")); err.code="NETWORK"; throw err; }
   var data=null;
   var text=await res.text();
   if(text){ try{ data=JSON.parse(text); }catch(e){ data={raw:text}; } }
@@ -150,7 +193,7 @@ async function uploadFile(file, kind){
   var fd=new FormData(); fd.append("file", file); fd.append("kind", kind||"public_bill");
   var res;
   try{ res=await fetch("/api/uploads", {method:"POST", credentials:"include", body:fd}); }
-  catch(e){ var err=new Error(t("err_network")); err.code="NETWORK"; throw err; }
+  catch(e){ showOfflineBanner(false); var err=new Error(t("err_network")); err.code="NETWORK"; throw err; }
   var data=null; try{ data=await res.json(); }catch(e){}
   if(!res.ok){ var e2=new Error((data&&data.error&&data.error.message)||t("upload_failed")); e2.code=(data&&data.error&&data.error.code)||"UPLOAD"; e2.status=res.status; throw e2; }
   return data;
@@ -191,7 +234,13 @@ function setChrome(show){
   $("#topbar").hidden=!show;
   $("#dock").hidden=!show;
   $("#view").classList.toggle("no-chrome", !show);
+  document.body.classList.toggle("has-chrome", show);
   if(show) updateTopbar();
+}
+function resetTopbar(){
+  $("#avatar-initial").textContent="?";
+  var b=$("#bell-badge"); b.hidden=true; b.textContent="0";
+  $("#country-chip").hidden=true;
 }
 function updateTopbar(){
   var chip=$("#country-chip");
@@ -200,10 +249,13 @@ function updateTopbar(){
   else chip.hidden=true;
   $("#avatar-initial").textContent=S.user?initials(S.user.display_name||S.user.displayName):"?";
   if(S.user) loadUnread();
+  else { var b=$("#bell-badge"); b.hidden=true; b.textContent="0"; }
 }
 async function loadUnread(){
+  var me=S.user&&S.user.id;
   try{
     var d=await api("/notifications");
+    if(!S.user || S.user.id!==me) return; // user logged out / switched while loading
     var list=pickList(d,["notifications"]);
     var n=list.filter(function(x){ return !x.is_read && !x.isRead; }).length;
     var b=$("#bell-badge");
@@ -216,7 +268,7 @@ function setActiveTab(tab){
 function applyI18nStatic(){
   $all("[data-i18n]").forEach(function(n){ n.textContent=t(n.getAttribute("data-i18n")); });
 }
-function view(html){ $("#view").innerHTML=html; window.scrollTo(0,0); applyI18nStatic(); }
+function view(html){ $("#view").innerHTML=html; window.scrollTo(0,0); applyI18nStatic(); try{ $("#view").focus({preventScroll:true}); }catch(e){ try{ $("#view").focus(); }catch(e2){} } }
 function go(hash){ location.hash=hash; }
 function needUser(){
   if(S.user) return true;
@@ -263,7 +315,7 @@ $("#theme-toggle").addEventListener("click", function(){
 });
 async function doLogout(all){
   try{ await api(all?"/auth/logout-all":"/auth/logout", {method:"POST"}); }catch(e){}
-  S.user=null; toast(t("logged_out")); go("#/welcome");
+  S.user=null; resetTopbar(); toast(t("logged_out")); go("#/welcome");
 }
 
 /* ---------- payout validation (mirrors server rules) ---------- */
@@ -362,17 +414,22 @@ function route(){
     if(m){
       setChrome(!!ROUTES[i].chrome);
       setActiveTab(ROUTES[i].tab||"");
-      try{ ROUTES[i].fn(m[1], queryParams()); }catch(e){ console.error(e); view(errBox(e.message)); bindErrRetry(route); }
+      try{ ROUTES[i].fn(m[1], queryParams()); }catch(e){ console.error(e); view(errBox(e.message, "h1")); bindErrRetry(route); }
       return;
     }
   }
-  go("#/swipe");
+  setChrome(true);
+  setActiveTab("");
+  renderNotFound();
+}
+function renderNotFound(){
+  view('<div class="center-page"><div class="logo-big"><img src="logo.svg" alt="" width="96" height="96"></div><h1>'+esc(t("not_found_title"))+'</h1><p>'+esc(t("not_found_body"))+'</p><div style="width:100%;max-width:360px;display:grid;gap:10px;margin-top:10px"><a class="btn" href="#/swipe">'+esc(t("go_swipe"))+'</a><a class="btn secondary" href="#/help">'+esc(t("help_centre"))+'</a></div></div>');
 }
 window.addEventListener("hashchange", route);
 
 /* ---------- splash / welcome / country / onboarding ---------- */
 function renderSplash(){
-  view('<div class="center-page"><div class="logo-big">S</div><h1>Sahay Pay</h1><p>'+esc(t("splash_tag"))+'</p><p class="small">'+esc(t("splash_loading"))+'</p></div>');
+  view('<div class="center-page"><div class="logo-big"><img src="logo.svg" alt="" width="96" height="96"></div><h1>Sahay Pay</h1><p>'+esc(t("splash_tag"))+'</p><p class="small">'+esc(t("splash_loading"))+'</p></div>');
   setTimeout(function(){
     if(location.hash.split("?")[0]!=="#/splash") return;
     if(S.user) go("#/swipe");
@@ -425,17 +482,18 @@ function renderOnboarding(){
   var lang=I.getLang();
   view('<div style="max-width:520px;margin:0 auto"><h1>'+esc(t("onboarding_title"))+'</h1><p>'+esc(t("onboarding_sub"))+'</p>'
     +'<div class="notice info">'+esc(t("consent_notice"))+'</div>'
+    +'<p class="small">'+esc(t("required_note"))+'</p>'
     +'<form id="ob-form" class="card" style="margin-top:12px">'
-    +'<label>'+esc(t("q_name"))+'</label><input id="ob-name" maxlength="60" placeholder="'+esc(t("name_ph"))+'" autocomplete="name"><div class="field-err" id="e-name"></div>'
-    +'<label>'+esc(t("q_age"))+' <span class="small muted">'+esc(t("age_hint"))+'</span></label><input id="ob-age" type="number" inputmode="numeric" min="1" max="120" placeholder="25"><div class="field-err" id="e-age"></div>'
+    +'<label for="ob-name">'+esc(t("q_name"))+' '+reqStar()+'</label><input id="ob-name" maxlength="60" placeholder="'+esc(t("name_ph"))+'" autocomplete="name" aria-required="true" aria-describedby="e-name"><div class="field-err" id="e-name" role="alert"></div>'
+    +'<label for="ob-age">'+esc(t("q_age"))+' '+reqStar()+' <span class="small muted">'+esc(t("age_hint"))+'</span></label><input id="ob-age" type="number" inputmode="numeric" min="1" max="120" placeholder="25" aria-required="true" aria-describedby="e-age"><div class="field-err" id="e-age" role="alert"></div>'
     +'<label>'+esc(t("country"))+'</label><div class="seg"><button type="button" data-c="NP" class="'+(country==="NP"?"on":"")+'">🇳🇵 '+esc(t("nepal"))+'</button><button type="button" data-c="IN" class="'+(country==="IN"?"on":"")+'">🇮🇳 '+esc(t("india"))+'</button></div>'
-    +'<label>'+esc(t("q_city"))+'</label><input id="ob-city" maxlength="80" placeholder="'+esc(t("city_ph"))+'"><div class="field-err" id="e-city"></div>'
-    +'<label>'+esc(t("q_about"))+' '+esc(t("q_about_opt"))+'</label><textarea id="ob-about" maxlength="500" placeholder="'+esc(t("about_ph"))+'"></textarea><div class="small muted" style="text-align:right"><span id="ob-about-n">0</span>/500</div>'
+    +'<label for="ob-city">'+esc(t("q_city"))+' '+reqStar()+'</label><input id="ob-city" maxlength="80" placeholder="'+esc(t("city_ph"))+'" autocomplete="address-level2" aria-required="true" aria-describedby="e-city"><div class="field-err" id="e-city" role="alert"></div>'
+    +'<label for="ob-about">'+esc(t("q_about"))+' '+esc(t("q_about_opt"))+'</label><textarea id="ob-about" maxlength="500" placeholder="'+esc(t("about_ph"))+'"></textarea><div class="small muted" style="text-align:right"><span id="ob-about-n">0</span>/500</div>'
     +'<label>'+esc(t("q_lang"))+'</label><div class="seg" id="ob-lang"><button type="button" data-l="en" class="'+(lang==="en"?"on":"")+'">English</button><button type="button" data-l="ne" class="'+(lang==="ne"?"on":"")+'">नेपाली</button><button type="button" data-l="hi" class="'+(lang==="hi"?"on":"")+'">हिन्दी</button></div>'
-    +'<label>'+esc(t("q_photo"))+'</label><input id="ob-photo" type="file" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("photo_skip"))+'</p>'
+    +'<label for="ob-photo">'+esc(t("q_photo"))+'</label><input id="ob-photo" type="file" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("photo_skip"))+'</p>'
     +'<label class="check-row"><input type="checkbox" id="ob-c1"><span>'+esc(t("consent_age"))+'</span></label>'
     +'<label class="check-row"><input type="checkbox" id="ob-c2"><span>'+esc(t("consent_terms"))+' — <a href="#/help?topic=terms">'+esc(t("terms"))+'</a> · <a href="#/help?topic=privacy">'+esc(t("privacy"))+'</a></span></label>'
-    +'<div class="field-err" id="e-consent"></div>'
+    +'<div class="field-err" id="e-consent" role="alert"></div>'
     +'<button class="btn" type="submit" id="ob-submit">'+esc(t("create_profile"))+'</button>'
     +'<p class="small" style="text-align:center;margin-top:10px">'+esc(t("username_generated"))+'</p>'
     +'</form></div>');
@@ -447,10 +505,10 @@ function renderOnboarding(){
     e.preventDefault();
     var name=$("#ob-name").value.trim(), age=parseInt($("#ob-age").value,10), city=$("#ob-city").value.trim(), about=$("#ob-about").value.trim();
     var ok=true;
-    $("#e-name").textContent=""; $("#e-age").textContent=""; $("#e-city").textContent=""; $("#e-consent").textContent="";
-    if(name.length<2||name.length>60){ $("#e-name").textContent=t("name_short"); ok=false; }
-    if(isNaN(age)||age<1||age>120){ $("#e-age").textContent=t("age_invalid"); ok=false; }
-    if(!city){ $("#e-city").textContent=t("city_required"); ok=false; }
+    setFieldErr("ob-name","e-name",""); setFieldErr("ob-age","e-age",""); setFieldErr("ob-city","e-city",""); $("#e-consent").textContent="";
+    if(name.length<2||name.length>60){ setFieldErr("ob-name","e-name",t("name_short")); ok=false; }
+    if(isNaN(age)||age<1||age>120){ setFieldErr("ob-age","e-age",t("age_invalid")); ok=false; }
+    if(!city){ setFieldErr("ob-city","e-city",t("city_required")); ok=false; }
     if(!$("#ob-c1").checked||!$("#ob-c2").checked){ $("#e-consent").textContent=t("consent_required"); ok=false; }
     if(!ok) return;
     if(age<18){ go("#/age-block"); return; }
@@ -631,14 +689,14 @@ function openFilters(){
   var countsNote='<p class="small">'+esc(t("per_page_note"))+'</p>';
   openSheet('<h2>'+esc(t("filters"))+'</h2>'+countsNote
     +'<label>'+esc(t("filter_country"))+'</label><div class="seg" id="fl-country"><button type="button" data-v="own" class="'+(f.country==="own"?"on":"")+'">'+esc(t("near_me"))+'</button><button type="button" data-v="NP" class="'+(f.country==="NP"?"on":"")+'">🇳🇵 '+esc(t("nepal"))+'</button><button type="button" data-v="IN" class="'+(f.country==="IN"?"on":"")+'">🇮🇳 '+esc(t("india"))+'</button><button type="button" data-v="all" class="'+(f.country==="all"?"on":"")+'">'+esc(t("all_countries"))+'</button></div>'
-    +'<label>'+esc(t("categories"))+'</label><div id="fl-cats" style="display:flex;flex-wrap:wrap;gap:6px">'+cats.map(function(c){ return '<button type="button" class="chip'+(f.categories.indexOf(c)>=0?" on":"")+'" data-cat="'+esc(c)+'">'+esc(c)+'</button>'; }).join("")+'</div>'
+    +'<label id="lbl-flcats">'+esc(t("categories"))+'</label><div id="fl-cats" role="group" aria-labelledby="lbl-flcats" style="display:flex;flex-wrap:wrap;gap:6px">'+cats.map(function(c){ return '<button type="button" class="chip'+(f.categories.indexOf(c)>=0?" on":"")+'" data-cat="'+esc(c)+'" aria-pressed="'+(f.categories.indexOf(c)>=0?"true":"false")+'">'+esc(c)+'</button>'; }).join("")+'</div>'
     +'<label>'+esc(t("amount_band"))+'</label><div class="seg" id="fl-band"><button type="button" data-v="" class="'+(!f.band?"on":"")+'">'+esc(t("all"))+'</button><button type="button" data-v="small" class="'+(f.band==="small"?"on":"")+'">'+esc(t("band_small"))+'</button><button type="button" data-v="medium" class="'+(f.band==="medium"?"on":"")+'">'+esc(t("band_medium"))+'</button><button type="button" data-v="large" class="'+(f.band==="large"?"on":"")+'">'+esc(t("band_large"))+'</button><button type="button" data-v="huge" class="'+(f.band==="huge"?"on":"")+'">'+esc(t("band_huge"))+'</button></div>'
     +'<label class="check-row"><input type="checkbox" id="fl-verified" '+(f.verifiedOnly?"checked":"")+'> '+esc(t("verified_only"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="fl-paydirect" '+(f.payDirectOnly?"checked":"")+'> '+esc(t("pay_direct_only"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="fl-charity" '+(f.charity?"checked":"")+'> '+esc(t("charity_only"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="fl-billshown" '+(f.billShown?"checked":"")+'> '+esc(t("bill_shown"))+'</label>'
     +'<label>'+esc(t("posted"))+'</label><div class="seg" id="fl-posted"><button type="button" data-v="any" class="'+(f.posted==="any"?"on":"")+'">'+esc(t("any_time"))+'</button><button type="button" data-v="today" class="'+(f.posted==="today"?"on":"")+'">'+esc(t("today"))+'</button><button type="button" data-v="week" class="'+(f.posted==="week"?"on":"")+'">'+esc(t("this_week"))+'</button><button type="button" data-v="month" class="'+(f.posted==="month"?"on":"")+'">'+esc(t("this_month"))+'</button></div>'
-    +'<label>'+esc(t("near_me"))+'</label><input id="fl-city" value="'+esc(f.city||"")+'" placeholder="'+esc(t("city_ph"))+'">'
+    +'<label for="fl-city">'+esc(t("near_me"))+'</label><input id="fl-city" value="'+esc(f.city||"")+'" placeholder="'+esc(t("city_ph"))+'">'
     +'<label>'+esc(t("sort"))+'</label><div class="seg" id="fl-sort"><button type="button" data-v="recommended" class="'+(f.sort==="recommended"?"on":"")+'">'+esc(t("sort_recommended"))+'</button><button type="button" data-v="newest" class="'+(f.sort==="newest"?"on":"")+'">'+esc(t("sort_newest"))+'</button><button type="button" data-v="almost_funded" class="'+(f.sort==="almost_funded"?"on":"")+'">'+esc(t("sort_almost"))+'</button><button type="button" data-v="most_supported" class="'+(f.sort==="most_supported"?"on":"")+'">'+esc(t("sort_supported"))+'</button></div>'
     +'<div class="btn-row"><button class="btn secondary" id="fl-clear">'+esc(t("clear_filters"))+'</button><button class="btn" id="fl-apply">'+esc(t("apply_filters"))+'</button></div>');
   function seg(id, fn){ $all("#"+id+" button").forEach(function(b){ b.onclick=function(){ $all("#"+id+" button").forEach(function(x){ x.classList.remove("on"); }); b.classList.add("on"); fn(b.getAttribute("data-v")); }; }); }
@@ -647,7 +705,7 @@ function openFilters(){
   seg("fl-band", function(v){ nf.band=v; });
   seg("fl-posted", function(v){ nf.posted=v; });
   seg("fl-sort", function(v){ nf.sort=v; });
-  $all("#fl-cats .chip").forEach(function(b){ b.onclick=function(){ var c=b.getAttribute("data-cat"); var i=nf.categories.indexOf(c); if(i>=0) nf.categories.splice(i,1); else nf.categories.push(c); b.classList.toggle("on"); }; });
+  $all("#fl-cats .chip").forEach(function(b){ b.onclick=function(){ var c=b.getAttribute("data-cat"); var i=nf.categories.indexOf(c); if(i>=0) nf.categories.splice(i,1); else nf.categories.push(c); b.classList.toggle("on"); b.setAttribute("aria-pressed", b.classList.contains("on")?"true":"false"); }; });
   $("#fl-clear").onclick=function(){ S.filters={country:"own",categories:[],band:"",verifiedOnly:false,payDirectOnly:false,charity:false,billShown:false,posted:"any",city:"",sort:"recommended"}; saveFilters(); S.seen={}; saveSeen(); closeSheets(); route(); };
   $("#fl-apply").onclick=function(){
     nf.verifiedOnly=$("#fl-verified").checked; nf.payDirectOnly=$("#fl-paydirect").checked; nf.charity=$("#fl-charity").checked; nf.billShown=$("#fl-billshown").checked; nf.city=$("#fl-city").value.trim();
@@ -683,19 +741,20 @@ function renderBill(id){
       +'<div class="kv"><span>'+esc(t("request_id"))+'</span><b>'+esc(bill.request_code||bill.requestCode||bill.id||"")+'</b></div>'
       +'<div class="kv"><span>'+esc(t("views"))+'</span><b>'+esc(bill.views||0)+'</b></div>'
       +'<div class="kv"><span>'+esc(t("payout_hint"))+'</span><b>'+esc(bill.payout_hint||bill.payoutHint||bill.payout_method||"—")+'</b></div>'
-      +'<h3>'+esc(t("story"))+'</h3><p>'+esc(bill.story||"")+'</p>'
-      +(bill.details?'<h3>'+esc(t("details"))+'</h3><p>'+esc(bill.details)+'</p>':"")
-      +'<div class="row-card card" id="poster-row" style="margin-top:12px"><div class="avatar">'+(user.photo_url||user.photoUrl?'<img src="'+esc(user.photo_url||user.photoUrl)+'" alt="">':esc(initials(name)))+'</div><div class="grow"><div class="t">'+esc(name)+'</div><div class="s">@'+esc(uname)+' · '+esc(t("member_since"))+' '+esc((user.memberSince||user.created_at)?fmtDate(user.memberSince||user.created_at):"")+'</div></div><span>›</span></div>'
+      +'<h2>'+esc(t("story"))+'</h2><p>'+esc(bill.story||"")+'</p>'
+      +(bill.details?'<h2>'+esc(t("details"))+'</h2><p>'+esc(bill.details)+'</p>':"")
+      +'<div class="row-card card" id="poster-row" tabindex="0" role="button" aria-label="'+esc(name)+'" style="margin-top:12px"><div class="avatar">'+(user.photo_url||user.photoUrl?'<img src="'+esc(user.photo_url||user.photoUrl)+'" alt="">':esc(initials(name)))+'</div><div class="grow"><div class="t">'+esc(name)+'</div><div class="s">@'+esc(uname)+' · '+esc(t("member_since"))+' '+esc((user.memberSince||user.created_at)?fmtDate(user.memberSince||user.created_at):"")+'</div></div><span>›</span></div>'
       +'<div class="btn-row"><a class="btn" href="#/gift/'+encodeURIComponent(bill.id)+'">💙 '+esc(t("help_this_bill"))+'</a></div>'
       +((bill.pay_direct||bill.payDirect)?'<div class="btn-row"><button class="btn secondary" id="pay-direct-btn">'+esc(t("pay_direct"))+'</button></div>':"")
       +'<div class="btn-row"><button class="btn secondary small" id="share-btn">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="basket-btn">🧺 '+esc(t("add_basket"))+'</button><button class="btn secondary small" id="report-btn">🚩 '+esc(t("report"))+'</button></div>'
       +(isOwner?'<div class="btn-row"><a class="btn secondary small" href="#/mybills">'+esc(t("my_bills"))+'</a></div>':"")
       +'</div>'
-      +'<div class="card" style="margin-top:12px"><h3>'+esc(t("supporters_title"))+' ('+supporters.length+')</h3>'
+      +'<div class="card" style="margin-top:12px"><h2>'+esc(t("supporters_title"))+' ('+supporters.length+')</h2>'
       +(supporters.length? supporters.map(function(s){ return '<div class="kv"><span>'+esc(s.anonymous?t("anonymous"):(s.display_name||s.displayName||s.username||t("anonymous")))+'</span><b>'+esc(money(s.amount_minor||s.amountMinor||0,cur))+'</b></div>'; }).join("") : '<p>'+esc(t("no_supporters"))+'</p>')
       +'</div>'
-      +'<div class="card" style="margin-top:12px"><h3>'+esc(t("how_helping"))+'</h3><p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'</div>');
+      +'<div class="card" style="margin-top:12px"><h2>'+esc(t("how_helping"))+'</h2><p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'</div>');
     $("#poster-row").onclick=function(){ if(uname) go("#/profile/"+encodeURIComponent(uname)); };
+    $("#poster-row").addEventListener("keydown", function(e){ if((e.key==="Enter"||e.key===" ")&&uname){ e.preventDefault(); go("#/profile/"+encodeURIComponent(uname)); } });
     $("#share-btn").onclick=function(){ copyText(location.origin+location.pathname+"#/bill/"+bill.id, t("copied_link")); };
     $("#basket-btn").onclick=function(){
       if(S.basket.indexOf(bill.id)<0){ S.basket.push(bill.id); saveBasket(); toast(t("add_to_basket_done")); } else toast(t("basket"));
@@ -703,7 +762,7 @@ function renderBill(id){
     $("#report-btn").onclick=function(){ openReportSheet("bill", bill.id); };
     var pd=$("#pay-direct-btn"); if(pd) pd.onclick=function(){ openPayDirect(bill); };
   }).catch(function(e){
-    view(emptyState("🧾", t("bill_not_found"), e.message||"", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>'));
+    view(emptyState("🧾", t("bill_not_found"), e.message||"", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>', "h1"));
   });
 }
 function openPayDirect(bill){
@@ -726,29 +785,29 @@ function openReportSheet(targetType, targetId){
   ];
   openSheet('<h2>'+esc(t("report"))+'</h2><p class="small">'+esc(t("your_reports"))+'</p>'
     +'<label>'+esc(t("report_reason"))+'</label><div id="rep-reasons" style="display:grid;gap:6px">'+reasons.map(function(r){ return '<button type="button" class="btn secondary small" style="text-align:left" data-r="'+r[0]+'">'+esc(r[1])+'</button>'; }).join("")+'</div>'
-    +'<label>'+esc(t("report_note"))+'</label><textarea id="rep-note" maxlength="600"></textarea>'
+    +'<label for="rep-note">'+esc(t("report_note"))+'</label><textarea id="rep-note" maxlength="600"></textarea>'
     +'<div class="btn-row"><button class="btn secondary" id="rep-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="rep-send" disabled>'+esc(t("send_report"))+'</button></div>');
   var chosen=null;
   $all("#rep-reasons button").forEach(function(b){ b.onclick=function(){ chosen=b.getAttribute("data-r"); $all("#rep-reasons button").forEach(function(x){ x.style.borderColor=""; }); b.style.borderColor="var(--accent)"; $("#rep-send").disabled=false; }; });
   $("#rep-cancel").onclick=closeSheets;
   $("#rep-send").onclick=async function(){
-    var btn=$("#rep-send"); btn.disabled=true;
+    var btn=$("#rep-send"); btn.disabled=true; btn.textContent=t("loading");
     try{
       var res=await api("/reports", {method:"POST", body:{targetType:targetType, targetId:targetId, reason:chosen, note:$("#rep-note").value.trim()}});
       closeSheets();
       toast(res&&res.paused? t("report_paused") : t("report_sent"));
       if(res&&res.paused) route();
-    }catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+    }catch(e){ btn.disabled=false; btn.textContent=t("send_report"); toast(e.message||t("err_generic"), true); }
   };
 }
 function renderPhoto(billId){
-  view('<a href="#/bill/'+encodeURIComponent(billId)+'" class="small">← '+esc(t("back"))+'</a><div id="photo-wrap" style="margin-top:10px">'+skeleton(1)+'</div>');
+  view('<a href="#/bill/'+encodeURIComponent(billId)+'" class="small">← '+esc(t("back"))+'</a><h1>'+esc(t("bill_photo_heading"))+'</h1><div id="photo-wrap" style="margin-top:10px">'+skeleton(1)+'</div>');
   fetchBill(billId).then(function(bill){
     var photo=bill.photo_url||bill.photoUrl||bill.public_photo_url||"";
     var sup=bill.support_photo_url||bill.supportPhotoUrl||"";
     $("#photo-wrap").innerHTML = photo
       ? '<img class="full-photo" src="'+esc(photo)+'" alt="'+esc(t("bill_photo_alt"))+'">'
-        +(sup?'<h3>'+esc(t("support_photo"))+'</h3><img class="full-photo" src="'+esc(sup)+'" alt="">':"")
+        +(sup?'<h2>'+esc(t("support_photo"))+'</h2><img class="full-photo" src="'+esc(sup)+'" alt="'+esc(t("support_photo"))+'" loading="lazy">':"")
         +'<div class="btn-row"><a class="btn" href="#/gift/'+encodeURIComponent(bill.id)+'">💙 '+esc(t("help_this_bill"))+'</a><button class="btn secondary" id="ph-share">🔗 '+esc(t("share"))+'</button></div>'
       : emptyState("🖼️", t("no_photo"), "", "");
     var s=$("#ph-share"); if(s) s.onclick=function(){ copyText(location.origin+location.pathname+"#/bill/"+bill.id, t("copied_link")); };
@@ -789,8 +848,8 @@ function renderGift(billId, q){
         +'<div class="card" style="margin-top:12px"><label>'+esc(t("choose_amount"))+'</label>'
         +'<div class="grid2">'+chips.map(function(c){ return '<button type="button" class="btn secondary chip-amt" data-v="'+c+'">'+esc(money(c,cur))+'</button>'; }).join("")
         +'<button type="button" class="btn secondary chip-amt" data-v="'+remaining+'">'+esc(t("full_remaining"))+' ('+esc(money(remaining,cur))+')</button></div>'
-        +'<label>'+esc(t("custom"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="g-custom" type="number" inputmode="decimal" min="0" step="1" placeholder="'+esc(t("gift_amount_ph"))+'">'
-        +'<div class="field-err" id="g-err"></div>'
+        +'<label for="g-custom">'+esc(t("custom"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="g-custom" type="number" inputmode="decimal" min="0" step="1" placeholder="'+esc(t("gift_amount_ph"))+'" aria-describedby="g-err">'
+        +'<div class="field-err" id="g-err" role="alert"></div>'
         +'<p class="small">'+esc(t("gift_min_note",{n:money(1000,cur)}))+'</p>'
         +'<p id="g-after" class="small"></p>'
         +'<div class="btn-row"><a class="btn secondary" href="#/bill/'+encodeURIComponent(bill.id)+'">'+esc(t("back"))+'</a><button class="btn" id="g-next">'+esc(t("continue_btn"))+'</button></div></div>'
@@ -803,9 +862,10 @@ function renderGift(billId, q){
       }
       $("#g-next").onclick=async function(){
         if(!needUser()) return;
-        if(g.amountMinor<=0){ $("#g-err").textContent=t("amount_positive"); return; }
-        if(g.amountMinor<1000){ $("#g-err").textContent=t("amount_min",{n:money(1000,cur)}); return; }
-        if(g.amountMinor>remaining && remaining>0){ $("#g-err").textContent=t("amount_max",{n:money(remaining,cur)}); return; }
+        setFieldErr("g-custom","g-err","");
+        if(g.amountMinor<=0){ setFieldErr("g-custom","g-err",t("amount_positive")); return; }
+        if(g.amountMinor<1000){ setFieldErr("g-custom","g-err",t("amount_min",{n:money(1000,cur)})); return; }
+        if(g.amountMinor>remaining && remaining>0){ setFieldErr("g-custom","g-err",t("amount_max",{n:money(remaining,cur)})); return; }
         var btn=$("#g-next"); btn.disabled=true; btn.textContent=t("loading");
         try{
           try{ g.quote=await api("/gifts/quote", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor}}); }
@@ -824,15 +884,16 @@ function renderGift(billId, q){
         +'<div class="kv"><span>'+esc(t("your_help"))+' → '+esc(name)+'</span><b>'+esc(money(g.amountMinor,cur))+'</b></div>'
         +'<div class="kv"><span>'+esc(t("fee_label"))+'</span><b>'+esc(money(fee,cur))+'</b></div>'
         +'<div class="kv"><span>'+esc(t("tip_label"))+'</span><b>'+esc(money(tip,cur))+'</b></div>'
-        +'<div class="kv"><span><strong>'+esc(t("total_send"))+'</strong></span><b>'+esc(money(total,cur))+'</b></div></div>'
+        +'<div class="kv"><span><strong>'+esc(t("total_send"))+'</strong></span><b>'+esc(money(total,cur))+'</b></div>'
+        +'<p class="small" style="margin-top:10px">'+esc(t("fee_demo_note",{fee:money(fee,cur),amount:money(g.amountMinor,cur),name:name}))+'</p></div>'
         +feeSentenceHtml()
         +'<div class="card" style="margin-top:12px"><label>'+esc(t("tip_label"))+'</label>'
-        +'<div class="seg" id="tip-seg"><button type="button" data-tip="none" class="on">'+esc(t("no_thanks"))+'</button><button type="button" data-tip="5">5%</button><button type="button" data-tip="10">10%</button><button type="button" data-tip="custom">'+esc(t("custom"))+'</button></div>'
-        +'<div id="tip-custom-wrap" hidden><label>'+esc(t("tip_custom"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="tip-custom" type="number" min="0" step="1"></div>'
+        +'<div class="seg" id="tip-seg"><button type="button" data-tip="none" class="'+(g.tipChoice==="none"?"on":"")+'">'+esc(t("no_tip"))+'</button><button type="button" data-tip="5" class="'+(g.tipChoice==="5"?"on":"")+'">5%</button><button type="button" data-tip="10" class="'+(g.tipChoice==="10"?"on":"")+'">10%</button><button type="button" data-tip="custom" class="'+(g.tipChoice==="custom"?"on":"")+'">'+esc(t("custom"))+'</button></div>'
+        +'<div id="tip-custom-wrap" '+(g.tipChoice==="custom"?"":"hidden")+'>'+'<label for="tip-custom">'+esc(t("tip_custom"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="tip-custom" type="number" min="0" step="1" value="'+(g.tipChoice==="custom"&&g.tipMinor?fromMinor(g.tipMinor):"")+'"></div>'
         +'<p class="small">'+esc(t("tip_separate"))+'</p></div>'
         +'<div class="card" style="margin-top:12px"><label class="check-row"><input type="checkbox" id="g-confirm-box"><span>'+esc(t("understand_gift"))+'</span></label>'
         +'<label class="check-row"><input type="checkbox" id="g-human"><span>'+esc(t("human_check"))+' — '+esc(t("turnstile_note"))+'</span></label>'
-        +'<div class="field-err" id="g-err2"></div>'
+        +'<div class="field-err" id="g-err2" role="alert"></div>'
         +'<div class="btn-row"><button class="btn secondary" id="g-back">'+esc(t("back"))+'</button><button class="btn" id="g-to-send">'+esc(t("show_details"))+'</button></div></div>'
         +crossBorderHtml());
       $all("#tip-seg button").forEach(function(b){
@@ -875,6 +936,7 @@ function renderGift(billId, q){
       var first=methods[0]||{};
       var method=(first.method||bill.payout_method||"").toLowerCase();
       var copyVal=first.account||first.accountNumber||first.number||first.vpa||first.upiId||"";
+      var feeForSend=(g.quote&&g.quote.feeMinor!=null)?g.quote.feeMinor:quoteLocal(g.amountMinor,cur,!!bill.charity).feeMinor;
       function methodCard(p, idx){
         var m=(p.method||"").toLowerCase();
         var account=p.account||p.accountNumber||p.number||p.vpa||p.upiId||"";
@@ -892,7 +954,7 @@ function renderGift(billId, q){
           +(branch?'<div class="kv"><span>'+esc(t("branch"))+'</span><b>'+esc(branch)+'</b></div>':"")
           +(ifsc?'<div class="kv"><span>'+esc(t("ifsc"))+'</span><b>'+esc(ifsc)+'</b></div>':"")
           +(link?'<div class="kv"><span>'+esc(t("payment_link"))+'</span><b><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(t("open_cta"))+'</a></b></div>':"")
-          +(qr?'<div style="text-align:center;margin:8px 0"><img src="'+esc(qr)+'" alt="QR" style="max-width:220px;border-radius:12px"></div>':"")
+          +(qr?'<div style="text-align:center;margin:8px 0"><img src="'+esc(qr)+'" alt="'+esc(t("qr_alt"))+'" style="max-width:220px;border-radius:12px"></div>':"")
           +'<div class="kv"><span>'+esc(t("you_send"))+'</span><b>'+esc(money(g.amountMinor,cur))+'</b></div>'
           +(account?'<div class="btn-row"><button class="btn secondary" data-copy="'+esc(account)+'">'+esc(t("copy_number"))+'</button></div>':"")
           +'<p style="margin-top:12px">'+esc(sendInstructions(m))+'</p>'
@@ -902,13 +964,14 @@ function renderGift(billId, q){
       var pd=g.payDirectInfo;
       view(stepHead()+'<h1>'+esc(t("gift_send_title"))+'</h1>'+billCard()+demoHtml()
         +(methods.length? methods.map(methodCard).join("") : '<div class="card" style="margin-top:12px"><p>'+esc(t("no_payout_methods"))+'</p></div>')
-        +(pd?'<div class="card" style="margin-top:12px"><h3>'+esc(t("pay_direct"))+'</h3>'
+        +'<p class="small" style="text-align:center;margin-top:10px">'+esc(t("fee_demo_note",{fee:money(feeForSend,cur),amount:money(g.amountMinor,cur),name:name}))+'</p>'
+        +(pd?'<div class="card" style="margin-top:12px"><h2>'+esc(t("pay_direct"))+'</h2>'
           +'<div class="kv"><span>'+esc(t("biller"))+'</span><b>'+esc(pd.billerName||"")+'</b></div>'
           +(pd.billerRef?'<div class="kv"><span>'+esc(t("reference_label"))+'</span><b>'+esc(pd.billerRef)+'</b></div>':"")
           +(pd.billerDestination?'<div class="kv"><span>'+esc(t("biller_destination"))+'</span><b>'+esc(pd.billerDestination)+'</b></div>':"")
           +'<p class="small">'+esc(t("pay_biller_steps"))+'</p></div>':"")
         +crossBorderHtml()
-        +'<div class="card" style="margin-top:12px"><label>'+esc(t("reference_opt"))+'</label><input id="g-ref" maxlength="80">'
+        +'<div class="card" style="margin-top:12px"><label for="g-ref">'+esc(t("reference_opt"))+'</label><input id="g-ref" maxlength="80">'
         +'<div class="btn-row"><button class="btn" id="g-sent">'+esc(t("i_sent_it"))+'</button></div>'
         +'<button class="btn ghost" id="g-cancel">'+esc(t("couldnt_send"))+'</button></div>');
       $all("[data-copy]").forEach(function(b){ b.onclick=function(){ copyText(b.getAttribute("data-copy")||"", t("copied")); }; });
@@ -932,7 +995,7 @@ function renderGift(billId, q){
         +'<a class="btn secondary" href="#/mybills">'+esc(t("my_bills"))+'</a></div></div>');
     }
   }).catch(function(e){
-    view(emptyState("🧾", t("bill_not_found"), e.message||"", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>'));
+    view(emptyState("🧾", t("bill_not_found"), e.message||"", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>', "h1"));
   });
 }
 
@@ -959,7 +1022,7 @@ function saveDraft(p){
   }catch(e){}
 }
 function renderPost(){
-  if(!S.user){ view(emptyState("📝", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>')); return; }
+  if(!S.user){ view(emptyState("📝", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
   var p=S.post||loadDraft();
   S.post=p;
   if(!p.city) p.city=S.user.city||"";
@@ -994,20 +1057,21 @@ function renderPost(){
   function draw1(){
     var cats=I.categories();
     view('<h1>'+esc(t("post_title"))+'</h1>'+head()
+      +'<p class="small">'+esc(t("privacy_note_forms"))+'</p><p class="small">'+esc(t("required_note"))+'</p>'
       +'<div class="card" style="margin-top:10px">'
-      +'<label>'+esc(t("title_label"))+'</label><input id="f-title" maxlength="80" value="'+esc(p.title)+'"><div class="field-err" id="e-title"></div>'
-      +'<label>'+esc(t("category"))+'</label><div id="f-cats" style="display:flex;flex-wrap:wrap;gap:6px">'+cats.map(function(c){ return '<button type="button" class="chip'+(p.category===c?" on":"")+'" data-cat="'+esc(c)+'">'+esc(c)+'</button>'; }).join("")+'</div><div class="field-err" id="e-cat"></div>'
-      +'<label>'+esc(t("biller"))+'</label><input id="f-company" maxlength="120" value="'+esc(p.company)+'">'
-      +'<label>'+esc(t("amount_label"))+' ('+esc(cur==="INR"?"₹":"रू")+' '+cur+')</label><input id="f-amount" type="number" inputmode="decimal" min="0" step="1" value="'+esc(p.amountRupees)+'"><div class="field-err" id="e-amount"></div>'
-      +'<label>'+esc(t("covered_label"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="f-covered" type="number" inputmode="decimal" min="0" step="1" value="'+esc(p.coveredRupees)+'">'
-      +'<label>'+esc(t("due_date"))+'</label><input id="f-due" type="date" value="'+esc(p.dueDate)+'">'
-      +'<label>'+esc(t("city"))+'</label><input id="f-city" maxlength="80" value="'+esc(p.city)+'">'
-      +'<label>'+esc(t("short_story"))+' <span class="small muted">(<span id="story-n">'+p.story.length+'</span>/280)</span></label><textarea id="f-story" maxlength="280" placeholder="'+esc(t("story_hint"))+'">'+esc(p.story)+'</textarea><div class="field-err" id="e-story"></div>'
-      +'<label>'+esc(t("long_story"))+'</label><textarea id="f-details" maxlength="1500">'+esc(p.details)+'</textarea>'
+      +'<label for="f-title">'+esc(t("title_label"))+' '+reqStar()+'</label><input id="f-title" maxlength="80" value="'+esc(p.title)+'" aria-required="true" aria-describedby="e-title"><div class="field-err" id="e-title" role="alert"></div>'
+      +'<label id="lbl-cat">'+esc(t("category"))+' '+reqStar()+'</label><div id="f-cats" role="group" aria-labelledby="lbl-cat" style="display:flex;flex-wrap:wrap;gap:6px">'+cats.map(function(c){ return '<button type="button" class="chip'+(p.category===c?" on":"")+'" data-cat="'+esc(c)+'" aria-pressed="'+(p.category===c?"true":"false")+'">'+esc(c)+'</button>'; }).join("")+'</div><div class="field-err" id="e-cat" role="alert"></div>'
+      +'<label for="f-company">'+esc(t("biller"))+'</label><input id="f-company" maxlength="120" value="'+esc(p.company)+'">'
+      +'<label for="f-amount">'+esc(t("amount_label"))+' '+reqStar()+' ('+esc(cur==="INR"?"₹":"रू")+' '+cur+')</label><input id="f-amount" type="number" inputmode="decimal" min="0" step="1" value="'+esc(p.amountRupees)+'" aria-required="true" aria-describedby="e-amount"><div class="field-err" id="e-amount" role="alert"></div>'
+      +'<label for="f-covered">'+esc(t("covered_label"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="f-covered" type="number" inputmode="decimal" min="0" step="1" value="'+esc(p.coveredRupees)+'">'
+      +'<label for="f-due">'+esc(t("due_date"))+'</label><input id="f-due" type="date" value="'+esc(p.dueDate)+'">'
+      +'<label for="f-city">'+esc(t("city"))+'</label><input id="f-city" maxlength="80" value="'+esc(p.city)+'" autocomplete="address-level2">'
+      +'<label for="f-story">'+esc(t("short_story"))+' '+reqStar()+' <span class="small muted">(<span id="story-n">'+p.story.length+'</span>/280)</span></label><textarea id="f-story" maxlength="280" placeholder="'+esc(t("story_hint"))+'" aria-required="true" aria-describedby="e-story">'+esc(p.story)+'</textarea><div class="field-err" id="e-story" role="alert"></div>'
+      +'<label for="f-details">'+esc(t("long_story"))+'</label><textarea id="f-details" maxlength="1500">'+esc(p.details)+'</textarea>'
       +'<label class="check-row"><input type="checkbox" id="f-charity" '+(p.charity?"checked":"")+'> '+esc(t("charity_toggle"))+'</label>'
       +'<div id="charity-wrap" '+(p.charity?"":"hidden")+'><label>'+esc(t("charity_desc"))+'</label><input id="f-charity-desc" maxlength="200" value="'+esc(p.charityDesc)+'"></div>'
       +'</div>'+nav(false, t("next"), null, true));
-    $all("#f-cats .chip").forEach(function(b){ b.onclick=function(){ p.category=b.getAttribute("data-cat"); $all("#f-cats .chip").forEach(function(x){ x.classList.toggle("on", x===b); }); }; });
+    $all("#f-cats .chip").forEach(function(b){ b.onclick=function(){ p.category=b.getAttribute("data-cat"); $all("#f-cats .chip").forEach(function(x){ x.classList.toggle("on", x===b); x.setAttribute("aria-pressed", x===b?"true":"false"); }); }; });
     $("#f-story").addEventListener("input", function(){ $("#story-n").textContent=String($("#f-story").value.length); });
     $("#f-charity").addEventListener("change", function(){ $("#charity-wrap").hidden=!$("#f-charity").checked; });
     bindNav(null, function(){
@@ -1017,28 +1081,28 @@ function renderPost(){
       p.story=$("#f-story").value.trim(); p.details=$("#f-details").value.trim();
       p.charity=$("#f-charity").checked; p.charityDesc=$("#f-charity-desc")?$("#f-charity-desc").value.trim():"";
       var ok=true;
-      $("#e-title").textContent=""; $("#e-cat").textContent=""; $("#e-amount").textContent=""; $("#e-story").textContent="";
-      if(!p.title){ $("#e-title").textContent=t("missing_title"); ok=false; }
+      setFieldErr("f-title","e-title",""); $("#e-cat").textContent=""; setFieldErr("f-amount","e-amount",""); setFieldErr("f-story","e-story","");
+      if(!p.title){ setFieldErr("f-title","e-title",t("missing_title")); ok=false; }
       if(!p.category){ $("#e-cat").textContent=t("missing_category"); ok=false; }
-      if(toMinor(p.amountRupees)<=0){ $("#e-amount").textContent=t("missing_amount"); ok=false; }
-      if(!p.story){ $("#e-story").textContent=t("missing_story"); ok=false; }
+      if(toMinor(p.amountRupees)<=0){ setFieldErr("f-amount","e-amount",t("missing_amount")); ok=false; }
+      if(!p.story){ setFieldErr("f-story","e-story",t("missing_story")); ok=false; }
       if(!ok) return;
       p.step=2; draw();
     });
   }
-  function fileInput(id, accept){
-    return '<input type="file" id="'+id+'" accept="'+accept+'" style="margin:6px 0">';
+  function fileInput(id, accept, label){
+    return '<input type="file" id="'+id+'" accept="'+accept+'" aria-label="'+esc(label)+'" style="margin:6px 0">';
   }
   function draw2(){
     view('<h1>'+esc(t("post_title"))+'</h1>'+head()
-      +'<div class="card" style="margin-top:10px"><h3>'+esc(t("public_photo"))+'</h3><p class="small">'+esc(t("photo_tips"))+'</p>'
-      +fileInput("f-photo","image/jpeg,image/png,image/webp")
+      +'<div class="card" style="margin-top:10px"><h2>'+esc(t("public_photo"))+'</h2><p class="small">'+esc(t("photo_tips"))+'</p>'
+      +fileInput("f-photo","image/jpeg,image/png,image/webp", t("public_photo"))
       +'<div id="photo-preview"></div><div id="redact-area"></div>'
       +'<h3 style="margin-top:16px">'+esc(t("private_proof"))+'</h3><p class="small">'+esc(t("private_proof_note"))+'</p>'
-      +fileInput("f-proof","image/jpeg,image/png,image/webp,application/pdf")
+      +fileInput("f-proof","image/jpeg,image/png,image/webp,application/pdf", t("private_proof"))
       +'<div id="proof-state" class="small">'+(p.privateProofUrl?esc(t("doc_uploaded")):"")+'</div>'
       +'<h3 style="margin-top:16px">'+esc(t("support_photo"))+'</h3>'
-      +fileInput("f-support","image/jpeg,image/png,image/webp")
+      +fileInput("f-support","image/jpeg,image/png,image/webp", t("support_photo"))
       +'<div id="support-preview"></div></div>'
       +nav(true, t("next"), null, true));
     if(p.photoDataUrl) showRedactor();
@@ -1131,36 +1195,36 @@ function renderPost(){
     var m=po.method;
     var h='<div class="card" style="margin-top:10px" data-payout="'+idx+'"><div style="display:flex;justify-content:space-between;align-items:center"><strong>'+esc(t("payout_hint"))+' '+(idx+1)+'</strong>'
       +'<button type="button" class="btn ghost small" data-remove-payout="'+idx+'">✕ '+esc(t("remove"))+'</button></div>'
-      +'<label>'+esc(t("payment_methods"))+'</label><select data-f="method">'+methods.map(function(mm){ return '<option value="'+mm.id+'" '+(m===mm.id?"selected":"")+'>'+esc(mm.label)+'</option>'; }).join("")+'</select>';
-    if(m==="esewa") h+='<label>'+esc(t("esewa_no"))+'</label><input data-f="account" inputmode="numeric" maxlength="10" value="'+esc(po.account)+'" placeholder="98XXXXXXXX">';
-    else if(m==="khalti") h+='<label>'+esc(t("khalti_no"))+'</label><input data-f="account" inputmode="numeric" maxlength="10" value="'+esc(po.account)+'" placeholder="98XXXXXXXX">';
-    else if(m==="upi") h+='<label>'+esc(t("upi_id"))+'</label><input data-f="account" value="'+esc(po.account)+'" placeholder="name@okhdfc">';
-    else if(m==="payment_link") h+='<label>'+esc(t("payment_link"))+'</label><input data-f="account" value="'+esc(po.account)+'" placeholder="https://…">';
-    else if(m==="fonepay_qr") h+='<label>'+esc(t("fonepay_qr"))+'</label><input type="file" data-f="qrfile" accept="image/jpeg,image/png,image/webp"><p class="small">'+(po.qrUrl?esc(t("doc_uploaded")):"")+'</p>';
+      +'<label for="po-'+idx+'-method">'+esc(t("payment_methods"))+'</label><select id="po-'+idx+'-method" data-f="method">'+methods.map(function(mm){ return '<option value="'+mm.id+'" '+(m===mm.id?"selected":"")+'>'+esc(mm.label)+'</option>'; }).join("")+'</select>';
+    if(m==="esewa") h+='<label for="po-'+idx+'-account">'+esc(t("esewa_no"))+'</label><input id="po-'+idx+'-account" data-f="account" type="tel" inputmode="numeric" autocomplete="tel" maxlength="10" value="'+esc(po.account)+'" placeholder="98XXXXXXXX">';
+    else if(m==="khalti") h+='<label for="po-'+idx+'-account">'+esc(t("khalti_no"))+'</label><input id="po-'+idx+'-account" data-f="account" type="tel" inputmode="numeric" autocomplete="tel" maxlength="10" value="'+esc(po.account)+'" placeholder="98XXXXXXXX">';
+    else if(m==="upi") h+='<label for="po-'+idx+'-account">'+esc(t("upi_id"))+'</label><input id="po-'+idx+'-account" data-f="account" value="'+esc(po.account)+'" placeholder="name@okhdfc">';
+    else if(m==="payment_link") h+='<label for="po-'+idx+'-account">'+esc(t("payment_link"))+'</label><input id="po-'+idx+'-account" data-f="account" value="'+esc(po.account)+'" placeholder="https://…">';
+    else if(m==="fonepay_qr") h+='<label for="po-'+idx+'-qrfile">'+esc(t("fonepay_qr"))+'</label><input type="file" id="po-'+idx+'-qrfile" data-f="qrfile" accept="image/jpeg,image/png,image/webp"><p class="small">'+(po.qrUrl?esc(t("doc_uploaded")):"")+'</p>';
     else {
-      h+='<label>'+esc(t("bank_name"))+'</label><input data-f="bank" value="'+esc(po.bank)+'">'
-        +'<label>'+esc(t("account_no"))+'</label><input data-f="account" inputmode="numeric" value="'+esc(po.account)+'">';
-      if(m==="bank_in") h+='<label>'+esc(t("ifsc"))+'</label><input data-f="ifsc" value="'+esc(po.ifsc)+'" placeholder="SBIN0001234" style="text-transform:uppercase">';
-      h+='<label>'+esc(t("branch"))+'</label><input data-f="branch" value="'+esc(po.branch)+'">';
+      h+='<label for="po-'+idx+'-bank">'+esc(t("bank_name"))+'</label><input id="po-'+idx+'-bank" data-f="bank" value="'+esc(po.bank)+'">'
+        +'<label for="po-'+idx+'-account">'+esc(t("account_no"))+'</label><input id="po-'+idx+'-account" data-f="account" inputmode="numeric" value="'+esc(po.account)+'">';
+      if(m==="bank_in") h+='<label for="po-'+idx+'-ifsc">'+esc(t("ifsc"))+'</label><input id="po-'+idx+'-ifsc" data-f="ifsc" value="'+esc(po.ifsc)+'" placeholder="SBIN0001234" style="text-transform:uppercase">';
+      h+='<label for="po-'+idx+'-branch">'+esc(t("branch"))+'</label><input id="po-'+idx+'-branch" data-f="branch" value="'+esc(po.branch)+'">';
     }
-    if(m!=="fonepay_qr"&&m!=="payment_link") h+='<label>'+esc(t("holder_name"))+'</label><input data-f="holder" value="'+esc(po.holder)+'">';
-    h+='<div class="field-err" data-err></div></div>';
+    if(m!=="fonepay_qr"&&m!=="payment_link") h+='<label for="po-'+idx+'-holder">'+esc(t("holder_name"))+'</label><input id="po-'+idx+'-holder" data-f="holder" autocomplete="name" value="'+esc(po.holder)+'">';
+    h+='<div class="field-err" data-err role="alert"></div></div>';
     return h;
   }
   function draw4(){
     if(p.payouts.length===0) p.payouts=[{method:payoutMethodsFor(S.user.country)[0].id, account:"", holder:"", bank:"", ifsc:"", branch:"", qrUrl:""}];
     view('<h1>'+esc(t("post_title"))+'</h1>'+head()
-      +'<div class="card" style="margin-top:10px"><h3>'+esc(t("payout_step_title"))+'</h3><p>'+esc(t("payout_step_body"))+'</p>'
+      +'<div class="card" style="margin-top:10px"><h2>'+esc(t("payout_step_title"))+'</h2><p>'+esc(t("payout_step_body"))+'</p><p class="small">'+esc(t("privacy_note_forms"))+'</p>'
       +'<div id="payout-list">'+p.payouts.map(function(_,i){ return payoutFormHtml(i); }).join("")+'</div>'
       +'<button class="btn secondary small" id="add-payout" style="margin-top:10px">＋ '+esc(t("payout_hint"))+'</button>'
       +'<label class="check-row" style="margin-top:14px"><input type="checkbox" id="f-pd" '+(p.payDirect?"checked":"")+'> '+esc(t("pay_direct_opt"))+'</label>'
       +'<div id="pd-wrap" '+(p.payDirect?"":"hidden")+'>'
-      +'<label>'+esc(t("biller"))+'</label><input id="f-biller" value="'+esc(p.billerName)+'">'
-      +'<label>'+esc(t("biller_ref"))+'</label><input id="f-bref" value="'+esc(p.billerRef)+'">'
-      +'<label>'+esc(t("biller_dest"))+'</label><input id="f-bdest" value="'+esc(p.billerDest)+'" placeholder="https://…">'
+      +'<label for="f-biller">'+esc(t("biller"))+'</label><input id="f-biller" value="'+esc(p.billerName)+'">'
+      +'<label for="f-bref">'+esc(t("biller_ref"))+'</label><input id="f-bref" value="'+esc(p.billerRef)+'">'
+      +'<label for="f-bdest">'+esc(t("biller_dest"))+'</label><input id="f-bdest" value="'+esc(p.billerDest)+'" placeholder="https://…">'
       +'<p class="small">'+esc(t("direct_pay_note"))+'</p></div>'
       +'<label class="check-row"><input type="checkbox" id="f-belongs"> '+esc(t("payout_belongs"))+'</label>'
-      +'<div class="field-err" id="e-payout"></div></div>'
+      +'<div class="field-err" id="e-payout" role="alert"></div></div>'
       +nav(true, t("next"), null, true));
     function collect(){
       $all("[data-payout]").forEach(function(card){
@@ -1214,7 +1278,7 @@ function renderPost(){
       +'<div class="card" style="margin-top:10px"><p>'+esc(t("verification_optional"))+'</p>'
       +'<label class="check-row"><input type="checkbox" id="v-bill" '+(p.verif.bill?"checked":"")+'> <span><strong>'+esc(t("verify_bill"))+'</strong><br><span class="small">'+esc(t("verify_bill_help"))+'</span></span></label>'
       +'<label class="check-row"><input type="checkbox" id="v-id" '+(p.verif.id?"checked":"")+'> <span><strong>'+esc(t("verify_id"))+'</strong><br><span class="small">'+esc(t("verify_id_help"))+'</span></span></label>'
-      +'<div id="id-wrap" '+(p.verif.id?"":"hidden")+'><label>'+esc(t("id_doc"))+'</label><p class="small">'+esc(t("id_hint"))+'</p><input type="file" id="f-id" accept="image/jpeg,image/png,image/webp,application/pdf"><div class="small" id="id-state">'+(p.idUrl?esc(t("doc_uploaded")):"")+'</div></div>'
+      +'<div id="id-wrap" '+(p.verif.id?"":"hidden")+'><label for="f-id">'+esc(t("id_doc"))+'</label><p class="small">'+esc(t("id_hint"))+'</p><input type="file" id="f-id" accept="image/jpeg,image/png,image/webp,application/pdf"><div class="small" id="id-state">'+(p.idUrl?esc(t("doc_uploaded")):"")+'</div></div>'
       +'<label class="check-row"><input type="checkbox" id="v-name" '+(p.verif.name?"checked":"")+'> <span><strong>'+esc(t("verify_name"))+'</strong><br><span class="small">'+esc(t("verify_name_help"))+'</span></span></label>'
       +'<label class="check-row"><input type="checkbox" id="v-biller" '+(p.verif.biller?"checked":"")+'> <span><strong>'+esc(t("verify_biller"))+'</strong><br><span class="small">'+esc(t("verify_biller_help"))+'</span></span></label>'
       +'<p class="small">'+esc(t("private_proof_note"))+'</p></div>'
@@ -1247,7 +1311,7 @@ function renderPost(){
       +'<div class="kv"><span>'+esc(t("pay_direct"))+'</span><b>'+(p.payDirect?t("yes")+" — "+esc(p.billerName):t("no"))+'</b></div>'
       +'<div class="kv"><span>'+esc(t("verify_centre"))+'</span><b>'+(["bill","id","name","biller"].filter(function(k){ return p.verif[k]; }).map(function(k){ return {bill:t("verify_bill"),id:t("verify_id"),name:t("verify_name"),biller:t("verify_biller")}[k]; }).join(", ")||"—")+'</b></div></div>'
       +'<div class="notice info" style="margin-top:12px">'+esc(t("owner_approval_note"))+'</div>'
-      +'<div class="field-err" id="e-submit"></div>'
+      +'<div class="field-err" id="e-submit" role="alert"></div>'
       +nav(true, t("submit_approval"), null, true));
     bindNav(function(){ p.step=5; draw(); }, async function(){
       var btn=$("#p-next"); btn.disabled=true; btn.textContent=t("loading");
@@ -1304,8 +1368,8 @@ function renderLeaders(){
     +'<div class="tabs" id="ld-tabs">'
     +[["top_supporters",t("top_supporters")],["most_received",t("most_received")],["top_bills",t("top_bills")],["fully_paid",t("fully_paid")],["brands",t("leaders_brands")]].map(function(x){ return '<button class="tab-btn'+(S.leadersTab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")
     +'</div>'
-    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="ld-period" style="flex:1"><option value="7d" '+(S.leadersPeriod==="7d"?"selected":"")+'>'+esc(t("last_7"))+'</option><option value="30d" '+(S.leadersPeriod==="30d"?"selected":"")+'>'+esc(t("last_30"))+'</option><option value="all" '+(S.leadersPeriod==="all"?"selected":"")+'>'+esc(t("all_time"))+'</option></select>'
-    +'<select id="ld-scope" style="flex:1"><option value="all" '+(S.leadersScope==="all"?"selected":"")+'>'+esc(t("scope_all"))+'</option><option value="NP" '+(S.leadersScope==="NP"?"selected":"")+'>🇳🇵 '+esc(t("nepal"))+'</option><option value="IN" '+(S.leadersScope==="IN"?"selected":"")+'>🇮🇳 '+esc(t("india"))+'</option></select></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="ld-period" aria-label="'+esc(t("posted"))+'" style="flex:1"><option value="7d" '+(S.leadersPeriod==="7d"?"selected":"")+'>'+esc(t("last_7"))+'</option><option value="30d" '+(S.leadersPeriod==="30d"?"selected":"")+'>'+esc(t("last_30"))+'</option><option value="all" '+(S.leadersPeriod==="all"?"selected":"")+'>'+esc(t("all_time"))+'</option></select>'
+    +'<select id="ld-scope" aria-label="'+esc(t("filter_country"))+'" style="flex:1"><option value="all" '+(S.leadersScope==="all"?"selected":"")+'>'+esc(t("scope_all"))+'</option><option value="NP" '+(S.leadersScope==="NP"?"selected":"")+'>🇳🇵 '+esc(t("nepal"))+'</option><option value="IN" '+(S.leadersScope==="IN"?"selected":"")+'>🇮🇳 '+esc(t("india"))+'</option></select></div>'
     +'<div id="ld-body">'+skeleton(2)+'</div>');
   $all("#ld-tabs .tab-btn").forEach(function(b){ b.onclick=function(){ S.leadersTab=b.getAttribute("data-t"); renderLeaders(); }; });
   $("#ld-period").onchange=function(){ S.leadersPeriod=$("#ld-period").value; load(); };
@@ -1322,7 +1386,7 @@ function renderLeaders(){
         var resp=pickList(d,["mostResponded"]), asked=pickList(d,["mostAsked"]);
         if(!resp.length && !asked.length){ body.innerHTML=emptyState("🏆", t("empty_leaders"), t("leaders_scope_note")); return; }
         var h2="";
-        if(resp.length) h2+='<h3>'+esc(t("leaders_brands"))+'</h3>'+resp.map(function(r){ return '<div class="card leader-row"><span class="rank">'+esc(r.rank||"")+'</span><div class="grow" style="flex:1"><strong>'+esc(r.name||"")+'</strong><div class="small">'+esc(r.responses||0)+' '+esc(t("leaders_helped"))+'</div></div></div>'; }).join("");
+        if(resp.length) h2+='<h2>'+esc(t("leaders_brands"))+'</h2>'+resp.map(function(r){ return '<div class="card leader-row"><span class="rank">'+esc(r.rank||"")+'</span><div class="grow" style="flex:1"><strong>'+esc(r.name||"")+'</strong><div class="small">'+esc(r.responses||0)+' '+esc(t("leaders_helped"))+'</div></div></div>'; }).join("");
         if(asked.length) h2+='<h3 style="margin-top:12px">'+esc(t("brands_title"))+'</h3>'+asked.map(function(r){ return '<div class="card leader-row"><span class="rank">'+esc(r.rank||"")+'</span><div class="grow" style="flex:1"><strong>'+esc(r.name||"")+'</strong><div class="small">'+esc(r.asks||0)+' '+esc(t("leaders_helped"))+'</div></div></div>'; }).join("");
         body.innerHTML=h2;
         return;
@@ -1365,7 +1429,7 @@ function renderLeaders(){
 function renderBrands(){
   view('<h1>'+esc(t("brands_title"))+'</h1>'
     +'<div class="btn-row" style="margin-bottom:12px"><a class="btn" href="#/brand-new">＋ '+esc(t("brand_new"))+'</a><a class="btn secondary" href="#/auctions">🔨 '+esc(t("auctions"))+'</a></div>'
-    +'<input id="br-search" placeholder="'+esc(t("search_brands"))+'" style="margin-bottom:10px">'
+    +'<label class="sr-only" for="br-search">'+esc(t("search_brands"))+'</label><input id="br-search" placeholder="'+esc(t("search_brands"))+'" style="margin-bottom:10px">'
     +'<div id="br-body">'+skeleton(2)+'</div>');
   var timer=null;
   $("#br-search").addEventListener("input", function(){ clearTimeout(timer); timer=setTimeout(load, 300); });
@@ -1398,7 +1462,7 @@ function renderBrand(id){
     $("#br-share").onclick=function(){ copyText(location.origin+location.pathname+"#/brand/"+b.id, t("copied_link")); };
     $("#br-report").onclick=function(){ openReportSheet("brand", b.id); };
     $("#br-connect").onclick=function(){ openBrandConnect(b); };
-  }).catch(function(e){ view(emptyState("🏷️", t("brand_not_found"), e.message||"")); });
+  }).catch(function(e){ view(emptyState("🏷️", t("brand_not_found"), e.message||"", "", "h1")); });
 }
 function openBrandConnect(brand){
   if(!needUser()) return;
@@ -1408,15 +1472,15 @@ function openBrandConnect(brand){
     :[{id:"free",label:t("plan_free"),priceMinor:0,currency:"NPR"},{id:"plus",label:t("plan_plus"),priceMinor:99900,currency:"NPR"},{id:"campaign",label:t("plan_campaign"),priceMinor:499900,currency:"NPR"}];
   openSheet('<h2>'+esc(t("brand_connect_title"))+'</h2>'+demoHtml()
     +'<p class="small">'+esc(t("brand_connect_body"))+'</p>'
-    +'<label>'+esc(t("brand_name"))+'</label><input id="bc-brand">'
-    +'<label>'+esc(t("display_name"))+'</label><input id="bc-name">'
-    +'<label>'+esc(t("contact_phone"))+'</label><input id="bc-phone" inputmode="tel">'
-    +'<label>'+esc(t("brand_story_label"))+' / '+esc(t("details"))+'</label><textarea id="bc-note" maxlength="500"></textarea>'
+    +'<label for="bc-brand">'+esc(t("brand_name"))+'</label><input id="bc-brand">'
+    +'<label for="bc-name">'+esc(t("display_name"))+'</label><input id="bc-name" autocomplete="name">'
+    +'<label for="bc-phone">'+esc(t("contact_phone"))+'</label><input id="bc-phone" type="tel" inputmode="tel" autocomplete="tel">'
+    +'<label for="bc-note">'+esc(t("brand_story_label"))+' / '+esc(t("details"))+'</label><textarea id="bc-note" maxlength="500"></textarea>'
     +'<label>'+esc(t("brand_connect_price"))+'</label><div class="seg" id="bc-plans">'+pkgs.map(function(p,i){ return '<button type="button" data-p="'+esc(p.id||p.name||("p"+i))+'" class="'+(i===0?"on":"")+'">'+esc(p.label||p.name||"")+(p.priceMinor?' — '+money(p.priceMinor,p.currency||"NPR"):"")+'</button>'; }).join("")+'</div>'
-    +'<div id="bc-email-wrap" hidden><label>'+esc(t("company_email"))+'</label><input id="bc-email" type="email" placeholder="name@company.com"><p class="small">'+esc(t("brand_plan_note"))+'</p></div>'
+    +'<div id="bc-email-wrap" hidden><label for="bc-email">'+esc(t("company_email"))+'</label><input id="bc-email" type="email" autocomplete="email" placeholder="name@company.com"><p class="small">'+esc(t("brand_plan_note"))+'</p></div>'
     +'<label class="check-row"><input type="checkbox" id="bc-agree"> '+esc(t("agree_first_connect"))+'</label>'
     +'<p class="small">'+esc(t("brand_connect_refund"))+'</p>'
-    +'<div class="field-err" id="bc-err"></div>'
+    +'<div class="field-err" id="bc-err" role="alert"></div>'
     +'<div class="btn-row"><button class="btn secondary" id="bc-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="bc-send">'+esc(t("connect"))+'</button></div>');
   var plan=pkgs[0].id||pkgs[0].name||"p0";
   $all("#bc-plans button").forEach(function(b){ b.onclick=function(){ $all("#bc-plans button").forEach(function(x){ x.classList.remove("on"); }); b.classList.add("on"); plan=b.getAttribute("data-p"); $("#bc-email-wrap").hidden=(plan===pkgs[0].id||plan===pkgs[0].name||plan==="p0"); }; });
@@ -1424,13 +1488,13 @@ function openBrandConnect(brand){
   $("#bc-send").onclick=async function(){
     var brandName=$("#bc-brand").value.trim(), name=$("#bc-name").value.trim(), phone=$("#bc-phone").value.trim();
     $("#bc-err").textContent="";
-    if(!brandName||!name||!phone){ $("#bc-err").textContent=t("err_required"); return; }
+    if(!brandName||!name||!phone){ $("#bc-err").textContent=t("err_connect_fields"); return; }
     if(!$("#bc-agree").checked){ $("#bc-err").textContent=t("agree_first_connect"); return; }
     var email=$("#bc-email")?$("#bc-email").value.trim():"";
     var needsEmail=!$("#bc-email-wrap").hidden;
     if(needsEmail){
       var personal=/@(gmail|hotmail|outlook|icloud|yahoo)\./i.test(email);
-      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||personal){ $("#bc-err").textContent=t("company_email"); return; }
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||personal){ $("#bc-err").textContent=t("err_company_email"); return; }
     }
     var btn=$("#bc-send"); btn.disabled=true; btn.textContent=t("loading");
     try{
@@ -1440,15 +1504,15 @@ function openBrandConnect(brand){
   };
 }
 function renderBrandNew(){
-  if(!S.user){ view(emptyState("🏷️", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>')); return; }
-  view('<h1>'+esc(t("brand_new"))+'</h1><p class="small">'+esc(t("brand_ask_footer"))+'</p>'
-    +'<form id="bn-form" class="card"><label>'+esc(t("brand_name"))+'</label><input id="bn-brand" maxlength="100"><div class="field-err" id="e-bn-brand"></div>'
-    +'<label>'+esc(t("display_name"))+' '+esc(t("q_about_opt"))+'</label><input id="bn-display" maxlength="100">'
-    +'<label>'+esc(t("brand_story"))+'</label><textarea id="bn-story" maxlength="1500" placeholder="'+esc(t("brand_story_hint"))+'"></textarea><div class="field-err" id="e-bn-story"></div>'
+  if(!S.user){ view(emptyState("🏷️", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<h1>'+esc(t("brand_new"))+'</h1><p class="small">'+esc(t("brand_ask_footer"))+'</p><p class="small">'+esc(t("required_note"))+'</p>'
+    +'<form id="bn-form" class="card"><label for="bn-brand">'+esc(t("brand_name"))+' '+reqStar()+'</label><input id="bn-brand" maxlength="100" aria-required="true" aria-describedby="e-bn-brand"><div class="field-err" id="e-bn-brand" role="alert"></div>'
+    +'<label for="bn-display">'+esc(t("display_name"))+' '+esc(t("q_about_opt"))+'</label><input id="bn-display" maxlength="100">'
+    +'<label for="bn-story">'+esc(t("brand_story"))+' '+reqStar()+'</label><textarea id="bn-story" maxlength="1500" placeholder="'+esc(t("brand_story_hint"))+'" aria-required="true" aria-describedby="e-bn-story"></textarea><div class="field-err" id="e-bn-story" role="alert"></div>'
     +'<label>'+esc(t("country"))+'</label><div class="seg" id="bn-country"><button type="button" data-c="NP" class="'+(countryCode(S.user.country)==="NP"?"on":"")+'">🇳🇵 '+esc(t("nepal"))+'</button><button type="button" data-c="IN" class="'+(countryCode(S.user.country)==="IN"?"on":"")+'">🇮🇳 '+esc(t("india"))+'</button></div>'
-    +'<label>'+esc(t("city"))+' '+esc(t("q_about_opt"))+'</label><input id="bn-city" value="'+esc(S.user.city||"")+'">'
-    +'<label>'+esc(t("contact_phone"))+'</label><input id="bn-phone" inputmode="tel"><div class="field-err" id="e-bn-phone"></div>'
-    +'<label>'+esc(t("visual_plan"))+'</label><input type="file" id="bn-file" accept="image/jpeg,image/png,image/webp">'
+    +'<label for="bn-city">'+esc(t("city"))+' '+esc(t("q_about_opt"))+'</label><input id="bn-city" value="'+esc(S.user.city||"")+'" autocomplete="address-level2">'
+    +'<label for="bn-phone">'+esc(t("contact_phone"))+' '+reqStar()+'</label><input id="bn-phone" type="tel" inputmode="tel" autocomplete="tel" aria-required="true" aria-describedby="e-bn-phone"><div class="field-err" id="e-bn-phone" role="alert"></div>'
+    +'<label for="bn-file">'+esc(t("visual_plan"))+'</label><input type="file" id="bn-file" accept="image/jpeg,image/png,image/webp">'
     +'<label class="check-row"><input type="checkbox" id="bn-content"> '+esc(t("content_no_fee"))+'</label>'
     +'<p class="small">⚠️ '+esc(t("no_contact_in_text"))+'</p>'
     +'<button class="btn" type="submit" id="bn-submit">'+esc(t("submit"))+'</button></form>');
@@ -1458,11 +1522,11 @@ function renderBrandNew(){
     e.preventDefault();
     var brand=$("#bn-brand").value.trim(), story=$("#bn-story").value.trim(), phone=$("#bn-phone").value.trim();
     var ok=true;
-    $("#e-bn-brand").textContent=""; $("#e-bn-story").textContent=""; $("#e-bn-phone").textContent="";
-    if(!brand){ $("#e-bn-brand").textContent=t("err_required"); ok=false; }
-    if(!story){ $("#e-bn-story").textContent=t("err_required"); ok=false; }
-    if(story && /(@|https?:\/\/|www\.|\b\d{7,}\b)/.test(story)){ $("#e-bn-story").textContent=t("no_contact_in_text"); ok=false; }
-    if(!phone){ $("#e-bn-phone").textContent=t("err_required"); ok=false; }
+    setFieldErr("bn-brand","e-bn-brand",""); setFieldErr("bn-story","e-bn-story",""); setFieldErr("bn-phone","e-bn-phone","");
+    if(!brand){ setFieldErr("bn-brand","e-bn-brand",t("err_brand_name")); ok=false; }
+    if(!story){ setFieldErr("bn-story","e-bn-story",t("err_brand_story")); ok=false; }
+    if(story && /(@|https?:\/\/|www\.|\b\d{7,}\b)/.test(story)){ setFieldErr("bn-story","e-bn-story",t("no_contact_in_text")); ok=false; }
+    if(!phone){ setFieldErr("bn-phone","e-bn-phone",t("err_phone")); ok=false; }
     if(!ok) return;
     var btn=$("#bn-submit"); btn.disabled=true; btn.textContent=t("loading");
     try{
@@ -1497,18 +1561,18 @@ function renderAuctions(){
 }
 function openAuctionCreate(){
   openSheet('<h2>'+esc(t("auction_create"))+'</h2>'+demoHtml()
-    +'<label>'+esc(t("auction_title"))+'</label><input id="ac-title" maxlength="100">'
-    +'<label>'+esc(t("auction_desc"))+'</label><textarea id="ac-desc" maxlength="1500"></textarea>'
-    +'<label>'+esc(t("category"))+'</label><select id="ac-cat">'+I.categories().map(function(c){ return '<option>'+esc(c)+'</option>'; }).join("")+'</select>'
-    +'<label>'+esc(t("start_bid"))+' ('+(S.user&&countryCode(S.user.country)==="IN"?"₹":"रू")+')</label><input id="ac-bid" type="number" min="0" step="1">'
-    +'<label>'+esc(t("auction_ends"))+'</label><input id="ac-ends" type="datetime-local">'
-    +'<label>'+esc(t("upload"))+'</label><input type="file" id="ac-file" accept="image/jpeg,image/png,image/webp">'
-    +'<div class="field-err" id="ac-err"></div>'
+    +'<label for="ac-title">'+esc(t("auction_title"))+'</label><input id="ac-title" maxlength="100">'
+    +'<label for="ac-desc">'+esc(t("auction_desc"))+'</label><textarea id="ac-desc" maxlength="1500"></textarea>'
+    +'<label for="ac-cat">'+esc(t("category"))+'</label><select id="ac-cat">'+I.categories().map(function(c){ return '<option>'+esc(c)+'</option>'; }).join("")+'</select>'
+    +'<label for="ac-bid">'+esc(t("start_bid"))+' ('+(S.user&&countryCode(S.user.country)==="IN"?"₹":"रू")+')</label><input id="ac-bid" type="number" min="0" step="1">'
+    +'<label for="ac-ends">'+esc(t("auction_ends"))+'</label><input id="ac-ends" type="datetime-local">'
+    +'<label for="ac-file">'+esc(t("upload"))+'</label><input type="file" id="ac-file" accept="image/jpeg,image/png,image/webp">'
+    +'<div class="field-err" id="ac-err" role="alert"></div>'
     +'<div class="btn-row"><button class="btn secondary" id="ac-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="ac-send">'+esc(t("submit"))+'</button></div>');
   $("#ac-cancel").onclick=closeSheets;
   $("#ac-send").onclick=async function(){
     var title=$("#ac-title").value.trim(), bid=toMinor($("#ac-bid").value), ends=$("#ac-ends").value;
-    if(!title||bid<=0||!ends){ $("#ac-err").textContent=t("err_required"); return; }
+    if(!title||bid<=0||!ends){ $("#ac-err").textContent=t("err_auction_fields"); return; }
     var btn=$("#ac-send"); btn.disabled=true; btn.textContent=t("loading");
     try{
       var photoUrl=null; var f=$("#ac-file").files[0];
@@ -1528,16 +1592,16 @@ function renderAuction(id){
     var _ends=a.endsAt||a.ends_at; var ended=_ends? new Date(_ends).getTime()<Date.now() : false;
     var isOwner=S.user && String(a.user_id||a.userId)===String(S.user.id);
     view('<a href="#/auctions" class="small">← '+esc(t("back"))+'</a><div class="card" style="margin-top:8px">'
-      +((a.photoUrl||a.photo_url)?'<img class="bill-photo" src="'+esc(a.photoUrl||a.photo_url)+'" alt="">':"")
+      +((a.photoUrl||a.photo_url)?'<img class="bill-photo" src="'+esc(a.photoUrl||a.photo_url)+'" alt="'+esc(t("auction_photo_alt"))+'" loading="lazy">':"")
       +'<h1>'+esc(a.title||"")+'</h1><p>'+esc(a.description||"")+'</p>'
       +'<div class="kv"><span>'+esc(t("current_bid"))+'</span><b>'+esc(money(high,cur))+'</b></div>'
       +'<div class="kv"><span>'+esc(t("start_bid"))+'</span><b>'+esc(money(a.start_bid_minor||a.startBidMinor||0,cur))+'</b></div>'
       +'<div class="kv"><span>'+esc(t("ends"))+'</span><b>'+esc(_ends?new Date(_ends).toLocaleString():"—")+' '+(ended?esc(t("ended")):"")+'</b></div>'
       +'<div class="kv"><span>'+esc(t("seller"))+'</span><b>'+esc(((a.seller||{}).displayName||(a.seller||{}).display_name||(a.user||{}).display_name||a.seller_name||""))+'</b></div>'
       +demoHtml()+'<p class="small">'+esc(t("auction_disabled_note"))+'</p>'
-      +(ended?'<p><strong>'+esc(t("auction_ended"))+'</strong></p>':(isOwner?'<p class="small">'+esc(t("bid_self"))+'</p>':'<label>'+esc(t("your_bid"))+' ('+(cur==="INR"?"₹":"रू")+')</label><input id="bid-amt" type="number" min="0" step="1"><div class="field-err" id="bid-err"></div><button class="btn" id="bid-btn">'+esc(t("place_bid"))+'</button><p class="small">'+esc(t("outbid_note"))+'</p>'))
+      +(ended?'<p><strong>'+esc(t("auction_ended"))+'</strong></p>':(isOwner?'<p class="small">'+esc(t("bid_self"))+'</p>':'<label for="bid-amt">'+esc(t("your_bid"))+' ('+(cur==="INR"?"₹":"रू")+')</label><input id="bid-amt" type="number" min="0" step="1" aria-describedby="bid-err"><div class="field-err" id="bid-err" role="alert"></div><button class="btn" id="bid-btn">'+esc(t("place_bid"))+'</button><p class="small">'+esc(t("outbid_note"))+'</p>'))
       +'<div class="btn-row"><button class="btn secondary small" id="au-share">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="au-report">🚩 '+esc(t("report"))+'</button></div></div>'
-      +'<div class="card" style="margin-top:12px"><h3>'+esc(t("bid_history"))+'</h3>'
+      +'<div class="card" style="margin-top:12px"><h2>'+esc(t("bid_history"))+'</h2>'
       +(bids.length? bids.map(function(bd){ return '<div class="kv"><span>'+esc(bd.anonymous?t("anonymous"):(bd.bidderName||bd.bidder_name||bd.display_name||bd.bidderUsername||bd.username||t("anonymous")))+'</span><b>'+esc(money(bd.amount_minor||bd.amountMinor||0,cur))+' · '+esc(timeAgo(bd.createdAt||bd.created_at))+'</b></div>'; }).join("") : '<p>'+esc(t("no_bids"))+'</p>')+'</div>');
     $("#au-share").onclick=function(){ copyText(location.origin+location.pathname+"#/auction/"+a.id, t("copied_link")); };
     $("#au-report").onclick=function(){ openReportSheet("auction", a.id); };
@@ -1550,12 +1614,12 @@ function renderAuction(id){
       try{ await api("/auctions/"+encodeURIComponent(a.id)+"/bid", {method:"POST", body:{amountMinor:amt}}); toast(t("bid_placed")); route(); }
       catch(e){ bb.disabled=false; bb.textContent=t("place_bid"); toast(e.message||t("err_generic"), true); }
     };
-  }).catch(function(e){ view(emptyState("🔨", t("auction_not_found"), e.message||"")); });
+  }).catch(function(e){ view(emptyState("🔨", t("auction_not_found"), e.message||"", "", "h1")); });
 }
 
 /* ---------- my bills ---------- */
 function renderMyBills(){
-  if(!S.user){ view(emptyState("📁", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>')); return; }
+  if(!S.user){ view(emptyState("📁", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
   var tabs=[["active",t("active")],["pending",t("pending_review")],["approved",t("approved")],["rejected",t("rejected")],["completed",t("completed")],["given",t("help_given")],["received",t("help_received")]];
   view('<h1>'+esc(t("my_bills"))+'</h1><p class="small">'+esc(t("mybills_tabs_note"))+'</p>'
     +'<div class="tabs">'+tabs.map(function(x){ return '<button class="tab-btn'+(S.mybillsTab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")+'</div>'
@@ -1633,50 +1697,51 @@ function bindGiftRows(root){
   $all("[data-gift]", root).forEach(function(btn){
     btn.onclick=async function(){
       var act=btn.getAttribute("data-gift"), id=btn.getAttribute("data-id");
+      if(act!=="dispute") btn.disabled=true;
       try{
         if(act==="confirm"){ await api("/gifts/"+encodeURIComponent(id)+"/confirm", {method:"POST"}); toast(t("gift_confirmed_msg")); }
         if(act==="notreceived"){ await api("/gifts/"+encodeURIComponent(id)+"/not-received", {method:"POST"}); toast(t("not_received_noted")); }
         if(act==="dispute"){
-          openSheet('<h2>'+esc(t("dispute"))+'</h2><label>'+esc(t("dispute_note_label"))+'</label><textarea id="dp-note" placeholder="'+esc(t("dispute_note_ph"))+'"></textarea><button class="btn" id="dp-send">'+esc(t("send_dispute"))+'</button>');
-          $("#dp-send").onclick=async function(){ try{ await api("/gifts/"+encodeURIComponent(id)+"/dispute", {method:"POST", body:{note:$("#dp-note").value.trim()}}); closeSheets(); toast(t("dispute_opened")); route(); }catch(e){ toast(e.message||t("err_generic"), true); } };
+          openSheet('<h2>'+esc(t("dispute"))+'</h2><label for="dp-note">'+esc(t("dispute_note_label"))+'</label><textarea id="dp-note" placeholder="'+esc(t("dispute_note_ph"))+'"></textarea><button class="btn" id="dp-send">'+esc(t("send_dispute"))+'</button>');
+          $("#dp-send").onclick=async function(){ var b2=$("#dp-send"); b2.disabled=true; b2.textContent=t("loading"); try{ await api("/gifts/"+encodeURIComponent(id)+"/dispute", {method:"POST", body:{note:$("#dp-note").value.trim()}}); closeSheets(); toast(t("dispute_opened")); route(); }catch(e){ b2.disabled=false; b2.textContent=t("send_dispute"); toast(e.message||t("err_generic"), true); } };
           return;
         }
         route();
-      }catch(e){ toast(e.message||t("err_generic"), true); }
+      }catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
     };
   });
 }
 function openBillEdit(bill){
   openSheet('<h2>'+esc(t("edit_bill"))+'</h2><p class="small">⚠️ '+esc(t("material_edit_warn"))+'</p>'
-    +'<label>'+esc(t("title_label"))+'</label><input id="be-title" maxlength="80" value="'+esc(bill.title||"")+'">'
-    +'<label>'+esc(t("short_story"))+'</label><textarea id="be-story" maxlength="280">'+esc(bill.story||"")+'</textarea>'
-    +'<label>'+esc(t("long_story"))+'</label><textarea id="be-details" maxlength="1500">'+esc(bill.details||"")+'</textarea>'
-    +'<label>'+esc(t("amount_label"))+' ('+(bill.currency==="INR"?"₹":"रू")+')</label><input id="be-amount" type="number" min="0" step="1" value="'+fromMinor(bill.amount_minor||bill.amountMinor||0)+'">'
+    +'<label for="be-title">'+esc(t("title_label"))+'</label><input id="be-title" maxlength="80" value="'+esc(bill.title||"")+'">'
+    +'<label for="be-story">'+esc(t("short_story"))+'</label><textarea id="be-story" maxlength="280">'+esc(bill.story||"")+'</textarea>'
+    +'<label for="be-details">'+esc(t("long_story"))+'</label><textarea id="be-details" maxlength="1500">'+esc(bill.details||"")+'</textarea>'
+    +'<label for="be-amount">'+esc(t("amount_label"))+' ('+(bill.currency==="INR"?"₹":"रू")+')</label><input id="be-amount" type="number" min="0" step="1" value="'+fromMinor(bill.amount_minor||bill.amountMinor||0)+'">'
     +'<div class="btn-row"><button class="btn secondary" id="be-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="be-save">'+esc(t("save"))+'</button></div>');
   $("#be-cancel").onclick=closeSheets;
   $("#be-save").onclick=async function(){
-    var btn=$("#be-save"); btn.disabled=true;
+    var btn=$("#be-save"); btn.disabled=true; btn.textContent=t("loading");
     try{
       await api("/bills/"+encodeURIComponent(bill.id), {method:"PATCH", body:{title:$("#be-title").value.trim(), story:$("#be-story").value.trim(), details:$("#be-details").value.trim(), amountMinor:toMinor($("#be-amount").value)}});
       closeSheets(); toast(t("bill_updated")); route();
-    }catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+    }catch(e){ btn.disabled=false; btn.textContent=t("save"); toast(e.message||t("err_generic"), true); }
   };
 }
 function openPayoutChange(bill){
   var methods=payoutMethodsFor(S.user.country);
   openSheet('<h2>'+esc(t("change_payout"))+'</h2><p class="small">⚠️ '+esc(t("payout_change_warn"))+'</p>'
-    +'<label>'+esc(t("payment_methods"))+'</label><select id="pc-method">'+methods.map(function(m){ return '<option value="'+m.id+'">'+esc(m.label)+'</option>'; }).join("")+'</select>'
-    +'<div id="pc-fields"></div><div class="field-err" id="pc-err"></div>'
+    +'<label for="pc-method">'+esc(t("payment_methods"))+'</label><select id="pc-method">'+methods.map(function(m){ return '<option value="'+m.id+'">'+esc(m.label)+'</option>'; }).join("")+'</select>'
+    +'<div id="pc-fields"></div><div class="field-err" id="pc-err" role="alert"></div>'
     +'<label class="check-row"><input type="checkbox" id="pc-belongs"> '+esc(t("payout_belongs"))+'</label>'
     +'<div class="btn-row"><button class="btn secondary" id="pc-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="pc-save">'+esc(t("save"))+'</button></div>');
   function fields(){
     var m=$("#pc-method").value, h="";
-    if(m==="esewa") h='<label>'+esc(t("esewa_no"))+'</label><input id="pc-account" inputmode="numeric" maxlength="10">';
-    else if(m==="khalti") h='<label>'+esc(t("khalti_no"))+'</label><input id="pc-account" inputmode="numeric" maxlength="10">';
-    else if(m==="upi") h='<label>'+esc(t("upi_id"))+'</label><input id="pc-account" placeholder="name@okhdfc">';
-    else if(m==="payment_link") h='<label>'+esc(t("payment_link"))+'</label><input id="pc-account" placeholder="https://…">';
-    else { h='<label>'+esc(t("bank_name"))+'</label><input id="pc-bank"><label>'+esc(t("account_no"))+'</label><input id="pc-account" inputmode="numeric"><label>'+esc(t("branch"))+'</label><input id="pc-branch">'; if(m==="bank_in") h+='<label>'+esc(t("ifsc"))+'</label><input id="pc-ifsc" placeholder="SBIN0001234">'; }
-    if(m!=="payment_link") h+='<label>'+esc(t("holder_name"))+'</label><input id="pc-holder">';
+    if(m==="esewa") h='<label for="pc-account">'+esc(t("esewa_no"))+'</label><input id="pc-account" type="tel" inputmode="numeric" autocomplete="tel" maxlength="10">';
+    else if(m==="khalti") h='<label for="pc-account">'+esc(t("khalti_no"))+'</label><input id="pc-account" type="tel" inputmode="numeric" autocomplete="tel" maxlength="10">';
+    else if(m==="upi") h='<label for="pc-account">'+esc(t("upi_id"))+'</label><input id="pc-account" placeholder="name@okhdfc">';
+    else if(m==="payment_link") h='<label for="pc-account">'+esc(t("payment_link"))+'</label><input id="pc-account" placeholder="https://…">';
+    else { h='<label for="pc-bank">'+esc(t("bank_name"))+'</label><input id="pc-bank"><label for="pc-account">'+esc(t("account_no"))+'</label><input id="pc-account" inputmode="numeric"><label for="pc-branch">'+esc(t("branch"))+'</label><input id="pc-branch">'; if(m==="bank_in") h+='<label for="pc-ifsc">'+esc(t("ifsc"))+'</label><input id="pc-ifsc" placeholder="SBIN0001234">'; }
+    if(m!=="payment_link") h+='<label for="pc-holder">'+esc(t("holder_name"))+'</label><input id="pc-holder" autocomplete="name">';
     $("#pc-fields").innerHTML=h;
   }
   fields();
@@ -1688,18 +1753,18 @@ function openPayoutChange(bill){
     var err=validatePayout(m, f);
     if(err){ $("#pc-err").textContent=err; return; }
     if(!$("#pc-belongs").checked){ $("#pc-err").textContent=t("payout_belongs"); return; }
-    var btn=$("#pc-save"); btn.disabled=true;
+    var btn=$("#pc-save"); btn.disabled=true; btn.textContent=t("loading");
     try{
       await api("/bills/"+encodeURIComponent(bill.id)+"/payout", {method:"POST", body:{payoutMethods:[{method:m, holderName:f.holder, account:f.account, bankName:f.bank||undefined, ifsc:f.ifsc||undefined, branch:f.branch||undefined}]}});
       closeSheets(); toast(t("payout_changed")); route();
-    }catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+    }catch(e){ btn.disabled=false; btn.textContent=t("save"); toast(e.message||t("err_generic"), true); }
   };
 }
 function openDocsUpload(bill){
   openSheet('<h2>'+esc(t("docs_title"))+'</h2>'
-    +'<label>'+esc(t("public_photo_label"))+'</label><input type="file" id="du-public" accept="image/jpeg,image/png,image/webp">'
-    +'<label>'+esc(t("private_proof_label"))+'</label><input type="file" id="du-proof" accept="image/jpeg,image/png,image/webp,application/pdf">'
-    +'<label>'+esc(t("support_photo_label"))+'</label><input type="file" id="du-support" accept="image/jpeg,image/png,image/webp">'
+    +'<label for="du-public">'+esc(t("public_photo_label"))+'</label><input type="file" id="du-public" accept="image/jpeg,image/png,image/webp">'
+    +'<label for="du-proof">'+esc(t("private_proof_label"))+'</label><input type="file" id="du-proof" accept="image/jpeg,image/png,image/webp,application/pdf">'
+    +'<label for="du-support">'+esc(t("support_photo_label"))+'</label><input type="file" id="du-support" accept="image/jpeg,image/png,image/webp">'
     +'<div class="btn-row"><button class="btn secondary" id="du-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="du-save">'+esc(t("upload"))+'</button></div>');
   $("#du-cancel").onclick=closeSheets;
   $("#du-save").onclick=async function(){
@@ -1743,12 +1808,12 @@ function renderProfile(username){
       if(i>=0){ S.blocked.splice(i,1); } else { S.blocked.push(key); }
       saveBlocked(); toast(t("blocked")); route();
     };
-  }).catch(function(e){ view(emptyState("👤", t("profile_not_found"), e.message||"")); });
+  }).catch(function(e){ view(emptyState("👤", t("profile_not_found"), e.message||"", "", "h1")); });
 }
 
 /* ---------- settings ---------- */
 function renderSettings(){
-  if(!S.user){ view(emptyState("⚙️", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>')); return; }
+  if(!S.user){ view(emptyState("⚙️", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
   var u=S.user;
   var prefs=u.prefs||{};
   var np=prefs.notifyPrefs||{};
@@ -1757,15 +1822,15 @@ function renderSettings(){
   var anonDefault=prefs.anonDefault===true || u.anon_default===true;
   var themePref="system"; try{ themePref=localStorage.getItem("sp_theme")||"system"; }catch(e){}
   view('<h1>'+esc(t("settings"))+'</h1>'
-    +'<div class="card"><h3>'+esc(t("edit_profile"))+'</h3>'
-    +'<label>'+esc(t("display_name"))+'</label><input id="st-name" maxlength="60" value="'+esc(u.display_name||u.displayName||"")+'">'
-    +'<label>'+esc(t("username"))+'</label><input id="st-username" maxlength="30" value="'+esc(u.username||"")+'"><p class="small">'+esc(t("username_rules"))+'</p>'
-    +'<label>'+esc(t("city"))+'</label><input id="st-city" value="'+esc(u.city||"")+'">'
-    +'<label>'+esc(t("about"))+'</label><textarea id="st-about" maxlength="500">'+esc(u.about||"")+'</textarea>'
-    +'<label>'+esc(t("q_photo"))+'</label><input type="file" id="st-photo" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("photo_change_review"))+'</p>'
+    +'<div class="card"><h2>'+esc(t("edit_profile"))+'</h2>'
+    +'<label for="st-name">'+esc(t("display_name"))+'</label><input id="st-name" maxlength="60" value="'+esc(u.display_name||u.displayName||"")+'" autocomplete="name">'
+    +'<label for="st-username">'+esc(t("username"))+'</label><input id="st-username" maxlength="30" value="'+esc(u.username||"")+'" autocomplete="username"><p class="small">'+esc(t("username_rules"))+'</p>'
+    +'<label for="st-city">'+esc(t("city"))+'</label><input id="st-city" value="'+esc(u.city||"")+'" autocomplete="address-level2">'
+    +'<label for="st-about">'+esc(t("about"))+'</label><textarea id="st-about" maxlength="500">'+esc(u.about||"")+'</textarea>'
+    +'<label for="st-photo">'+esc(t("q_photo"))+'</label><input type="file" id="st-photo" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("photo_change_review"))+'</p>'
     +'<label>'+esc(t("country"))+'</label><div class="seg" id="st-country"><button type="button" data-c="NP" class="'+(countryCode(u.country)==="NP"?"on":"")+'">🇳🇵 '+esc(t("nepal"))+'</button><button type="button" data-c="IN" class="'+(countryCode(u.country)==="IN"?"on":"")+'">🇮🇳 '+esc(t("india"))+'</button></div><p class="small">'+esc(t("change_country_note"))+'</p>'
     +'<button class="btn" id="st-save-profile" style="margin-top:12px">'+esc(t("save"))+'</button></div>'
-    +'<div class="card" style="margin-top:12px"><h3>'+esc(t("prefs_section"))+'</h3>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("prefs_section"))+'</h2>'
     +'<label>'+esc(t("language"))+'</label><div class="seg" id="st-lang"><button type="button" data-l="en" class="'+(I.getLang()==="en"?"on":"")+'">English</button><button type="button" data-l="ne" class="'+(I.getLang()==="ne"?"on":"")+'">नेपाली</button><button type="button" data-l="hi" class="'+(I.getLang()==="hi"?"on":"")+'">हिन्दी</button></div>'
     +'<label>'+esc(t("theme"))+'</label><div class="seg" id="st-theme"><button type="button" data-v="system" class="'+(themePref==="system"?"on":"")+'">'+esc(t("theme_system"))+'</button><button type="button" data-v="light" class="'+(themePref==="light"?"on":"")+'">'+esc(t("theme_light"))+'</button><button type="button" data-v="dark" class="'+(themePref==="dark"?"on":"")+'">'+esc(t("theme_dark"))+'</button></div>'
     +'<label>'+esc(t("notifications_pref"))+'</label>'
@@ -1773,16 +1838,16 @@ function renderSettings(){
     +'<label class="check-row"><input type="checkbox" id="st-n2" '+(npGifts?"checked":"")+'> '+esc(t("notif_gift_sent"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="st-n3" '+(npBrands?"checked":"")+'> '+esc(t("notif_brand"))+' / '+esc(t("notif_auction"))+'</label>'
     +'<button class="btn secondary" id="st-save-prefs" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
-    +'<div class="card" style="margin-top:12px"><h3>'+esc(t("privacy_section"))+'</h3>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("privacy_section"))+'</h2>'
     +'<label class="check-row"><input type="checkbox" id="st-show" '+(showTotals?"checked":"")+'> '+esc(t("show_history"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="st-anon" '+(anonDefault?"checked":"")+'> '+esc(t("anon_default"))+'</label>'
     +'<h3 style="margin-top:12px">'+esc(t("blocked_users"))+' ('+S.blocked.length+')</h3>'
     +(S.blocked.length? S.blocked.map(function(b){ return '<div class="kv"><span>'+esc(b)+'</span><button class="btn secondary small" data-unblock="'+esc(b)+'">'+esc(t("unblock"))+'</button></div>'; }).join("") : '<p class="small">'+esc(t("no_blocked"))+'</p>')
     +'<button class="btn secondary" id="st-save-priv" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
-    +'<div class="card" style="margin-top:12px"><h3>'+esc(t("support_section"))+'</h3>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("support_section"))+'</h2>'
     +'<div style="display:grid;gap:8px"><a class="btn secondary" href="#/help">'+esc(t("help_centre"))+'</a><a class="btn secondary" href="#/verify">'+esc(t("verify_centre"))+'</a><a class="btn secondary" href="#/admin">'+esc(t("open_console"))+'</a></div>'
     +'<p class="small" style="margin-top:10px">'+esc(t("sessions_note"))+'</p></div>'
-    +'<div class="card" style="margin-top:12px"><h3>'+esc(t("account_section"))+'</h3>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("account_section"))+'</h2>'
     +'<div style="display:grid;gap:8px"><button class="btn secondary" id="st-logout">'+esc(t("logout"))+'</button><button class="btn secondary" id="st-logout-all">'+esc(t("logout_all"))+'</button><button class="btn danger" id="st-delete">'+esc(t("delete_account"))+'</button></div>'
     +'<p class="small legal" style="margin-top:12px">'+esc(t("version_note"))+'</p></div>');
   var newCountry=countryCode(u.country);
@@ -1806,22 +1871,26 @@ function renderSettings(){
     finally{ btn.disabled=false; btn.textContent=t("save"); }
   };
   $("#st-save-prefs").onclick=async function(){
+    var b=$("#st-save-prefs"); b.disabled=true; b.textContent=t("loading");
     try{ await api("/profile/me", {method:"PATCH", body:{notifyPrefs:{posts:$("#st-n1").checked, gifts:$("#st-n2").checked, brands:$("#st-n3").checked}}}); toast(t("notification_prefs_saved")); }
     catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ b.disabled=false; b.textContent=t("save"); }
   };
   $("#st-save-priv").onclick=async function(){
+    var b=$("#st-save-priv"); b.disabled=true; b.textContent=t("loading");
     try{ await api("/profile/me", {method:"PATCH", body:{showTotals:$("#st-show").checked, anonDefault:$("#st-anon").checked}}); toast(t("saved")); }
     catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ b.disabled=false; b.textContent=t("save"); }
   };
   $("#st-logout").onclick=function(){ confirmDialog(t("logout"), t("logout_confirm"), t("logout"), function(){ doLogout(false); }); };
   $("#st-logout-all").onclick=function(){ confirmDialog(t("logout_all"), t("logout_all_confirm"), t("logout_all"), function(){ doLogout(true); }); };
   $("#st-delete").onclick=function(){
-    openModal('<h2>'+esc(t("delete_confirm_title"))+'</h2><p>'+esc(t("delete_confirm_body"))+'</p><label>'+esc(t("delete_type_hint"))+'</label><input id="del-type" placeholder="DELETE"><div class="btn-row"><button class="btn secondary" id="del-cancel">'+esc(t("cancel"))+'</button><button class="btn danger" id="del-go">'+esc(t("delete_now"))+'</button></div>');
+    openModal('<h2>'+esc(t("delete_confirm_title"))+'</h2><p>'+esc(t("delete_confirm_body"))+'</p><label for="del-type">'+esc(t("delete_type_hint"))+'</label><input id="del-type" placeholder="DELETE"><div class="btn-row"><button class="btn secondary" id="del-cancel">'+esc(t("cancel"))+'</button><button class="btn danger" id="del-go">'+esc(t("delete_now"))+'</button></div>');
     $("#del-cancel").onclick=closeSheets;
     $("#del-go").onclick=async function(){
       if($("#del-type").value.trim()!=="DELETE"){ toast(t("delete_type_hint"), true); return; }
       try{ await api("/profile/delete", {method:"POST"}); }catch(e){}
-      S.user=null; closeSheets(); toast(t("logged_out")); go("#/welcome");
+      S.user=null; resetTopbar(); closeSheets(); toast(t("logged_out")); go("#/welcome");
     };
   };
 }
@@ -1830,55 +1899,55 @@ function renderSettings(){
 /* Full legal documents (English is the binding version; the short summary above each one is translated). */
 var LEGAL_TERMS_HTML=
  '<p class="small">Last updated 16 November 2026. The English version of these terms is the binding version.</p>'
- +'<h3>1. What Sahay Pay is</h3>'
+ +'<h2>1. What Sahay Pay is</h2>'
  +'<p>Sahay Pay connects people in Nepal and India who need help with a bill with people willing to help. A supporter pays the person directly, from their own payment app, using the payout details shown in the app. Sahay Pay never holds, receives, processes, or guarantees gift money.</p>'
  +'<p>Payments are currently in Demo Mode. The gift journey is a demonstration: fees shown are quotes and are not collected, and no real money moves through Sahay Pay. Any transfer you make is made by you, from your own payment app, directly to the other person.</p>'
- +'<h3>2. Who can use Sahay Pay</h3>'
+ +'<h2>2. Who can use Sahay Pay</h2>'
  +'<p>Sahay Pay is for adults aged 18 and over only. Anyone under 18 is blocked and no account is created. You must give true information about yourself, and you may only create one account.</p>'
- +'<h3>3. Your account</h3>'
+ +'<h2>3. Your account</h2>'
  +'<p>Your account is created from simple questions (name, age, country, city, about you). There is no email address or password. Your login stays on your device for 30 days. Keep your device secure, and log out on any device you share. You can delete your account in Settings at any time.</p>'
- +'<h3>4. Posting a bill</h3>'
+ +'<h2>4. Posting a bill</h2>'
  +'<p>Post only real bills, described honestly. Every post is reviewed by the owner before it goes public, and the owner may approve it, reject it, or ask for changes. A material edit to a live bill sends it back to review. Keep other people personal details out of your photos. A bill may be paused if it is reported, and removed if it breaks these terms.</p>'
- +'<h3>5. Verification</h3>'
+ +'<h2>5. Verification</h2>'
  +'<p>Bill, ID, and Name badges are decided by a human reviewer. A badge means the reviewer checked what was shown to them. It is not a promise that a bill is genuine or that a person will use help in a particular way.</p>'
- +'<h3>6. Helping and gifts</h3>'
+ +'<h2>6. Helping and gifts</h2>'
  +'<p>Gifts are voluntary. A bill counts as helped only when the person confirms they received the money. Sahay Pay cannot reverse a gift and cannot refund you, because the money never passes through Sahay Pay. Never send money you cannot afford to lose. Never share your MPIN, OTP, password, or card details with anyone. Sahay Pay never asks for them.</p>'
- +'<h3>7. Fees</h3>'
+ +'<h2>7. Fees</h2>'
  +'<p>The fee shown at the Fee step is the current schedule: in Nepal, Rs 160 on gifts up to Rs 1,600, then 10% of the gift; in India, Rs 100 on gifts up to Rs 1,000, then 10% of the gift. Charity asks are free. While Demo Mode is active, fees are quoted only and are not collected. The fee may change, and the fee shown before you confirm always applies.</p>'
- +'<h3>8. Cross-border help</h3>'
+ +'<h2>8. Cross-border help</h2>'
  +'<p>If you help someone across a border, follow your own country law. Indian law generally restricts foreign citizens from donating to individuals in India without registration. Transfers between UPI and Nepal have limits (India to Nepal up to INR 200,000 per transaction; Nepal to India up to INR 15,000 per transaction). This is general information only, not legal advice.</p>'
- +'<h3>9. Brands and auctions</h3>'
+ +'<h2>9. Brands and auctions</h2>'
  +'<p>Brand asks and auctions are arrangements between users and brands. Sahay Pay does not guarantee any brand deal, introduction, or auction outcome.</p>'
- +'<h3>10. What is not allowed</h3>'
+ +'<h2>10. What is not allowed</h2>'
  +'<p>Fake bills, fraud, impersonation, illegal content, harassment, spam, scraping, and attempts to break the service are not allowed. Reported illegal content is removed promptly. Accounts that break these rules may be suspended.</p>'
- +'<h3>11. Your content</h3>'
+ +'<h2>11. Your content</h2>'
  +'<p>You keep ownership of what you post. By posting, you allow Sahay Pay to display it on the service. You must have the right to share anything you post.</p>'
- +'<h3>12. Liability</h3>'
+ +'<h2>12. Liability</h2>'
  +'<p>The service is provided as is. Sahay Pay does not promise that you will receive help, does not guarantee any post, and is not responsible for transfers between users, for what users post, or for losses from using the service, to the fullest extent the law allows.</p>'
- +'<h3>13. Changes to these terms</h3>'
+ +'<h2>13. Changes to these terms</h2>'
  +'<p>These terms may change. The version shown in the app always applies. If you keep using Sahay Pay after a change, you accept the new terms.</p>'
- +'<h3>14. Governing law and contact</h3>'
+ +'<h2>14. Governing law and contact</h2>'
  +'<p>These terms are governed by the law of Nepal. Questions or complaints can be sent through the Help Centre complaint form.</p>';
 var LEGAL_PRIVACY_HTML=
  '<p class="small">Last updated 16 November 2026. The English version of this policy is the binding version.</p>'
- +'<h3>1. What we collect</h3>'
+ +'<h2>1. What we collect</h2>'
  +'<p>Profile: display name, age, country, city, about you, language, and an optional photo. Payout details: your eSewa or Khalti number, UPI ID, or bank details, encrypted and shown publicly only as a masked hint. Bills you post: amount, category, description, bill photo, and payment method. Verification documents, which only the reviewer sees and which are deleted after review. Reports and complaints you send. One session cookie that keeps you logged in for 30 days.</p>'
  +'<p>We do not collect email addresses, passwords, OTPs, MPINs, card numbers, or banking credentials.</p>'
- +'<h3>2. How we use it</h3>'
+ +'<h2>2. How we use it</h2>'
  +'<p>To run the service and show your bill to helpers; to review posts and keep the service safe; to show your payout details to a helper only at the Send step; and to answer complaints. We do not sell your data. We do not run third-party analytics or advertising trackers.</p>'
- +'<h3>3. Who sees it</h3>'
+ +'<h2>3. Who sees it</h2>'
  +'<p>Your public profile and bill are visible to other users. Your full payout details are shown only to a helper at the Send step, and every reveal is logged. Verification documents are seen only by the reviewer. Our hosting providers, Netlify for the website and Supabase for the database in Mumbai, process data only to run the service.</p>'
- +'<h3>4. How it is protected</h3>'
+ +'<h2>4. How it is protected</h2>'
  +'<p>Payout details are encrypted while stored. The admin console is protected by a PIN. Access is limited to what the service needs. No system is completely secure, and we cannot promise absolute security.</p>'
- +'<h3>5. How long we keep it</h3>'
+ +'<h2>5. How long we keep it</h2>'
  +'<p>Your data stays while your account or bill is active. Verification documents are deleted after review. When you delete a bill or your account, it is removed, including its payout details.</p>'
- +'<h3>6. Your rights</h3>'
+ +'<h2>6. Your rights</h2>'
  +'<p>Edit your profile in Settings. Delete your account in Settings at any time. Ask about your data, or request a copy or deletion, through the Help Centre complaint form. We respect your rights under the Individual Privacy Act 2075 of Nepal and the Digital Personal Data Protection Act 2023 of India.</p>'
- +'<h3>7. Children</h3>'
+ +'<h2>7. Children</h2>'
  +'<p>Sahay Pay is for adults aged 18 and over only. We do not knowingly collect data from anyone under 18. Under-18 sign-ups are blocked and no account is created.</p>'
- +'<h3>8. Cookies</h3>'
+ +'<h2>8. Cookies</h2>'
  +'<p>We use one strictly necessary session cookie to keep you logged in. We use no advertising or tracking cookies.</p>'
- +'<h3>9. Changes and contact</h3>'
+ +'<h2>9. Changes and contact</h2>'
  +'<p>If this policy changes, the version shown in the app applies. Contact us through the Help Centre complaint form.</p>';
 var HELP_TOPICS=[
   {id:"helping", titleKey:"topic_helping", body:function(){ return '<p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'<p class="small">'+esc(t("fee_sentence_supporter"))+' '+esc(t("fee_sentence_zero"))+'</p>'+crossBorderHtml(); }},
@@ -1906,21 +1975,22 @@ function renderHelp(id, q){
     view('<a href="#/help" class="small">← '+esc(t("back_to_help"))+'</a><h1 style="margin-top:8px">'+esc(t(tp.titleKey))+'</h1><div class="card">'+tp.body()+'</div>');
     if(topic==="complaints"){
       var form=$("#complaint-form");
-      form.innerHTML='<label>'+esc(t("complaint_subject"))+'</label><input id="cp-subject" maxlength="120"><label>'+esc(t("complaint_body"))+'</label><textarea id="cp-body" maxlength="2000"></textarea><button class="btn" id="cp-send" style="margin-top:10px">'+esc(t("file_complaint"))+'</button>';
+      form.innerHTML='<label for="cp-subject">'+esc(t("complaint_subject"))+'</label><input id="cp-subject" maxlength="120" aria-describedby="cp-err"><label for="cp-body">'+esc(t("complaint_body"))+'</label><textarea id="cp-body" maxlength="2000" aria-describedby="cp-err"></textarea><div class="field-err" id="cp-err" role="alert"></div><button class="btn" id="cp-send" style="margin-top:10px">'+esc(t("file_complaint"))+'</button>';
       $("#cp-send").onclick=async function(){
         if(!needUser()) return;
         var s=$("#cp-subject").value.trim(), b=$("#cp-body").value.trim();
-        if(!s||!b){ toast(t("err_required"), true); return; }
-        var btn=$("#cp-send"); btn.disabled=true;
+        if(!s||!b){ $("#cp-err").textContent=t("err_complaint_fields"); return; }
+        $("#cp-err").textContent="";
+        var btn=$("#cp-send"); btn.disabled=true; btn.textContent=t("loading");
         try{ await api("/complaints", {method:"POST", body:{subject:s, body:b}}); toast(t("complaint_sent")); $("#cp-subject").value=""; $("#cp-body").value=""; }
         catch(e){ toast(e.message||t("err_generic"), true); }
-        finally{ btn.disabled=false; }
+        finally{ btn.disabled=false; btn.textContent=t("file_complaint"); }
       };
     }
     return;
   }
   view('<h1>'+esc(t("help_centre"))+'</h1><p>'+esc(t("help_centre_intro"))+'</p><p class="small">'+esc(t("help_topics_note"))+'</p>'
-    +'<input id="help-search" placeholder="'+esc(t("search_help"))+'" style="margin-bottom:10px">'
+    +'<label class="sr-only" for="help-search">'+esc(t("search_help"))+'</label><input id="help-search" placeholder="'+esc(t("search_help"))+'" style="margin-bottom:10px">'
     +'<div id="help-list">'+HELP_TOPICS.map(function(tp){ return '<a class="card row-card" href="#/help?topic='+tp.id+'"><div class="grow"><div class="t">'+esc(t(tp.titleKey))+'</div></div><span>›</span></a>'; }).join("")+'</div>');
   $("#help-search").addEventListener("input", function(){
     var s=$("#help-search").value.trim().toLowerCase();
@@ -1931,9 +2001,9 @@ function renderHelp(id, q){
 
 /* ---------- notifications ---------- */
 function renderNotifications(){
-  if(!S.user){ view(emptyState("🔔", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>')); return; }
+  if(!S.user){ view(emptyState("🔔", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
   view('<h1>'+esc(t("notifications"))+'</h1><button class="btn secondary small" id="nt-readall" style="margin-bottom:12px">'+esc(t("mark_all_read"))+'</button><div id="nt-body">'+skeleton(2)+'</div>');
-  $("#nt-readall").onclick=async function(){ try{ await api("/notifications/read-all", {method:"POST"}); toast(t("all_read")); load(); updateTopbar(); }catch(e){ toast(e.message||t("err_generic"), true); } };
+  $("#nt-readall").onclick=async function(){ var b=$("#nt-readall"); b.disabled=true; try{ await api("/notifications/read-all", {method:"POST"}); toast(t("all_read")); load(); updateTopbar(); }catch(e){ toast(e.message||t("err_generic"), true); } finally{ b.disabled=false; } };
   load();
   async function load(){
     var body=$("#nt-body"); if(!body) return;
@@ -1944,7 +2014,7 @@ function renderNotifications(){
       if(!list.length){ body.innerHTML=emptyState("🔔", t("empty_notifications"), t("notifications_empty_action")); return; }
       body.innerHTML=list.map(function(n){
         var unread=!n.is_read&&!n.isRead;
-        return '<div class="card list-item" data-nt="'+esc(n.id)+'" style="'+(unread?"border-left:3px solid var(--accent)":"opacity:.75")+'"><strong>'+esc(n.title||t("unknown_notif"))+'</strong><p class="small" style="margin:4px 0">'+esc(n.body||"")+'</p><p class="small muted">'+esc(timeAgo(n.created_at||n.createdAt))+(n.link?' · <a href="'+esc(n.link)+'">'+esc(t("tap_to_open"))+'</a>':"")+'</p></div>';
+        return '<div class="card list-item" data-nt="'+esc(n.id)+'" tabindex="0" role="button" style="'+(unread?"border-left:3px solid var(--accent)":"opacity:.75")+'">'+(unread?'<span class="chip on" style="margin-bottom:6px">'+esc(t("notif_new"))+'</span>':"")+'<strong>'+esc(n.title||t("unknown_notif"))+'</strong><p class="small" style="margin:4px 0">'+esc(n.body||"")+'</p><p class="small muted">'+esc(timeAgo(n.created_at||n.createdAt))+(n.link?' · <a href="'+esc(n.link)+'">'+esc(t("tap_to_open"))+'</a>':"")+'</p></div>';
       }).join("");
       $all("[data-nt]", body).forEach(function(card){
         card.onclick=async function(){
@@ -1955,6 +2025,7 @@ function renderNotifications(){
           if(n&&n.link) go(n.link.replace(/^.*(#\/.*)$/,"$1"));
           else load();
         };
+        card.addEventListener("keydown", function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); card.click(); } });
       });
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
   }
@@ -1962,7 +2033,7 @@ function renderNotifications(){
 
 /* ---------- verification centre ---------- */
 function renderVerify(){
-  if(!S.user){ view(emptyState("✅", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>')); return; }
+  if(!S.user){ view(emptyState("✅", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
   view('<h1>'+esc(t("verify_centre"))+'</h1><p>'+esc(t("verify_centre_intro"))+'</p><div id="vf-body">'+skeleton(2)+'</div>');
   load();
   async function load(){
@@ -1982,7 +2053,7 @@ function renderVerify(){
       return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(def.label)+'</strong><span class="chip">'+esc(label)+'</span></div>'
         +'<p class="small">'+esc(def.help)+'</p>'
         +(v&&v.reviewer_note?'<p class="small"><strong>'+esc(t("reviewer_msg"))+':</strong> '+esc(v.reviewer_note)+'</p>':"")
-        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input type="file" id="vf-file-'+def.type+'" accept="image/jpeg,image/png,image/webp,application/pdf" style="flex:1;min-width:180px">'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input type="file" id="vf-file-'+def.type+'" accept="image/jpeg,image/png,image/webp,application/pdf" aria-label="'+esc(def.label)+'" style="flex:1;min-width:180px">'
         +'<button class="btn small" data-vf="'+def.type+'" data-kind="'+def.kind+'">'+esc(t("verify_submit"))+'</button></div></div>';
     }).join("");
     $all("[data-vf]", body).forEach(function(btn){
@@ -2007,7 +2078,7 @@ function renderVerify(){
 function renderFounderTip(q){
   var giftId=q&&q.gift, amountMinor=q?parseInt(q.amount||"0",10):0, cur=(q&&q.currency)||"NPR";
   var opts=[
-    {id:"none", label:t("no_thanks"), minor:0},
+    {id:"none", label:t("no_tip"), minor:0},
     {id:"5", label:"5% — "+money(Math.round(amountMinor*0.05),cur), minor:Math.round(amountMinor*0.05)},
     {id:"10", label:"10% — "+money(Math.round(amountMinor*0.10),cur), minor:Math.round(amountMinor*0.10)}
   ];
@@ -2061,9 +2132,9 @@ function renderAdminLogin(){
       var st=await api("/admin/pin-status");
       if(st.pinSet===false||st.pin_set===false){
         body.innerHTML='<div class="card"><h2>'+esc(t("pin_setup_title"))+'</h2><p>'+esc(t("pin_setup_body"))+'</p><p class="small">'+esc(t("pin_hint"))+'</p>'
-          +'<label>'+esc(t("pin_label"))+'</label><input id="ad-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="new-password">'
-          +'<label>'+esc(t("confirm_pin"))+'</label><input id="ad-pin2" type="password" inputmode="numeric" maxlength="12" autocomplete="new-password">'
-          +'<div class="field-err" id="ad-err"></div>'
+          +'<label for="ad-pin">'+esc(t("pin_label"))+'</label><input id="ad-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="new-password" aria-describedby="ad-err">'
+          +'<label for="ad-pin2">'+esc(t("confirm_pin"))+'</label><input id="ad-pin2" type="password" inputmode="numeric" maxlength="12" autocomplete="new-password">'
+          +'<div class="field-err" id="ad-err" role="alert"></div>'
           +'<button class="btn" id="ad-setup">'+esc(t("set_pin"))+'</button></div>';
         $("#ad-setup").onclick=async function(){
           var p1=$("#ad-pin").value, p2=$("#ad-pin2").value;
@@ -2079,17 +2150,17 @@ function renderAdminLogin(){
         return;
       }
       body.innerHTML='<div class="card"><h2>'+esc(t("admin_login"))+'</h2><p>'+esc(t("pin_login_body"))+'</p>'
-        +'<label>'+esc(t("pin_label"))+'</label><input id="ad-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="current-password">'
-        +'<div class="field-err" id="ad-err"></div>'
+        +'<label for="ad-pin">'+esc(t("pin_label"))+'</label><input id="ad-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="current-password" aria-describedby="ad-err">'
+        +'<div class="field-err" id="ad-err" role="alert"></div>'
         +'<button class="btn" id="ad-login">'+esc(t("login"))+'</button>'
         +'<p class="small" style="margin-top:10px">'+esc(t("pin_forgot"))+'</p><p class="small">'+esc(t("session_admin_note"))+'</p></div>'
-        +'<div class="card" style="margin-top:12px"><h3>'+esc(t("change_pin"))+'</h3>'
-        +'<label>'+esc(t("old_pin"))+'</label><input id="ad-old" type="password" inputmode="numeric" maxlength="12">'
-        +'<label>'+esc(t("new_pin"))+'</label><input id="ad-new" type="password" inputmode="numeric" maxlength="12">'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("change_pin"))+'</h2>'
+        +'<label for="ad-old">'+esc(t("old_pin"))+'</label><input id="ad-old" type="password" inputmode="numeric" maxlength="12">'
+        +'<label for="ad-new">'+esc(t("new_pin"))+'</label><input id="ad-new" type="password" inputmode="numeric" maxlength="12">'
         +'<button class="btn secondary" id="ad-change" style="margin-top:10px">'+esc(t("change_pin"))+'</button></div>';
       $("#ad-login").onclick=async function(){
         var pin=$("#ad-pin").value;
-        if(!pin){ $("#ad-err").textContent=t("err_required"); return; }
+        if(!pin){ $("#ad-err").textContent=t("pin_required"); return; }
         var btn=$("#ad-login"); btn.disabled=true; btn.textContent=t("loading");
         try{
           await api("/admin/login", {method:"POST", body:{pin:pin}});
@@ -2099,8 +2170,10 @@ function renderAdminLogin(){
       $("#ad-change").onclick=async function(){
         var oldP=$("#ad-old").value, newP=$("#ad-new").value;
         if(newP.length<6||!/^\d+$/.test(newP)){ toast(t("pin_min"), true); return; }
+        var b=$("#ad-change"); b.disabled=true; b.textContent=t("loading");
         try{ await api("/admin/change-pin", {method:"POST", body:{oldPin:oldP, newPin:newP}}); toast(t("pin_changed")); }
         catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ b.disabled=false; b.textContent=t("change_pin"); }
       };
     }catch(e){
       body.innerHTML=errBox(e.message); bindErrRetry(renderAdminLogin);
@@ -2136,7 +2209,7 @@ async function renderAdminDashboard(){
       +statBox(t("open_reports"), m.openReports||m.open_reports||0)
       +statBox(t("open_complaints"), m.openComplaints!=null?m.openComplaints:(m.open_complaints||0))
       +'</div>'
-      +'<div class="card" style="margin-top:12px"><h3>'+esc(t("fee_mode"))+'</h3><p>'+esc(t("current_mode"))+': <strong>'+esc((S.config&&S.config.feeMode)||"supporter_fee")+'</strong></p><p class="small">'+esc(feeSentence())+'</p><a class="btn secondary small" href="#/admin/fees">'+esc(t("fees"))+'</a></div>'
+      +'<div class="card" style="margin-top:12px"><h2>'+esc(t("fee_mode"))+'</h2><p>'+esc(t("current_mode"))+': <strong>'+esc((S.config&&S.config.feeMode)||"supporter_fee")+'</strong></p><p class="small">'+esc(feeSentence())+'</p><a class="btn secondary small" href="#/admin/fees">'+esc(t("fees"))+'</a></div>'
       +'<div class="btn-row"><a class="btn" href="#/admin/queue">'+esc(t("admin_queue_cta"))+'</a><a class="btn secondary" href="#/swipe">'+esc(t("back_to_app"))+'</a></div>';
     function statBox(l, v){ return '<div class="card stat"><div class="n">'+esc(v)+'</div><div class="l">'+esc(l)+'</div></div>'; }
   }catch(e){
@@ -2201,13 +2274,13 @@ function renderAdminQueue(){
       +'<div class="kv"><span>'+esc(t("packet_prev_reports"))+'</span><b>'+esc(prevReports)+'</b></div>'
       +(pay.story?'<h3>'+esc(t("packet_story"))+'</h3><p>'+esc(pay.story)+'</p>':"")
       +(pay.description?'<h3>'+esc(t("details"))+'</h3><p>'+esc(pay.description)+'</p>':"")
-      +(pay.photoUrl?'<img class="bill-photo" src="'+esc(pay.photoUrl)+'" alt="">':"")
+      +(pay.photoUrl?'<img class="bill-photo" src="'+esc(pay.photoUrl)+'" alt="'+esc(t("bill_photo_alt"))+'" loading="lazy">':"")
       +(pay.hasPrivateProof||pay.privateProof?'<p class="small">🔒 '+esc(t("packet_proof"))+'</p>':"")
       +(pay.aiNote?'<p class="small muted">'+esc(pay.aiNote)+'</p>':"")
       +(pay.flags&&pay.flags.length?'<h3>'+esc(t("packet_flags"))+'</h3><p class="small">'+esc(t("ai_suggested"))+'</p><ul>'+pay.flags.map(function(f){ return '<li>'+esc(typeof f==="string"?f:JSON.stringify(f))+'</li>'; }).join("")+'</ul>':"")
-      +'<label>'+esc(t("decision_reason"))+'</label><textarea id="pk-reason" maxlength="500" placeholder="'+esc(t("reason_ph"))+'"></textarea>'
-      +'<label>'+esc(t("owner_private_note"))+'</label><textarea id="pk-note" maxlength="500"></textarea>'
-      +'<div class="field-err" id="pk-err"></div>'
+      +'<label for="pk-reason">'+esc(t("decision_reason"))+'</label><textarea id="pk-reason" maxlength="500" placeholder="'+esc(t("reason_ph"))+'"></textarea>'
+      +'<label for="pk-note">'+esc(t("owner_private_note"))+'</label><textarea id="pk-note" maxlength="500"></textarea>'
+      +'<div class="field-err" id="pk-err" role="alert"></div>'
       +'<div style="display:grid;gap:8px;margin-top:10px"><button class="btn" data-dec="approve">✓ '+esc(t("approve"))+'</button><button class="btn secondary" data-dec="changes">✎ '+esc(t("request_changes"))+'</button><button class="btn danger" data-dec="reject">✕ '+esc(t("reject"))+'</button></div>');
     $all("[data-dec]").forEach(function(btn){
       btn.onclick=async function(){
@@ -2228,7 +2301,7 @@ function renderAdminQueue(){
 function renderAdminUsers(){
   if(!adminGuard()) return;
   view('<h1>'+esc(t("users"))+'</h1>'+adminNav("users")
-    +'<input id="au-search" placeholder="'+esc(t("users_search_ph"))+'" style="margin-bottom:10px">'
+    +'<label class="sr-only" for="au-search">'+esc(t("users_search_ph"))+'</label><input id="au-search" placeholder="'+esc(t("users_search_ph"))+'" style="margin-bottom:10px">'
     +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
   bindAdminLogout();
   var timer=null;
@@ -2250,8 +2323,9 @@ function renderAdminUsers(){
       $all("[data-u]", body).forEach(function(btn){
         btn.onclick=async function(){
           var act=btn.getAttribute("data-act"), id=btn.getAttribute("data-u");
+          btn.disabled=true;
           try{ await api("/admin/users/"+encodeURIComponent(id)+"/"+act, {method:"POST"}); toast(act==="suspend"?t("user_suspended"):t("user_restored")); load(); }
-          catch(e){ toast(e.message||t("err_generic"), true); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
         };
       });
     }catch(e){
@@ -2275,7 +2349,7 @@ function renderAdminVerifications(){
         return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(v.type||"")+'</strong><span class="chip">'+esc(v.status||"")+'</span></div>'
           +'<p class="small">'+esc(v.display_name||v.username||v.user_id||"")+(v.bill_id?' · '+esc(t("bill"))+' '+esc(v.bill_id):"")+' · '+esc(timeAgo(v.created_at||v.createdAt))+'</p>'
           +(v.doc_url?'<p><a href="'+esc(v.doc_url)+'" target="_blank" rel="noopener">'+esc(t("verif_doc"))+'</a></p>':"")
-          +'<label>'+esc(t("verif_note"))+'</label><textarea id="vn-'+esc(v.id)+'" maxlength="500"></textarea>'
+          +'<label for="vn-'+esc(v.id)+'">'+esc(t("verif_note"))+'</label><textarea id="vn-'+esc(v.id)+'" maxlength="500"></textarea>'
           +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
           +'<button class="btn small" data-v="'+esc(v.id)+'" data-dec="approved">'+esc(t("verif_approve"))+'</button>'
           +'<button class="btn secondary small" data-v="'+esc(v.id)+'" data-dec="more_required">'+esc(t("verif_more"))+'</button>'
@@ -2284,8 +2358,9 @@ function renderAdminVerifications(){
       $all("[data-v]", body).forEach(function(btn){
         btn.onclick=async function(){
           var id=btn.getAttribute("data-v"), dec=btn.getAttribute("data-dec");
+          btn.disabled=true;
           try{ await api("/admin/verifications/"+encodeURIComponent(id), {method:"POST", body:{decision:dec, note:$("#vn-"+CSS.escape(id)).value.trim()||undefined}}); toast(t("verification_decided")); load(); }
-          catch(e){ toast(e.message||t("err_generic"), true); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
         };
       });
     }catch(e){
@@ -2315,8 +2390,9 @@ function renderAdminReports(){
       }).join("");
       $all("[data-r]", body).forEach(function(btn){
         btn.onclick=async function(){
+          btn.disabled=true;
           try{ await api("/admin/reports/"+encodeURIComponent(btn.getAttribute("data-r")), {method:"POST", body:{action:btn.getAttribute("data-a")}}); toast(t("decision_saved")); load(); }
-          catch(e){ toast(e.message||t("err_generic"), true); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
         };
       });
     }catch(e){
@@ -2342,23 +2418,23 @@ function renderAdminFees(){
       var tipCfg=d.founderTipConfig||{};
       var tipEnabled=tipCfg.enabled!==false;
       var tipPcts=Array.isArray(tipCfg.optionsPercent)&&tipCfg.optionsPercent.length?tipCfg.optionsPercent.filter(function(x){ return x>0; }).join(","):"5,10";
-      body.innerHTML='<div class="card"><h3>'+esc(t("fee_mode"))+'</h3>'
+      body.innerHTML='<div class="card"><h2>'+esc(t("fee_mode"))+'</h2>'
         +'<p>'+esc(t("current_mode"))+': <strong>'+esc(mode==="zero_fee_plus_tip"?t("fee_mode_zero"):t("fee_mode_supporter"))+'</strong></p>'
         +'<p class="small">'+esc(t("staged_mode"))+': '+esc(mode==="zero_fee_plus_tip"?t("fee_mode_supporter"):t("fee_mode_zero"))+' · '+esc(t("pending_decision"))+'</p>'
         +'<p class="small">⚠️ '+esc(t("fee_switch_warn"))+'</p>'
         +'<button class="btn" id="fee-switch">'+esc(t("switch_mode"))+' → '+(mode==="zero_fee_plus_tip"?esc(t("fee_mode_supporter")):esc(t("fee_mode_zero")))+'</button></div>'
-        +'<div class="card" style="margin-top:12px"><h3>'+esc(t("fees_current"))+'</h3><p class="small">'+esc(t("fee_config_note"))+' '+esc(t("fees_charity_zero"))+'</p>'
-        +'<label>'+esc(t("fees_npr_flat"))+' (रू)</label><input id="fee-npr-flat" type="number" value="'+esc(fromMinor(npr.flatMinor!=null?npr.flatMinor:npr.flat||16000))+'">'
-        +'<label>'+esc(t("fees_npr_threshold"))+' (रू)</label><input id="fee-npr-thr" type="number" value="'+esc(fromMinor(npr.thresholdMinor!=null?npr.thresholdMinor:npr.threshold||160000))+'">'
-        +'<label>'+esc(t("fees_inr_flat"))+' (₹)</label><input id="fee-inr-flat" type="number" value="'+esc(fromMinor(inr.flatMinor!=null?inr.flatMinor:inr.flat||10000))+'">'
-        +'<label>'+esc(t("fees_inr_threshold"))+' (₹)</label><input id="fee-inr-thr" type="number" value="'+esc(fromMinor(inr.thresholdMinor!=null?inr.thresholdMinor:inr.threshold||100000))+'">'
-        +'<label>'+esc(t("fees_percent"))+'</label><input id="fee-pct" type="number" value="'+esc(pct)+'">'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("fees_current"))+'</h2><p class="small">'+esc(t("fee_config_note"))+' '+esc(t("fees_charity_zero"))+'</p>'
+        +'<label for="fee-npr-flat">'+esc(t("fees_npr_flat"))+' (रू)</label><input id="fee-npr-flat" type="number" value="'+esc(fromMinor(npr.flatMinor!=null?npr.flatMinor:npr.flat||16000))+'">'
+        +'<label for="fee-npr-thr">'+esc(t("fees_npr_threshold"))+' (रू)</label><input id="fee-npr-thr" type="number" value="'+esc(fromMinor(npr.thresholdMinor!=null?npr.thresholdMinor:npr.threshold||160000))+'">'
+        +'<label for="fee-inr-flat">'+esc(t("fees_inr_flat"))+' (₹)</label><input id="fee-inr-flat" type="number" value="'+esc(fromMinor(inr.flatMinor!=null?inr.flatMinor:inr.flat||10000))+'">'
+        +'<label for="fee-inr-thr">'+esc(t("fees_inr_threshold"))+' (₹)</label><input id="fee-inr-thr" type="number" value="'+esc(fromMinor(inr.thresholdMinor!=null?inr.thresholdMinor:inr.threshold||100000))+'">'
+        +'<label for="fee-pct">'+esc(t("fees_percent"))+'</label><input id="fee-pct" type="number" value="'+esc(pct)+'">'
         +'<button class="btn" id="fee-save" style="margin-top:10px">'+esc(t("fees_save"))+'</button></div>'
-        +'<div class="card" style="margin-top:12px"><h3>'+esc(t("founder_tip_config"))+'</h3>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("founder_tip_config"))+'</h2>'
         +'<label class="check-row"><input type="checkbox" id="tip-enabled" '+(tipEnabled?"checked":"")+'> '+esc(t("tip_enabled"))+'</label>'
-        +'<label>'+esc(t("tip_percents"))+'</label><input id="tip-pcts" value="'+esc(tipPcts)+'" placeholder="5,10">'
+        +'<label for="tip-pcts">'+esc(t("tip_percents"))+'</label><input id="tip-pcts" value="'+esc(tipPcts)+'" placeholder="5,10">'
         +'<button class="btn secondary" id="tip-save" style="margin-top:8px">'+esc(t("save_config"))+'</button></div>'
-        +'<div class="card" style="margin-top:12px"><h3>'+esc(t("payment_methods"))+'</h3><p class="small">'+esc(t("methods_note"))+'</p><div id="methods-body">'+esc(t("loading"))+'</div></div>';
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("payment_methods"))+'</h2><p class="small">'+esc(t("methods_note"))+'</p><div id="methods-body">'+esc(t("loading"))+'</div></div>';
       $("#fee-switch").onclick=function(){
         var next=mode==="zero_fee_plus_tip"?"supporter_fee":"zero_fee_plus_tip";
         confirmDialog(t("switch_mode"), t("fee_switch_warn"), t("switch_mode"), async function(){
@@ -2367,6 +2443,7 @@ function renderAdminFees(){
         });
       };
       $("#fee-save").onclick=async function(){
+        var b=$("#fee-save"); b.disabled=true; b.textContent=t("loading");
         try{
           var pct2=parseFloat($("#fee-pct").value);
           var nprFlat=toMinor($("#fee-npr-flat").value), inrFlat=toMinor($("#fee-inr-flat").value);
@@ -2376,10 +2453,13 @@ function renderAdminFees(){
           }}});
           toast(t("config_saved"));
         }catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ b.disabled=false; b.textContent=t("fees_save"); }
       };
       $("#tip-save").onclick=async function(){
+        var b=$("#tip-save"); b.disabled=true; b.textContent=t("loading");
         try{ await api("/admin/fees", {method:"PUT", body:{founderTipConfig:{enabled:$("#tip-enabled").checked, optionsPercent:[0].concat($("#tip-pcts").value.split(",").map(function(x){ return parseFloat(x.trim()); }).filter(function(x){ return !isNaN(x)&&x>0; })), defaultPercent:0}}}); toast(t("config_saved")); }
         catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ b.disabled=false; b.textContent=t("save_config"); }
       };
       try{
         var md=await api("/admin/methods");
@@ -2395,11 +2475,12 @@ function renderAdminFees(){
           mb.innerHTML=rows.length?rows.join(""):'<p class="small">'+esc(t("no_methods"))+'</p>';
           $all("[data-m]", mb).forEach(function(btn){
             btn.onclick=async function(){
+              btn.disabled=true;
               try{
                 var cc2=btn.getAttribute("data-c"), mid=btn.getAttribute("data-m"), en=btn.getAttribute("data-en")==="1";
                 (pm[cc2]||[]).forEach(function(m){ if(m.id===mid) m.enabled=en; });
                 await api("/admin/methods", {method:"PUT", body:{paymentMethods:pm}}); toast(t("config_saved")); load();
-              }catch(e){ toast(e.message||t("err_generic"), true); }
+              }catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
             };
           });
         }
@@ -2413,7 +2494,7 @@ function renderAdminFees(){
 function renderAdminAudit(){
   if(!adminGuard()) return;
   view('<h1>'+esc(t("audit_log"))+'</h1>'+adminNav("audit")
-    +'<div style="display:flex;gap:8px;margin-bottom:10px"><input id="audit-filter" placeholder="'+esc(t("audit_filter"))+'" style="flex:1"><button class="btn secondary small" id="audit-export">'+esc(t("export_audit"))+'</button></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px"><label class="sr-only" for="audit-filter">'+esc(t("audit_filter"))+'</label><input id="audit-filter" placeholder="'+esc(t("audit_filter"))+'" style="flex:1"><button class="btn secondary small" id="audit-export">'+esc(t("export_audit"))+'</button></div>'
     +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
   bindAdminLogout();
   var rows=[];
@@ -2459,7 +2540,15 @@ async function boot(){
   }catch(e){ S.user=null; }
   if(!location.hash) location.hash="#/splash";
   route();
-  window.addEventListener("online", function(){ toast(t("session_restored")); });
+  window.addEventListener("online", function(){ hideOfflineBanner(); toast(t("session_restored")); });
+  window.addEventListener("offline", function(){ showOfflineBanner(true); });
+  if(navigator.onLine===false) showOfflineBanner(true);
+  var ob=$("#offline-retry"); if(ob) ob.addEventListener("click", function(){ hideOfflineBanner(); route(); });
+  var sk=document.querySelector(".skip-link");
+  if(sk) sk.addEventListener("click", function(e){ e.preventDefault(); var m=$("#view"); if(m) m.focus(); });
+  if("serviceWorker" in navigator){
+    try{ navigator.serviceWorker.register("/sw.js").catch(function(){ /* offline shell is best-effort */ }); }catch(e){ /* unsupported */ }
+  }
 }
 document.addEventListener("DOMContentLoaded", boot);
 if(document.readyState!=="loading") boot();
