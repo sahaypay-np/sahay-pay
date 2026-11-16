@@ -62,6 +62,13 @@ const idx = db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND n
 const hash = db.prepare(\"SELECT value FROM settings WHERE key='schema_hash'\").get();
 const sessCols = db.prepare(\"PRAGMA table_info(sessions)\").all().map(r => r.name);
 const rate = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='rate_limits'\").all();
+// Phase 2 §9 columns/table (EXTRA_COLUMNS + schema file).
+const billCols = db.prepare(\"PRAGMA table_info(bills)\").all().map(r => r.name);
+const giftCols = db.prepare(\"PRAGMA table_info(gifts)\").all().map(r => r.name);
+const complaintCols = db.prepare(\"PRAGMA table_info(complaints)\").all().map(r => r.name);
+const adminSessCols = db.prepare(\"PRAGMA table_info(admin_sessions)\").all().map(r => r.name);
+const uploadsTbl = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='uploads'\").all();
+const uploadsIdx = db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name='idx_uploads_user'\").all();
 console.log([
   cols.includes('recovery_code_lookup') ? 'COL_OK' : 'COL_MISSING',
   cols.includes('terms_accepted_version') ? 'CONSENT_OK' : 'CONSENT_MISSING',
@@ -69,9 +76,17 @@ console.log([
   hash ? 'HASH_OK' : 'HASH_MISSING',
   sessCols.includes('csrf_token') ? 'CSRF_OK' : 'CSRF_MISSING',
   rate.length ? 'RATELIMIT_OK' : 'RATELIMIT_MISSING',
+  (sessCols.includes('ua_family_hash') && sessCols.includes('trusted_note') && sessCols.includes('reauthed_at')) ? 'SESS9_OK' : 'SESS9_MISSING',
+  cols.includes('device_fp') ? 'USERDEV_OK' : 'USERDEV_MISSING',
+  (billCols.includes('payout_edited_at') && billCols.includes('payout_consent_at')) ? 'BILLS9_OK' : 'BILLS9_MISSING',
+  giftCols.includes('payment_method') ? 'GIFTS9_OK' : 'GIFTS9_MISSING',
+  complaintCols.includes('category') ? 'COMPLAINTS9_OK' : 'COMPLAINTS9_MISSING',
+  adminSessCols.includes('elevated_until') ? 'ADMINSESS9_OK' : 'ADMINSESS9_MISSING',
+  uploadsTbl.length ? 'UPLOADS_OK' : 'UPLOADS_MISSING',
+  uploadsIdx.length ? 'UPLOADS_IDX_OK' : 'UPLOADS_IDX_MISSING',
 ].join(' '));
 db.close();")
-for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK; do
+for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK SESS9_OK USERDEV_OK BILLS9_OK GIFTS9_OK COMPLAINTS9_OK ADMINSESS9_OK UPLOADS_OK UPLOADS_IDX_OK; do
   if echo "$CHECKS" | grep -q "$want"; then echo "PASS: $want"; pass=$((pass+1)); else echo "FAIL: $want — checks: $CHECKS"; fail=$((fail+1)); fi
 done
 

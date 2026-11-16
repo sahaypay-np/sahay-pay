@@ -27,17 +27,19 @@ trap 'rm -rf "$TMPD"' EXIT
 r=$(curl -s -w '\n%{http_code}' -X POST "$B/admin/setup-pin" $J -d '{"pin":"123456"}'); t "admin setup-pin" 200 "$(code "$r")"
 r=$(curl -s -w '\n%{http_code}' -c "$TMPD/c-admin.txt" -X POST "$B/admin/login" $J -d '{"pin":"123456"}'); t "admin login" 200 "$(code "$r")"
 T_ADMIN=$(curl -s -b "$TMPD/c-admin.txt" "$B/admin/csrf" | jget "['csrfToken']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/elevate" $J -d '{"pin":"123456"}'); t "admin elevate" 200 "$(code "$r")"
 r=$(curl -s -w '\n%{http_code}' -c "$TMPD/c-poster.txt" -X POST "$B/auth/onboard" $J -d '{"displayName":"Asha Sharma","age":25,"country":"NP","city":"Bhairahawa","photoUrl":"/uploads/public/test-avatar.jpg","termsAccepted":true,"privacyAccepted":true}'); t "onboard poster (with photo)" 201 "$(code "$r")"
 T_POSTER=$(curl -s -b "$TMPD/c-poster.txt" "$B/auth/csrf" | jget "['csrfToken']")
+RC_POSTER=$(body "$r" | jget "['recoveryCode']")
 has "onboard stores photoUrl" "$(body "$r")" '/uploads/public/test-avatar.jpg'
 r=$(curl -s -w '\n%{http_code}' -c "$TMPD/c-helper.txt" -X POST "$B/auth/onboard" $J -d '{"displayName":"Bikash Rai","age":30,"country":"NP","city":"Kathmandu","termsAccepted":true,"privacyAccepted":true}'); t "onboard helper" 201 "$(code "$r")"
 T_HELPER=$(curl -s -b "$TMPD/c-helper.txt" "$B/auth/csrf" | jget "['csrfToken']")
 
 # --- bill create: bank_np with bankName + branch, anonymous, booleans ---
-r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Electricity bill for June","category":"Electricity","company":"NEA","amountMinor":500000,"story":"My electricity bill is due and my salary is late this month.","city":"Bhairahawa","charity":false,"anonymous":true,"payDirect":false,"payoutMethods":[{"method":"bank_np","holderName":"Asha Sharma","account":"1234567890","bankName":"Nabil Bank","branch":"Bhairahawa"}],"submit":true}'); t "create bank_np bill (anonymous)" 201 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Electricity bill for June","category":"Electricity","company":"NEA","amountMinor":500000,"story":"My electricity bill is due and my salary is late this month.","city":"Bhairahawa","charity":false,"anonymous":true,"payDirect":false,"payoutMethods":[{"method":"bank_np","holderName":"Asha Sharma","account":"1234567890","bankName":"Nabil Bank","branch":"Bhairahawa"}],"payoutConsent":true,"submit":true}'); t "create bank_np bill (anonymous)" 201 "$(code "$r")"
 BILL_ID=$(echo "$(body "$r")" | jget "['bill']['id']")
 has "bill is anonymous" "$(body "$r")" '"anonymous":true'
-r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Bad bank bill","category":"Rent","amountMinor":100000,"story":"This bill has no bank name so it must fail validation.","payoutMethods":[{"method":"bank_np","holderName":"Asha Sharma","account":"1234567890"}],"submit":true}'); t "bank_np without bankName -> 400" 400 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Bad bank bill","category":"Rent","amountMinor":100000,"story":"This bill has no bank name so it must fail validation.","payoutMethods":[{"method":"bank_np","holderName":"Asha Sharma","account":"1234567890"}],"payoutConsent":true,"submit":true}'); t "bank_np without bankName -> 400" 400 "$(code "$r")"
 
 # --- pay-direct bill: boolean true must stick, biller fields public ---
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Internet bill direct","category":"Internet","amountMinor":200000,"story":"Pay my ISP directly, please.","payDirect":true,"billerName":"WorldLink","billerRef":"WL-123","billerDestination":"WorldLink app, account WL-123","submit":true}'); t "create pay-direct bill" 201 "$(code "$r")"
@@ -45,12 +47,13 @@ PD_ID=$(echo "$(body "$r")" | jget "['bill']['id']")
 has "payDirect true stored" "$(body "$r")" '"payDirect":true'
 
 # --- charity bill: fee must be 0 ---
-r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Charity food drive","category":"Charity","amountMinor":300000,"story":"Raising money for the community food drive this month.","charity":true,"payoutMethods":[{"method":"esewa","holderName":"Asha Sharma","account":"9845671234"}],"submit":true}'); t "create charity bill" 201 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Charity food drive","category":"Charity","amountMinor":300000,"story":"Raising money for the community food drive this month.","charity":true,"payoutMethods":[{"method":"esewa","holderName":"Asha Sharma","account":"9845671234"}],"payoutConsent":true,"submit":true}'); t "create charity bill" 201 "$(code "$r")"
 CH_ID=$(echo "$(body "$r")" | jget "['bill']['id']")
 has "charity true stored" "$(body "$r")" '"charity":true'
 
 # --- approve all three via the admin queue ---
 QUEUE=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/queue?status=pending")
+if echo "$QUEUE" | grep -q '1234567890'; then echo "FAIL: admin queue leaks payout plaintext (835)"; fail=$((fail+1)); else echo "PASS: admin queue has no payout plaintext (835)"; pass=$((pass+1)); fi
 for PID in $(echo "$QUEUE" | python3 -c "import sys,json;print(' '.join(p['id'] for p in json.load(sys.stdin)['packets']))"); do
   r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/review/$PID" $J -d '{"decision":"approve"}')
   t "approve packet ${PID:0:8}" 200 "$(code "$r")"
@@ -58,6 +61,7 @@ done
 
 # --- feed: anonymous masking, payout hint, badges key, filters ---
 FEED=$(curl -s -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" "$B/feed?limit=20")
+if echo "$FEED" | grep -q '1234567890'; then echo "FAIL: feed leaks payout plaintext (835)"; fail=$((fail+1)); else echo "PASS: feed has no payout plaintext (835)"; pass=$((pass+1)); fi
 has "feed shows anonymous poster" "$FEED" '"displayName":"Anonymous"'
 has "feed has payoutHint" "$FEED" 'payoutHint'
 has "feed has badges array" "$FEED" '"badges"'
@@ -84,11 +88,18 @@ r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HEL
 has "quote fee 16000 (NPR flat)" "$(body "$r")" '"feeMinor":16000'
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" -X POST "$B/gifts" $J -d "{\"billId\":\"$BILL_ID\",\"amountMinor\":100000}"); t "gift create" 201 "$(code "$r")"
 GIFT_ID=$(echo "$(body "$r")" | jget "['gift']['id']")
-r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" -X POST "$B/gifts/$GIFT_ID/reveal"); t "gift reveal" 200 "$(code "$r")"
+node -e "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('data/sahay-pay.db');d.prepare('UPDATE sessions SET created_at=? WHERE user_id=(SELECT id FROM users WHERE username LIKE \'bikashrai%\')').run(new Date(Date.now()-6*60*1000).toISOString());"
+CH=$(curl -s -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" "$B/gifts/$GIFT_ID/challenge")
+CID=$(echo "$CH" | jget "['challengeId']")
+ANS=$(echo "$CH" | python3 -c "import sys,json,re; q=json.load(sys.stdin)['question']; a,b=re.search(r'(\d+) \+ (\d+)',q).groups(); print(int(a)+int(b))")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -c "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" -X POST "$B/gifts/$GIFT_ID/reveal" $J -d "{\"challengeId\":\"$CID\",\"answer\":$ANS}"); t "gift reveal" 200 "$(code "$r")"
 has "reveal has payoutMethods array" "$(body "$r")" '"payoutMethods"'
 has "reveal bankName" "$(body "$r")" 'Nabil Bank'
 has "reveal branch" "$(body "$r")" 'Bhairahawa'
 has "reveal account number" "$(body "$r")" '1234567890'
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" "$B/gifts/$GIFT_ID"); t "gift receipt (party)" 200 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' "$B/stats"); t "GET /api/stats" 200 "$(code "$r")"
+has "stats has billsPosted" "$(body "$r")" 'billsPosted'
 
 # --- leaders: canonical vocab + aliases + brands tab ---
 r=$(curl -s -w '\n%{http_code}' "$B/leaders?tab=most_received&period=30d&scope=all"); t "leaders canonical vocab" 200 "$(code "$r")"
@@ -99,6 +110,7 @@ r=$(curl -s "$B/leaders?tab=brands"); has "leaders brands tab has mostResponded"
 has "leaders brands tab has mostAsked" "$r" 'mostAsked'
 
 # --- payout change: payoutMethods wrapper + branch, live bill goes back to review ---
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -c "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/auth/confirm-identity" $J -d "{\"code\":\"$RC_POSTER\"}"); t "confirm-identity before payout change" 200 "$(code "$r")"
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills/$BILL_ID/payout" $J -d '{"payoutMethods":[{"method":"bank_np","holderName":"Asha Sharma","account":"9999988888","bankName":"Global IME","branch":"Butwal"}]}'); t "payout change (wrapper shape)" 200 "$(code "$r")"
 has "payout change sends live bill back to review" "$(body "$r")" '"backToReview":true'
 
@@ -168,7 +180,7 @@ SC=$(echo "$r" | grep -i '^set-cookie: sp_session=')
 has "session cookie Secure behind https proxy" "$SC" 'Secure'
 
 # --- IDOR (item 145): user B must not reach user A's bill / payout / gift / verification / private file ---
-r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Pending IDOR bill","category":"Rent","amountMinor":150000,"story":"A pending bill for the IDOR checks.","payoutMethods":[{"method":"esewa","holderName":"Asha Sharma","account":"9845671234"}],"submit":true}'); t "create pending IDOR bill" 201 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Pending IDOR bill","category":"Rent","amountMinor":150000,"story":"A pending bill for the IDOR checks.","payoutMethods":[{"method":"esewa","holderName":"Asha Sharma","account":"9845671234"}],"payoutConsent":true,"submit":true}'); t "create pending IDOR bill" 201 "$(code "$r")"
 IDOR_BILL=$(echo "$(body "$r")" | jget "['bill']['id']")
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" "$B/bills/$IDOR_BILL"); t "B GET A pending bill -> 404" 404 "$(code "$r")"
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" -X PATCH "$B/bills/$IDOR_BILL" $J -d '{"title":"Hijacked title"}'); t "B PATCH A bill -> 404" 404 "$(code "$r")"
