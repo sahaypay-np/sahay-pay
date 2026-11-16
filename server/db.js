@@ -207,6 +207,17 @@ const EXTRA_COLUMNS = [
   ['bills', 'expires_at', 'TEXT'],
   ['bills', 'extension_used', 'INTEGER NOT NULL DEFAULT 0'],
   ['bills', 'repost_count', 'INTEGER NOT NULL DEFAULT 0'],
+  // Phase 2 (sections 9–10): session hardening, payout consent/edit,
+  // gift payment method, complaint category, admin elevation, UA hash.
+  ['sessions', 'ua_family_hash', 'TEXT'],
+  ['sessions', 'trusted_note', 'TEXT'],
+  ['sessions', 'reauthed_at', 'TEXT'],
+  ['users', 'ua_hash', 'TEXT'],
+  ['bills', 'payout_edited_at', 'TEXT'],
+  ['bills', 'payout_consent_at', 'TEXT'],
+  ['gifts', 'payment_method', "TEXT DEFAULT ''"],
+  ['complaints', 'category', "TEXT DEFAULT 'general'"],
+  ['admin_sessions', 'elevated_until', 'TEXT'],
 ];
 
 // Cold-start mitigation (checklist priority fix (g)): the full migrate is

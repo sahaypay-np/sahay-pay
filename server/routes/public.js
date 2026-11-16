@@ -7,6 +7,8 @@
 'use strict';
 
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const db = require('../db');
 const { feeModelSentence } = require('../lib/fees');
 const { TERMS_VERSION, PRIVACY_VERSION, POLICY_EFFECTIVE_DATE } = require('../lib/policy');
@@ -40,6 +42,14 @@ router.get('/config', async (req, res, next) => {
       ]);
     const feeMode = feeModeRaw || 'supporter_fee';
     const minGiftMinor = Number(minGiftRaw) || 1000;
+    // Phase 2 public settings: fraud banner (974), security status (886),
+    // known scams (976), emergency freeze state (883).
+    const [fraudBanner, securityStatus, knownScams, freezeOn] = await Promise.all([
+      db.getSettingJson('fraud_banner', { active: false, message: '' }),
+      db.getSettingJson('security_status', { status: 'normal', message: '', incidents: [] }),
+      db.getSettingJson('known_scams', []),
+      db.getSetting('emergency_freeze'),
+    ]);
     res.json({
       appName: 'Sahay Pay',
       tagline: 'Small acts. Real help.',
@@ -57,7 +67,58 @@ router.get('/config', async (req, res, next) => {
       policyVersion: { terms: TERMS_VERSION, privacy: PRIVACY_VERSION, effective: POLICY_EFFECTIVE_DATE },
       crossBorderNote: CROSS_BORDER_NOTE,
       giftAmountChips: { NPR: [10000, 50000, 100000], INR: [10000, 50000, 100000] },
+      fraudBanner: fraudBanner && fraudBanner.active ? fraudBanner : null,
+      securityStatus,
+      knownScams: Array.isArray(knownScams) ? knownScams : [],
+      emergencyFreeze: freezeOn === '1',
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Public stats (items 964/965): live totals for the fact sheet +
+// transparency page. Aggregates only — no personal data, no per-user rows.
+
+router.get('/stats', async (req, res, next) => {
+  try {
+    const q = async (sql, params = []) => (await db.get(sql, params)) || {};
+    const billsPosted = await q('SELECT COUNT(*) AS c FROM bills');
+    const billsApproved = await q(`SELECT COUNT(*) AS c FROM bills WHERE status IN ('approved', 'completed')`);
+    const billsCompleted = await q(`SELECT COUNT(*) AS c FROM bills WHERE status = 'completed'`);
+    const giftsConfirmed = await q(`SELECT COUNT(*) AS c FROM gifts WHERE status = 'confirmed'`);
+    const volume = await db.query(
+      `SELECT currency, COALESCE(SUM(amount_minor),0) AS total FROM gifts WHERE status = 'confirmed' GROUP BY currency`
+    );
+    const complaintsResolved = await q(`SELECT COUNT(*) AS c FROM complaints WHERE status = 'resolved'`);
+    const complaintsTotal = await q('SELECT COUNT(*) AS c FROM complaints');
+    const users = await q('SELECT COUNT(*) AS c FROM users');
+    const published = await db.getSettingJson('transparency_reports', {});
+    const months = Object.keys(published).sort().reverse();
+    res.json({
+      billsPosted: Number(billsPosted.c || 0),
+      billsApproved: Number(billsApproved.c || 0),
+      billsCompleted: Number(billsCompleted.c || 0),
+      giftsConfirmed: Number(giftsConfirmed.c || 0),
+      confirmedVolume: volume.rows.map((r) => ({ currency: r.currency, totalMinor: Number(r.total) })),
+      complaintsResolved: Number(complaintsResolved.c || 0),
+      complaintsTotal: Number(complaintsTotal.c || 0),
+      users: Number(users.c || 0),
+      latestTransparencyReport: months.length ? published[months[0]] : null,
+      demoMode: true,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Public changelog (item 967): the repo CHANGELOG.md as text ---
+
+router.get('/changelog', async (req, res, next) => {
+  try {
+    const file = path.join(__dirname, '..', '..', 'CHANGELOG.md');
+    const text = fs.readFileSync(file, 'utf8');
+    res.json({ changelog: text });
   } catch (err) {
     next(err);
   }

@@ -20,10 +20,14 @@ const crypto = require('crypto');
 const db = require('../db');
 const { logAudit, nowIso } = require('./audit');
 const { consentIsCurrent } = require('./policy');
+const { browserFamily, deviceClass, deviceLabel, familyHash } = require('./device');
 
 const SESSION_DAYS = 30;
+const SESSION_ABSOLUTE_DAYS = 90; // item 819: no session lives past 90 days, however active
+const MAX_SESSIONS_PER_USER = 3; // item 811: oldest revoked automatically
 const ADMIN_SESSION_HOURS = 24;
 const ADMIN_IDLE_MINUTES = 30;
+const ADMIN_ELEVATED_MINUTES = 10; // item 808: PIN re-auth elevation window
 const RENEW_WITHIN_MS = 7 * 24 * 60 * 60 * 1000; // renew when < 7 days left
 
 function hashToken(token) {
@@ -66,15 +70,74 @@ async function createSession(userId, userAgent) {
   const csrfToken = randomToken(24);
   const now = new Date();
   const expires = new Date(now.getTime() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+  // Item 811: cap concurrent sessions at 3 — revoke the oldest first so
+  // this new session never pushes the account over the cap.
+  const { rows: existing } = await db.query(
+    'SELECT token_hash FROM sessions WHERE user_id = $1 ORDER BY last_seen_at DESC',
+    [userId]
+  );
+  for (const old of existing.slice(MAX_SESSIONS_PER_USER - 1)) {
+    await db.run('DELETE FROM sessions WHERE token_hash = $1', [old.token_hash]);
+  }
   await db.run(
-    `INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_seen_at, csrf_token, user_agent)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    `INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_seen_at, csrf_token, user_agent, ua_family_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [
       hashToken(token), userId, now.toISOString(), expires.toISOString(),
       now.toISOString(), csrfToken, String(userAgent || '').slice(0, 500),
+      familyHash(userAgent),
     ]
   );
   return { token, csrfToken, expiresAt: expires.toISOString() };
+}
+
+// Item 802: rotate the session token on a sensitive action (payout reveal,
+// recovery-code regeneration, account deletion). The CSRF token is carried
+// over so in-flight forms keep working; the OLD session token stops working
+// immediately. Returns the new token + cookie options, or null.
+async function rotateSession(req, res) {
+  const oldToken = req.cookies?.sp_session;
+  if (!oldToken || !req.sessionRow) return null;
+  const token = randomToken();
+  const now = new Date();
+  const expires = new Date(now.getTime() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+  const row = req.sessionRow;
+  await db.run('DELETE FROM sessions WHERE token_hash = $1', [hashToken(oldToken)]);
+  await db.run(
+    `INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_seen_at, csrf_token, user_agent, ua_family_hash, trusted_note, reauthed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      hashToken(token), row.user_id, row.created_at, expires.toISOString(),
+      now.toISOString(), row.csrf_token, row.user_agent, row.ua_family_hash,
+      row.trusted_note || null, row.reauthed_at || null,
+    ]
+  );
+  // Keep the absolute 90-day cap (item 819): rotation must not extend it.
+  await db.run(
+    'UPDATE sessions SET expires_at = $1 WHERE token_hash = $2 AND expires_at > $1',
+    [new Date(Date.parse(row.created_at) + SESSION_ABSOLUTE_DAYS * 24 * 60 * 60 * 1000).toISOString(), hashToken(token)]
+  );
+  res.cookie('sp_session', token, sessionCookieOptions(SESSION_DAYS * 24 * 60 * 60 * 1000, req));
+  req.sessionRow = { ...row, token_hash: hashToken(token) };
+  return { token, csrfToken: row.csrf_token };
+}
+
+// Item 802 (admin side): rotate the admin session token on PIN change.
+async function rotateAdminSession(req, res) {
+  const oldToken = req.cookies?.sp_admin;
+  if (!oldToken) return null;
+  const row = await db.get('SELECT * FROM admin_sessions WHERE token_hash = $1', [hashToken(oldToken)]);
+  if (!row) return null;
+  const token = randomToken();
+  const now = new Date();
+  const expires = new Date(now.getTime() + ADMIN_SESSION_HOURS * 60 * 60 * 1000);
+  await db.run('DELETE FROM admin_sessions WHERE token_hash = $1', [hashToken(oldToken)]);
+  await db.run(
+    'INSERT INTO admin_sessions (token_hash, created_at, expires_at, csrf_token, last_seen_at) VALUES ($1, $2, $3, $4, $5)',
+    [hashToken(token), now.toISOString(), expires.toISOString(), row.csrf_token, now.toISOString()]
+  );
+  res.cookie('sp_admin', token, sessionCookieOptions(ADMIN_SESSION_HOURS * 60 * 60 * 1000, req));
+  return { token, csrfToken: row.csrf_token };
 }
 
 async function lookupSession(token) {
@@ -83,6 +146,7 @@ async function lookupSession(token) {
     `SELECT s.*, u.id AS user_id, u.display_name, u.username, u.age, u.country,
             u.city, u.about, u.language, u.photo_url, u.prefs_json, u.suspended,
             u.terms_accepted_version, u.privacy_accepted_version,
+            u.terms_accepted_at, u.privacy_accepted_at,
             u.created_at AS user_created_at
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = $1`,
@@ -93,15 +157,22 @@ async function lookupSession(token) {
     await db.run('DELETE FROM sessions WHERE token_hash = $1', [hashToken(token)]);
     return null;
   }
+  // Item 819: absolute 90-day lifetime from creation — sliding renewal
+  // (below) can never push a session past this.
+  if (row.created_at && Date.parse(row.created_at) + SESSION_ABSOLUTE_DAYS * 24 * 60 * 60 * 1000 <= Date.now()) {
+    await db.run('DELETE FROM sessions WHERE token_hash = $1', [hashToken(token)]);
+    return null;
+  }
   return row;
 }
 
 // Sliding renewal: if the session expires within 7 days, extend it to a full
-// 30 days from now and re-issue the cookie.
+// 30 days from now and re-issue the cookie — never past the 90-day absolute cap.
 async function maybeRenewSession(req, res, sessionRow) {
   const expiresMs = new Date(sessionRow.expires_at).getTime();
   if (expiresMs - Date.now() > RENEW_WITHIN_MS) return;
-  const newExpires = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+  const absoluteCap = Date.parse(sessionRow.created_at) + SESSION_ABSOLUTE_DAYS * 24 * 60 * 60 * 1000;
+  const newExpires = new Date(Math.min(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000, absoluteCap));
   await db.run(
     'UPDATE sessions SET expires_at = $1, last_seen_at = $2 WHERE token_hash = $3',
     [newExpires.toISOString(), nowIso(), hashToken(req.cookies?.sp_session || '')]
@@ -120,12 +191,24 @@ async function destroyAllUserSessions(userId) {
   await db.run('DELETE FROM sessions WHERE user_id = $1', [userId]);
 }
 
+// Item 821: revoke every session EXCEPT the current one.
+async function destroyOtherUserSessions(userId, currentToken) {
+  if (!currentToken) return 0;
+  const result = await db.run(
+    'DELETE FROM sessions WHERE user_id = $1 AND token_hash != $2',
+    [userId, hashToken(currentToken)]
+  );
+  return result.changes || 0;
+}
+
 // Active sessions for the Settings list. The id is the first 12 hex chars
 // of the token hash — enough to identify a row for revoke, useless for
 // forging a session (the token itself is never exposed).
+// Items 801/805: device class + browser derived from the stored user-agent
+// (no IP is ever stored, so no location is shown).
 async function listUserSessions(userId, currentToken) {
   const { rows } = await db.query(
-    `SELECT token_hash, created_at, expires_at, last_seen_at, user_agent
+    `SELECT token_hash, created_at, expires_at, last_seen_at, user_agent, trusted_note
      FROM sessions WHERE user_id = $1 ORDER BY last_seen_at DESC`,
     [userId]
   );
@@ -136,6 +219,10 @@ async function listUserSessions(userId, currentToken) {
     expiresAt: r.expires_at,
     lastSeenAt: r.last_seen_at,
     userAgent: r.user_agent || null,
+    deviceClass: deviceClass(r.user_agent),
+    browser: browserFamily(r.user_agent),
+    deviceLabel: deviceLabel(r.user_agent),
+    trustedNote: r.trusted_note || null,
     current: r.token_hash === currentHash,
   }));
 }
@@ -161,6 +248,30 @@ async function attachUser(req, res, next) {
       res.clearCookie('sp_session', { path: '/' });
       return next();
     }
+    // Items 806/810/818 — token binding: the session token is bound to the
+    // browser family that created it. A token presented from a DIFFERENT
+    // browser family is treated as stolen: the session is destroyed, the
+    // event is audit-logged, and the request continues logged-out (the
+    // X-Session-Suspicious header lets the frontend explain why and point
+    // at recovery — item 810's "force re-onboarding"). Sessions created
+    // before this feature get their family hash lazily. A missing UA on
+    // either side skips the check (no signal, not a mismatch).
+    const currentUa = req.headers['user-agent'] || '';
+    if (row.ua_family_hash && currentUa) {
+      if (!safeEqual(row.ua_family_hash, familyHash(currentUa))) {
+        await db.run('DELETE FROM sessions WHERE token_hash = $1', [hashToken(token)]);
+        await logAudit('user', row.user_id, 'session_fingerprint_changed', 'user', row.user_id, {
+          fromFamily: row.ua_family_hash.slice(0, 8),
+        });
+        res.clearCookie('sp_session', { path: '/' });
+        res.set('X-Session-Suspicious', '1');
+        return next();
+      }
+    } else if (!row.ua_family_hash && currentUa) {
+      db.run('UPDATE sessions SET ua_family_hash = $1 WHERE token_hash = $2', [
+        familyHash(currentUa), hashToken(token),
+      ]).catch(() => {});
+    }
     let prefs = { notifyPrefs: { posts: true, gifts: true, brands: true }, showTotals: true, anonDefault: false };
     try {
       const p = JSON.parse(row.prefs_json || '{}');
@@ -184,6 +295,10 @@ async function attachUser(req, res, next) {
       prefs,
       createdAt: row.user_created_at,
       consentCurrent: consentIsCurrent(row),
+      termsAcceptedVersion: row.terms_accepted_version || null,
+      privacyAcceptedVersion: row.privacy_accepted_version || null,
+      termsAcceptedAt: row.terms_accepted_at || null,
+      privacyAcceptedAt: row.privacy_accepted_at || null,
     };
     req.sessionRow = row;
     await maybeRenewSession(req, res, row);
@@ -330,6 +445,43 @@ async function requireAdmin(req, res, next) {
       return res.status(401).json({ error: { code: 'ADMIN_UNAUTHENTICATED', message: 'Admin login required.' } });
     }
     req.admin = { actor: 'owner' };
+    req.adminSessionRow = row;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ---- Admin PIN re-auth / elevation (item 808) ----
+// Sensitive admin actions (fee changes, bill approval decisions) require
+// the owner PIN to have been re-entered within the last 10 minutes.
+// The elevation flag lives on the admin session row (elevated_until).
+
+async function elevateAdminSession(token) {
+  if (!token) return false;
+  const until = new Date(Date.now() + ADMIN_ELEVATED_MINUTES * 60 * 1000).toISOString();
+  const result = await db.run(
+    'UPDATE admin_sessions SET elevated_until = $1 WHERE token_hash = $2',
+    [until, hashToken(token)]
+  );
+  return (result.changes || 0) > 0;
+}
+
+async function isAdminElevated(token) {
+  if (!token) return false;
+  const row = await db.get('SELECT elevated_until FROM admin_sessions WHERE token_hash = $1', [hashToken(token)]);
+  if (!row || !row.elevated_until) return false;
+  return Date.parse(row.elevated_until) > Date.now();
+}
+
+async function requireElevated(req, res, next) {
+  try {
+    const token = req.cookies?.sp_admin;
+    if (!(await isAdminElevated(token))) {
+      return res.status(403).json({
+        error: { code: 'ELEVATION_REQUIRED', message: 'Please re-enter the owner PIN to do this.' },
+      });
+    }
     next();
   } catch (err) {
     next(err);
@@ -510,17 +662,43 @@ function rateLimit(routeKey, limit, windowMs) {
   };
 }
 
+// Item 843: per-ACCOUNT rate limit (not per-IP) — the key is the signed-in
+// user id, so one account cannot hammer an endpoint from many IPs.
+function rateLimitAccount(routeKey, limit, windowMs) {
+  return async (req, res, next) => {
+    try {
+      if (!req.user) return next(); // requireAuth/requireActive answers first
+      const result = await checkRateLimit(`${routeKey}:user:${req.user.id}`, limit, windowMs);
+      if (!result.allowed) {
+        res.set('Retry-After', String(result.retryAfterSec));
+        return res.status(429).json({
+          error: { code: 'RATE_LIMITED', message: 'Too many requests — please wait a little and try again.' },
+        });
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
 module.exports = {
   SESSION_DAYS,
+  SESSION_ABSOLUTE_DAYS,
+  MAX_SESSIONS_PER_USER,
   ADMIN_SESSION_HOURS,
   ADMIN_IDLE_MINUTES,
+  ADMIN_ELEVATED_MINUTES,
   hashToken,
   randomToken,
   sessionCookieOptions,
   createSession,
+  rotateSession,
+  rotateAdminSession,
   lookupSession,
   destroySession,
   destroyAllUserSessions,
+  destroyOtherUserSessions,
   listUserSessions,
   destroyUserSessionById,
   attachUser,
@@ -536,6 +714,9 @@ module.exports = {
   lookupAdminSession,
   destroyAdminSession,
   requireAdmin,
+  elevateAdminSession,
+  isAdminElevated,
+  requireElevated,
   generateRecoveryCode,
   normalizeRecoveryCode,
   recoveryLookupKey,
@@ -544,5 +725,6 @@ module.exports = {
   verifyCsrf,
   getOrCreateCsrfToken,
   rateLimit,
+  rateLimitAccount,
   checkRateLimit,
 };

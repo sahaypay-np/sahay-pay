@@ -70,22 +70,52 @@ function resolveKey() {
 
 const { key: PAYOUT_KEY, source: PAYOUT_KEY_SOURCE } = resolveKey();
 
-function encryptAccount(plaintext) {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', PAYOUT_KEY, iv);
-  const enc = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, enc]).toString('base64');
+// ---- Key-per-field encryption (Phase 2 item 833) ----
+// Each payout field type (the payout method: esewa, upi, bank_np, …) gets
+// its own AES-256-GCM key, derived from the master key with HMAC-SHA-256
+// over a fixed label. A compromised field key therefore exposes only one
+// field type, never the whole payout table. New ciphertexts carry a "v2:"
+// prefix; legacy blobs (no prefix, master key directly) still decrypt,
+// so existing rows keep working until they are re-encrypted (see the
+// rotation runbook + scripts/reencrypt-payouts.js).
+function fieldKey(fieldType) {
+  return crypto.createHmac('sha256', PAYOUT_KEY).update(`sahay-pay-field:${fieldType || 'account'}`).digest();
 }
 
-function decryptAccount(blob) {
-  const buf = Buffer.from(String(blob), 'base64');
+function encryptAccount(plaintext, fieldType) {
+  const key = fieldKey(fieldType);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v2:${Buffer.concat([iv, tag, enc]).toString('base64')}`;
+}
+
+function decryptAccount(blob, fieldType) {
+  const raw = String(blob || '');
+  // Legacy rows (no prefix) were encrypted with the master key directly.
+  const key = raw.startsWith('v2:') ? fieldKey(fieldType) : PAYOUT_KEY;
+  const b64 = raw.startsWith('v2:') ? raw.slice(3) : raw;
+  const buf = Buffer.from(b64, 'base64');
   const iv = buf.subarray(0, 12);
   const tag = buf.subarray(12, 28);
   const enc = buf.subarray(28);
-  const decipher = crypto.createDecipheriv('aes-256-gcm', PAYOUT_KEY, iv);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+}
+
+// Re-encrypt one stored blob under a NEW master key (rotation support —
+// item 888). The caller supplies the new master key; the old key is the
+// one this process resolved at startup.
+function reencryptAccount(blob, fieldType, newMasterKey) {
+  const plaintext = decryptAccount(blob, fieldType);
+  const key = crypto.createHmac('sha256', newMasterKey).update(`sahay-pay-field:${fieldType || 'account'}`).digest();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v2:${Buffer.concat([iv, tag, enc]).toString('base64')}`;
 }
 
 // ---- Uploads (multer) ----
@@ -165,6 +195,139 @@ function fileMatchesMime(filePath, mime) {
   return sniffFileType(filePath) === expected;
 }
 
+// ---- EXIF / metadata stripping (Phase 2 item 864) ----
+// Pure-JS, no native module (sharp is ruled out by P1 142): JPEG APP1
+// (EXIF) / APP13 (Photoshop) / COM segments are dropped, PNG text chunks
+// (tEXt/iTXt/zTXt) and the eXIf chunk are dropped, WebP EXIF chunks are
+// dropped. Any parse failure leaves the file untouched (fail safe — the
+// upload still succeeds, the metadata just stays).
+// Returns { stripped: boolean, hadMetadata: boolean }.
+
+function stripJpegMetadata(buf) {
+  if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+  const out = [buf.subarray(0, 2)];
+  let i = 2;
+  let stripped = false;
+  let hadMetadata = false;
+  while (i + 4 <= buf.length) {
+    if (buf[i] !== 0xff) return null; // not a marker — give up, keep file
+    const marker = buf[i + 1];
+    if (marker === 0xda) { // SOS: the rest is compressed scan data, copy verbatim
+      out.push(buf.subarray(i));
+      return { buf: Buffer.concat(out), stripped, hadMetadata };
+    }
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
+      out.push(buf.subarray(i, i + 2));
+      i += 2;
+      continue;
+    }
+    const len = buf.readUInt16BE(i + 2);
+    if (len < 2 || i + 2 + len > buf.length) return null;
+    const segment = buf.subarray(i, i + 2 + len);
+    const isApp1 = marker === 0xe1;
+    const isApp13 = marker === 0xed;
+    const isCom = marker === 0xfe;
+    if (isApp1 || isApp13 || isCom) {
+      hadMetadata = true;
+      stripped = true;
+      // dropped
+    } else {
+      out.push(segment);
+    }
+    i += 2 + len;
+  }
+  return null; // never found SOS — malformed; keep the file as-is
+}
+
+function stripPngMetadata(buf) {
+  if (buf.length < 8 || buf.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') return null;
+  const out = [buf.subarray(0, 8)];
+  let i = 8;
+  let stripped = false;
+  let hadMetadata = false;
+  const DROP = new Set(['tEXt', 'iTXt', 'zTXt', 'eXIf']);
+  while (i + 8 <= buf.length) {
+    const len = buf.readUInt32BE(i);
+    const type = buf.subarray(i + 4, i + 8).toString('latin1');
+    const total = 12 + len;
+    if (i + total > buf.length) return null;
+    if (DROP.has(type)) {
+      hadMetadata = true;
+      stripped = true;
+    } else {
+      out.push(buf.subarray(i, i + total));
+    }
+    i += total;
+    if (type === 'IEND') break;
+  }
+  return { buf: Buffer.concat(out), stripped, hadMetadata };
+}
+
+function stripWebpMetadata(buf) {
+  if (buf.length < 12 || buf.subarray(0, 4).toString('latin1') !== 'RIFF' || buf.subarray(8, 12).toString('latin1') !== 'WEBP') {
+    return null;
+  }
+  const out = [buf.subarray(0, 12)];
+  let i = 12;
+  let stripped = false;
+  let hadMetadata = false;
+  let bodyLen = 4; // 'WEBP'
+  while (i + 8 <= buf.length) {
+    const type = buf.subarray(i, i + 4).toString('latin1');
+    const size = buf.readUInt32LE(i + 4);
+    const total = 8 + size + (size % 2);
+    if (i + total > buf.length) return null;
+    if (type === 'EXIF') {
+      hadMetadata = true;
+      stripped = true;
+    } else {
+      out.push(buf.subarray(i, i + total));
+      bodyLen += total;
+    }
+    i += total;
+  }
+  if (!stripped) return { buf, stripped: false, hadMetadata };
+  const result = Buffer.concat(out);
+  result.writeUInt32LE(bodyLen, 4); // fix the RIFF size field
+  return { buf: result, stripped, hadMetadata };
+}
+
+function stripImageMetadata(filePath, mime) {
+  try {
+    const buf = fs.readFileSync(filePath);
+    let result = null;
+    if (mime === 'image/jpeg') result = stripJpegMetadata(buf);
+    else if (mime === 'image/png') result = stripPngMetadata(buf);
+    else if (mime === 'image/webp') result = stripWebpMetadata(buf);
+    else return { stripped: false, hadMetadata: false }; // PDFs: left as-is
+    if (!result) return { stripped: false, hadMetadata: false };
+    if (result.stripped) fs.writeFileSync(filePath, result.buf);
+    return { stripped: result.stripped, hadMetadata: result.hadMetadata };
+  } catch {
+    return { stripped: false, hadMetadata: false };
+  }
+}
+
+// ---- Photo-origin heuristic (Phase 2 item 856) ----
+// Flags photos whose metadata suggests a web download / editor export
+// rather than a photo taken on a device: a "Software" tag naming an image
+// editor or download tool. A flag routes the bill to closer review — it
+// never blocks an upload. Best-effort text scan of the metadata segments.
+function inspectPhotoOrigin(filePath, mime) {
+  try {
+    const buf = fs.readFileSync(filePath);
+    const text = buf.subarray(0, Math.min(buf.length, 128 * 1024)).toString('latin1');
+    const softwareMatch = text.match(/Software[\x00\s]*([A-Za-z0-9 .\-_/]+)/i);
+    const software = softwareMatch ? softwareMatch[1].trim().slice(0, 80) : null;
+    const hasExif = mime === 'image/jpeg' ? text.includes('Exif') : text.includes('eXIf');
+    const EDITOR_RE = /(photoshop|gimp|canva|pixlr|picsart|snapseed|lightroom|paint\.net|photopea|remove\.bg|download|screenshot)/i;
+    const webDownloadSuspected = Boolean(software && EDITOR_RE.test(software));
+    return { hasExif, software, webDownloadSuspected };
+  } catch {
+    return { hasExif: false, software: null, webDownloadSuspected: false };
+  }
+}
+
 function deleteStoredFile(filePath) {
   try {
     fs.unlinkSync(filePath);
@@ -210,8 +373,12 @@ module.exports = {
   privateRefFor,
   encryptAccount,
   decryptAccount,
+  reencryptAccount,
+  fieldKey,
   sniffFileType,
   fileMatchesMime,
+  stripImageMetadata,
+  inspectPhotoOrigin,
   deleteStoredFile,
   deletePrivateFile,
   payoutKeySource: PAYOUT_KEY_SOURCE,
