@@ -178,10 +178,13 @@ only a banner, with no way to create a service.
 2. Open **Admin**, set the owner PIN (6+ digits) — do this immediately;
    until then anyone could set it (first-run setup is only possible
    while no PIN exists; set `ADMIN_SETUP_TOKEN` to gate it further).
-3. Run the smoke suite against the live URL
-   (`BASE=https://<your-app> bash tests/smoke.sh`) — it creates test
-   data, so do it before announcing the site, then wipe the database
-   (or delete the test rows) before real use.
+3. Run the LIVE-SAFE smoke suite against the live URL
+   (`BASE=https://<your-app> bash tests/smoke-live.sh`) — it never touches
+   the admin PIN, the fee mode or the bridge. NEVER run the full
+   `tests/smoke.sh` or `tests/contract.sh` against live: they set the
+   admin PIN (claiming the owner's first-run setup) and flip the fee
+   mode. Wipe the test rows afterwards with `tests/live-wipe.sql`
+   (Supabase SQL editor) before real use.
 4. Keep the site in Demo Mode until real authorised gateways/licences
    exist. Never present it as handling real payments.
 
@@ -242,8 +245,10 @@ server/routes/                     public, auth, profile, bills, gifts,
                                    notifications, reports, admin, bridge
 public/                            SPA: index.html, css/app.css,
                                    js/i18n.js (EN/NE/HI), js/app.js
-tests/smoke.sh                     backend smoke suite (56 checks)
-tests/contract.sh                  frontend/backend contract suite (73)
+tests/smoke.sh                     backend smoke suite (56 checks; LOCAL ONLY)
+tests/smoke-live.sh                live-safe smoke suite (26 checks; never touches the PIN)
+tests/live-wipe.sql                wipe live test rows after a live-safe run
+tests/contract.sh                  frontend/backend contract suite (73; LOCAL ONLY)
 tests/spa-harness.js               jsdom SPA harness (18 checks)
 ```
 
