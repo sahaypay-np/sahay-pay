@@ -4420,13 +4420,29 @@ var HELP_TOPICS=[
   {id:"fees", titleKey:"topic_fees", body:function(){ return '<p>'+esc(feeSentence())+'</p><p>'+esc(t("charity_free"))+'</p><p>'+esc(t("tip_separate"))+'</p>'; }},
   {id:"refunds", titleKey:"topic_refunds", body:function(){ return '<p>'+esc(t("refunds_body"))+'</p>'+REFUNDS_HTML; }},
   {id:"safety", titleKey:"topic_safety", body:function(){ return '<p>'+esc(t("safety_body"))+'</p><p class="small">'+esc(t("crisis_note"))+'</p>'; }},
-  {id:"content-rules", titleKey:"topic_content_rules", body:function(){ return '<p>'+esc(t("content_rules_body"))+'</p>'+CONTENT_RULES_HTML; }},
+  {id:"content-rules", titleKey:"topic_content_rules", body:function(){ return '<p>'+esc(t("content_rules_body"))+'</p>'+CONTENT_RULES_HTML
+    // Community guidelines (item 457): expected behaviour for posters and helpers.
+    +'<h2>'+esc(t("topic_content_rules"))+'</h2><p>'+esc(t("guidelines_intro"))+'</p>'
+    +'<h3>'+esc(t("guidelines_posters_t"))+'</h3><p>'+esc(t("guidelines_posters_b"))+'</p>'
+    +'<h3>'+esc(t("guidelines_helpers_t"))+'</h3><p>'+esc(t("guidelines_helpers_b"))+'</p>'
+    +'<ul><li>'+esc(t("guidelines_kindness"))+'</li><li>'+esc(t("guidelines_no_begging"))+'</li><li>'+esc(t("guidelines_no_contacts"))+'</li></ul>'
+    +'<p class="small">'+esc(t("guidelines_enforcement"))+'</p>'; }},
   {id:"complaints", titleKey:"topic_complaints", body:function(){ return '<p>'+esc(t("complaints_body"))+'</p><div id="complaint-form"></div>'; }},
   {id:"privacy", titleKey:"topic_privacy", body:function(){ return '<p>'+esc(t("privacy_body"))+'</p>'+LEGAL_PRIVACY_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }},
   {id:"terms", titleKey:"topic_terms", body:function(){ return '<p>'+esc(t("terms_body"))+'</p>'+LEGAL_TERMS_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }},
   // Scam-education hub (items 357/360/362/392/393) — 356/457 skipped per
   // coordinator (covered by s9-10 items 934/971).
-  {id:"scams", titleKey:"topic_scams", body:function(){ return '<div id="scam-notices"></div><p>'+esc(t("scams_body"))+'</p><ul><li>'+esc(t("scam_tip_1"))+'</li><li>'+esc(t("scam_tip_2"))+'</li><li>'+esc(t("scam_tip_3"))+'</li><li>'+esc(t("scam_tip_4"))+'</li><li>'+esc(t("scam_tip_5"))+'</li></ul><p>'+esc(t("scams_report"))+'</p>'; }},
+  {id:"scams", titleKey:"topic_scams", body:function(){
+    // Scam-education hub (item 356): plain-language guides on common
+    // bill-gifting scams in Nepal/India, plus live scam notices.
+    var guides=[["scam_g1_t","scam_g1_b"],["scam_g2_t","scam_g2_b"],["scam_g3_t","scam_g3_b"],["scam_g4_t","scam_g4_b"],["scam_g5_t","scam_g5_b"],["scam_g6_t","scam_g6_b"]];
+    var h='<div id="scam-notices"></div><p>'+esc(t("scams_body"))+'</p><p>'+esc(t("scam_hub_intro"))+'</p>';
+    guides.forEach(function(pair){
+      h+='<details class="help-topic card"><summary>'+esc(t(pair[0]))+'</summary><p>'+esc(t(pair[1]))+'</p></details>';
+    });
+    h+='<p><strong>'+esc(t("scam_hub_what_to_do"))+'</strong></p><ul><li>'+esc(t("scam_tip_1"))+'</li><li>'+esc(t("scam_tip_2"))+'</li><li>'+esc(t("scam_tip_3"))+'</li><li>'+esc(t("scam_tip_4"))+'</li><li>'+esc(t("scam_tip_5"))+'</li></ul><p>'+esc(t("scams_report"))+'</p>';
+    return h;
+  }},
   {id:"appeals", titleKey:"topic_appeals", body:function(){ return '<p>'+esc(t("appeals_body"))+'</p><p class="small">'+esc(t("appeals_note"))+'</p>'; }},
   {id:"leaderboard", titleKey:"topic_leaderboard", body:function(){ return '<p>'+esc(t("leaderboard_body"))+'</p><p class="small">'+esc(t("leaders_fairness"))+'</p>'; }},
   {id:"featured-brand", titleKey:"topic_featured_brand", body:function(){ return '<p>'+esc(t("featured_brand_body"))+'</p>'; }},
