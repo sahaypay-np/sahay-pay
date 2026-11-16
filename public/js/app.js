@@ -446,7 +446,13 @@ function crossBorderHtml(){
 }
 function demoHtml(){ return '<div class="demo">'+esc(t("demo_mode"))+'</div>'; }
 function neverHoldsHtml(){ return '<p class="small" style="text-align:center">🔒 '+esc(t("never_holds"))+'</p>'; }
-function feeSentenceHtml(){ return '<p class="small" style="text-align:center">'+esc(feeSentence())+'</p>'; }
+function feeRuleSentence(cur){
+  var c=S.config||{};
+  if(cur==="INR"&&c.feeModelSentenceINR) return c.feeModelSentenceINR;
+  if(cur==="NPR"&&c.feeModelSentenceNPR) return c.feeModelSentenceNPR;
+  return c.feeModelSentenceNPR||c.feeModelSentenceINR||feeSentence();
+}
+function feeSentenceHtml(cur){ return '<p class="small" style="text-align:center">'+esc(feeRuleSentence(cur))+'</p>'; }
 
 /* badge explanation (delegated) */
 document.addEventListener("click", function(e){
@@ -1434,7 +1440,7 @@ function openPayDirect(bill){
     +'<p>'+esc(t("pay_biller_steps"))+'</p>'
     +'<a class="btn" href="#/gift/'+encodeURIComponent(bill.id)+'?direct=1">'+esc(t("continue_btn"))+'</a>');
 }
-function openReportSheet(targetType, targetId){
+function openReportSheet(targetType, targetId, preselect){
   if(!needUser()) return;
   var reasons=[
     ["fraud", t("reason_fraud")], ["impersonation", t("reason_impersonation")],
@@ -1442,17 +1448,24 @@ function openReportSheet(targetType, targetId){
     ["name_mismatch", t("reason_name_mismatch")], ["personal", t("reason_personal")],
     ["offensive", t("reason_offensive")], ["under18", t("reason_under18")], ["other", t("report_other")]
   ];
+  // Client reason keys -> server REASONS (server/routes/reports.js).
+  // Without this mapping the server rejected most reasons with 400.
+  var reasonMap={fraud:"possible_fraud",impersonation:"impersonation",mismatch:"other",deception:"deception",name_mismatch:"other",personal:"personal_details",offensive:"offensive",under18:"under_18",other:"other"};
   openSheet('<h2>'+esc(t("report"))+'</h2><p class="small">'+esc(t("your_reports"))+'</p>'
     +'<label>'+esc(t("report_reason"))+'</label><div id="rep-reasons" style="display:grid;gap:6px">'+reasons.map(function(r){ return '<button type="button" class="btn secondary small" style="text-align:left" data-r="'+r[0]+'">'+esc(r[1])+'</button>'; }).join("")+'</div>'
     +'<label for="rep-note">'+esc(t("report_note"))+'</label><textarea id="rep-note" maxlength="600"></textarea>'
     +'<div class="btn-row"><button class="btn secondary" id="rep-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="rep-send" disabled>'+esc(t("send_report"))+'</button></div>');
   var chosen=null;
   $all("#rep-reasons button").forEach(function(b){ b.onclick=function(){ chosen=b.getAttribute("data-r"); $all("#rep-reasons button").forEach(function(x){ x.style.borderColor=""; }); b.style.borderColor="var(--accent)"; $("#rep-send").disabled=false; }; });
+  if(preselect){
+    var pre=document.querySelector('#rep-reasons button[data-r="'+preselect+'"]');
+    if(pre) pre.click();
+  }
   $("#rep-cancel").onclick=closeSheets;
   $("#rep-send").onclick=async function(){
     var btn=$("#rep-send"); btn.disabled=true; btn.textContent=t("loading");
     try{
-      var res=await api("/reports", {method:"POST", body:{targetType:targetType, targetId:targetId, reason:chosen, note:$("#rep-note").value.trim()}});
+      var res=await api("/reports", {method:"POST", body:{targetType:targetType, targetId:targetId, reason:reasonMap[chosen]||chosen, note:$("#rep-note").value.trim()}});
       closeSheets();
       toast(res&&res.paused? t("report_paused") : t("report_sent"));
       if(res&&res.paused) route();
@@ -1700,9 +1713,17 @@ function renderGift(billId, q){
     var remaining=Math.max(0,total-got);
     var _gu=bill.user||bill.poster||{};
     var name=bill.anonymous? t("anonymous") : (_gu.display_name||_gu.displayName||bill.display_name||bill.displayName||(bill.user||{}).display_name||"");
-    var g={bill:bill, step:1, amountMinor:0, tipMinor:0, tipChoice:"none", giftId:null, quote:null, payout:null, human:false, reference:"", direct:direct};
+    var g={bill:bill, step:1, amountMinor:0, tipMinor:0, tipChoice:"none", giftId:null, quote:null, payout:null, human:false, reference:"", direct:direct,
+      message:"", anonymous:false, directPay:false, billerRef:"", fromBasket:!!(q&&q.basket==="1")};
+    if(q&&q.amount){ var preAmt=parseInt(q.amount,10); if(preAmt>0) g.amountMinor=preAmt; }
     S.gift=g;
+    // Gift-flow funnel event (item 297): sheet opened. Fire-and-forget.
+    if(S.user) api("/gifts/sheet-opened", {method:"POST", body:{billId:bill.id}}).catch(function(){});
     draw();
+    function giftErrorView(){
+      // Item 300: a funded/paused bill gets a real error view, not a toast.
+      view(emptyState("🧾", t("gift_error_funded"), "", '<a class="btn" href="#/swipe">'+esc(t("gift_error_browse"))+'</a>', "h1"));
+    }
     function stepHead(){
       var steps=[t("amount_step"),t("check_step"),t("send_step"),t("confirmed_step")];
       return '<div class="step-dots">'+steps.map(function(s,i){ return '<i class="'+(i<g.step-1?"on":i===g.step-1?"on":"")+'"></i>'; }).join("")+'</div>'
@@ -1718,20 +1739,47 @@ function renderGift(billId, q){
       else drawConfirmed();
     }
     function drawAmount(){
-      var chips=[10000,50000,100000];
+      // Item 201: chips come from /config (incl. रू250), not hardcoded.
+      var cfgChips=(S.config&&S.config.giftAmountChips&&S.config.giftAmountChips[cur])||[10000,25000,50000,100000];
+      var chips=cfgChips.slice();
+      // Item 206: per-currency minimum from /config.
+      var minGift=(S.config&&(cur==="INR"?S.config.minGiftMinorINR:S.config.minGiftMinorNPR))||1000;
+      var canDirectPay=!!(bill.payDirect||bill.pay_direct);
       view(stepHead()+'<h1>'+esc(t("gift_amount_title"))+'</h1>'+billCard()+demoHtml()
         +(direct?'<div class="notice info" style="margin-top:10px">'+esc(t("direct_pay_note"))+'</div>':"")
         +'<div class="card" style="margin-top:12px"><label>'+esc(t("choose_amount"))+'</label>'
-        +'<div class="grid2">'+chips.map(function(c){ return '<button type="button" class="btn secondary chip-amt" data-v="'+c+'">'+esc(money(c,cur))+'</button>'; }).join("")
+        +'<div class="grid2">'+chips.map(function(c){ return '<button type="button" class="btn secondary chip-amt'+(g.amountMinor===c?" on":"")+'" data-v="'+c+'">'+esc(money(c,cur))+'</button>'; }).join("")
         +'<button type="button" class="btn secondary chip-amt" data-v="'+remaining+'">'+esc(t("full_remaining"))+' ('+esc(money(remaining,cur))+')</button></div>'
-        +'<label for="g-custom">'+esc(t("custom"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="g-custom" type="number" inputmode="decimal" min="0" step="1" placeholder="'+esc(t("gift_amount_ph"))+'" aria-describedby="g-err">'
+        +'<label for="g-custom">'+esc(t("custom"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="g-custom" type="number" inputmode="decimal" min="0" step="1" placeholder="'+esc(t("gift_amount_ph"))+'" aria-describedby="g-err" value="'+(g.amountMinor>0?fromMinor(g.amountMinor):"")+'">'
         +'<div class="field-err" id="g-err" role="alert"></div>'
-        +'<p class="small">'+esc(t("gift_min_note",{n:money(1000,cur)}))+'</p>'
-        +'<p id="g-after" class="small"></p>'
+        +'<p class="small">'+esc(t("gift_min_note",{n:money(minGift,cur)}))+'</p>'
+        +'<p id="g-after" class="small">'+(g.amountMinor>0?esc(t("still_needed_after"))+": "+esc(money(Math.max(0,remaining-g.amountMinor),cur)):"")+'</p>'
+        +'<label for="g-msg">'+esc(t("gift_message_label"))+'</label><textarea id="g-msg" maxlength="200" placeholder="'+esc(t("gift_message_ph"))+'">'+esc(g.message)+'</textarea>'
+        +'<div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0"><button type="button" class="chip msg-chip">'+esc(t("gift_msg_chip1"))+'</button><button type="button" class="chip msg-chip">'+esc(t("gift_msg_chip2"))+'</button><button type="button" class="chip msg-chip">'+esc(t("gift_msg_chip3"))+'</button></div>'
+        +'<p class="small">'+esc(t("gift_message_hint"))+'</p>'
+        +'<label class="check-row"><input type="checkbox" id="g-anon" '+(g.anonymous?"checked":"")+'><span>'+esc(t("send_anon"))+'</span></label><p class="small">'+esc(t("send_anon_hint"))+'</p>'
+        +(canDirectPay?'<label class="check-row"><input type="checkbox" id="g-directpay" '+(g.directPay?"checked":"")+'><span>'+esc(t("pay_biller_switch"))+'</span></label><p class="small">'+esc(t("pay_biller_switch_hint"))+'</p>'
+          +'<div id="g-biller-wrap" '+(g.directPay?"":"hidden")+'>'
+          +'<div class="kv"><span>'+esc(t("biller"))+'</span><b>'+esc(bill.billerName||bill.biller_name||"")+'</b></div>'
+          +'<label for="g-biller-ref">'+esc(t("biller_ref_label"))+'</label><input id="g-biller-ref" maxlength="120" value="'+esc(g.billerRef||bill.billerRef||bill.biller_ref||"")+'">'
+          +(bill.billerInstructions?'<p class="small">'+esc(bill.billerInstructions)+'</p>':"")+'</div>':"")
+        +'<div id="g-quote-skel"></div>'
         +'<div class="btn-row"><a class="btn secondary" href="#/bill/'+encodeURIComponent(bill.id)+'">'+esc(t("back"))+'</a><button class="btn" id="g-next">'+esc(t("continue_btn"))+'</button></div></div>'
-        +crossBorderHtml()+'<div style="margin-top:10px">'+feeSentenceHtml()+neverHoldsHtml()+'</div>');
+        +'<p class="small" style="text-align:center;margin-top:10px"><a href="#/help/topic/gifting-guide">📖 '+esc(t("gifting_guide_link"))+'</a></p>'
+        +crossBorderHtml()+'<div style="margin-top:10px">'+feeSentenceHtml(cur)+neverHoldsHtml()+'</div>');
       $all(".chip-amt").forEach(function(b){ b.onclick=function(){ g.amountMinor=parseInt(b.getAttribute("data-v"),10); $("#g-custom").value=fromMinor(g.amountMinor); updateAfter(); }; });
       $("#g-custom").addEventListener("input", function(){ g.amountMinor=toMinor($("#g-custom").value); updateAfter(); });
+      $all(".msg-chip").forEach(function(b){ b.onclick=function(){ g.message=b.textContent; var m=$("#g-msg"); if(m) m.value=g.message; }; });
+      $("#g-msg").addEventListener("input", function(){ g.message=$("#g-msg").value; });
+      $("#g-anon").addEventListener("change", function(){ g.anonymous=$("#g-anon").checked; });
+      var dp=$("#g-directpay");
+      if(dp) dp.addEventListener("change", function(){
+        g.directPay=dp.checked;
+        var w=$("#g-biller-wrap"); if(w) w.hidden=!dp.checked;
+        if(dp.checked){ var r=$("#g-biller-ref"); if(r) g.billerRef=r.value.trim(); }
+      });
+      var br=$("#g-biller-ref");
+      if(br) br.addEventListener("input", function(){ g.billerRef=br.value.trim(); });
       function updateAfter(){
         if(g.amountMinor>0) $("#g-after").textContent=t("still_needed_after")+": "+money(Math.max(0,remaining-g.amountMinor),cur);
         else $("#g-after").textContent="";
@@ -1740,16 +1788,18 @@ function renderGift(billId, q){
         if(!needUser()) return;
         setFieldErr("g-custom","g-err","");
         if(g.amountMinor<=0){ setFieldErr("g-custom","g-err",t("amount_positive")); return; }
-        if(g.amountMinor<1000){ setFieldErr("g-custom","g-err",t("amount_min",{n:money(1000,cur)})); return; }
+        if(g.amountMinor<minGift){ setFieldErr("g-custom","g-err",t("amount_min",{n:money(minGift,cur)})); return; }
         if(g.amountMinor>remaining && remaining>0){ setFieldErr("g-custom","g-err",t("amount_max",{n:money(remaining,cur)})); return; }
-        var btn=$("#g-next"); btn.disabled=true; btn.textContent=t("loading");
+        var btn=$("#g-next"); btn.disabled=true; btn.textContent=t("quote_loading");
+        // Item 295: skeleton while the fee quote loads.
+        var sk=$("#g-quote-skel"); if(sk) sk.innerHTML=skeleton(1);
         var op=NAV;
         try{
           try{ g.quote=await api("/gifts/quote", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor}}); }
-          catch(e){ g.quote=quoteLocal(g.amountMinor, cur, !!bill.charity); }
+          catch(e){ if(e&&e.status===409){ if(op===NAV) giftErrorView(); return; } g.quote=quoteLocal(g.amountMinor, cur, !!bill.charity); }
           if(op!==NAV) return;
           g.step=2; draw();
-        }catch(e){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("continue_btn"); toast(e.message||t("fee_quote_failed"), true); }
+        }catch(e){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("continue_btn"); if(sk) sk.innerHTML=""; toast(e.message||t("fee_quote_failed"), true); }
       };
     }
     function drawCheck(){
@@ -1757,18 +1807,30 @@ function renderGift(billId, q){
       var fee=q.feeMinor!=null?q.feeMinor:0;
       var tip=g.tipMinor||0;
       var total=g.amountMinor+fee+tip;
+      // Item 218: no-fee label when the quote is exempt (charity / category / zero-fee mode).
+      var exemptLine="";
+      if(q.feeExempt){
+        var exKey=q.feeExemptReason==="charity"?"no_fee_charity":q.feeExemptReason==="category"?"no_fee_category":"tip_no_fee_line";
+        exemptLine='<p class="small">✅ '+esc(t(exKey))+'</p>';
+      }
+      // Item 222: fixed tip amounts in zero-fee mode (percent in supporter mode).
+      var zeroFee=S.config&&S.config.feeMode==="zero_fee_plus_tip";
+      var tipOpts=zeroFee?[["0","0"],["50","50"],["100","100"],["200","200"],["custom",t("custom")]]
+        :[["none",t("no_tip")],["5","5%"],["10","10%"],["custom",t("custom")]];
       view(stepHead()+'<h1>'+esc(t("gift_check_title"))+'</h1>'+billCard()+demoHtml()
         +'<div class="card" style="margin-top:12px">'
         +'<div class="kv"><span>'+esc(t("your_help"))+' → '+esc(name)+'</span><b>'+esc(money(g.amountMinor,cur))+'</b></div>'
         +'<div class="kv"><span>'+esc(t("fee_label"))+'</span><b>'+esc(money(fee,cur))+'</b></div>'
         +'<div class="kv"><span>'+esc(t("tip_label"))+'</span><b>'+esc(money(tip,cur))+'</b></div>'
         +'<div class="kv"><span><strong>'+esc(t("total_send"))+'</strong></span><b>'+esc(money(total,cur))+'</b></div>'
+        +exemptLine
         +'<p class="small" style="margin-top:10px">'+esc(t("fee_demo_note",{fee:money(fee,cur),amount:money(g.amountMinor,cur),name:name}))+'</p></div>'
-        +feeSentenceHtml()
-        +'<div class="card" style="margin-top:12px"><label>'+esc(t("tip_label"))+'</label>'
-        +'<div class="seg" id="tip-seg"><button type="button" data-tip="none" class="'+(g.tipChoice==="none"?"on":"")+'">'+esc(t("no_tip"))+'</button><button type="button" data-tip="5" class="'+(g.tipChoice==="5"?"on":"")+'">5%</button><button type="button" data-tip="10" class="'+(g.tipChoice==="10"?"on":"")+'">10%</button><button type="button" data-tip="custom" class="'+(g.tipChoice==="custom"?"on":"")+'">'+esc(t("custom"))+'</button></div>'
+        +'<div class="card" style="margin-top:12px"><p class="small"><strong>'+esc(t("fee_rule_label"))+'</strong></p>'+feeSentenceHtml(cur)+'</div>'
+        +'<div class="card" style="margin-top:12px"><label>'+esc(t("tip_label"))+(zeroFee?" — "+esc(t("tip_fixed_label"))+" ("+(cur==="INR"?"₹":"रू")+")":"")+'</label>'
+        +'<div class="seg" id="tip-seg">'+tipOpts.map(function(o){ return '<button type="button" data-tip="'+o[0]+'" class="'+(g.tipChoice===o[0]?"on":"")+'">'+esc(o[1])+'</button>'; }).join("")+'</div>'
         +'<div id="tip-custom-wrap" '+(g.tipChoice==="custom"?"":"hidden")+'>'+'<label for="tip-custom">'+esc(t("tip_custom"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="tip-custom" type="number" min="0" step="1" value="'+(g.tipChoice==="custom"&&g.tipMinor?fromMinor(g.tipMinor):"")+'"></div>'
         +'<p class="small">'+esc(t("tip_separate"))+'</p></div>'
+        +'<div class="notice info" style="margin-top:12px">🔒 <strong>'+esc(t("locked_step_title"))+'</strong><br>'+esc(t("locked_step_body"))+'</div>'
         +'<div class="card" style="margin-top:12px"><label class="check-row"><input type="checkbox" id="g-confirm-box"><span>'+esc(t("understand_gift"))+'</span></label>'
         +'<label class="check-row"><input type="checkbox" id="g-human"><span>'+esc(t("human_check"))+' — '+esc(t("turnstile_note"))+'</span></label>'
         +'<div class="field-err" id="g-err2" role="alert"></div>'
@@ -1781,7 +1843,8 @@ function renderGift(billId, q){
           $("#tip-custom-wrap").hidden=v!=="custom";
           if(v==="5") g.tipMinor=Math.round(g.amountMinor*0.05);
           else if(v==="10") g.tipMinor=Math.round(g.amountMinor*0.10);
-          else if(v==="none") g.tipMinor=0;
+          else if(v==="none"||v==="0") g.tipMinor=0;
+          else if(v==="50"||v==="100"||v==="200") g.tipMinor=parseInt(v,10)*100;
           drawCheck();
           if(v==="custom"){ var w=$("#tip-custom-wrap"); if(w) w.hidden=false; var inp=$("#tip-custom"); if(inp) inp.focus(); }
         };
@@ -1795,16 +1858,25 @@ function renderGift(billId, q){
         var btn=$("#g-to-send"); btn.disabled=true; btn.textContent=t("loading");
         var op=NAV;
         try{
-          var created=await api("/gifts", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor, tipMinor:g.tipMinor||0}});
+          var created=await api("/gifts", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor, tipMinor:g.tipMinor||0,
+            message:g.message||undefined, anonymous:g.anonymous||undefined, directPay:g.directPay||undefined, billerRef:g.billerRef||undefined}});
           g.giftId=created.id||created.giftId||(created.gift&&created.gift.id);
-          var rev=await api("/gifts/"+encodeURIComponent(g.giftId)+"/reveal", {method:"POST"});
-          // The server returns payoutMethods (array) + an optional payDirect block.
-          g.payoutMethods=rev.payoutMethods||(rev.payoutMethod?[rev.payoutMethod]:(rev.payout?[rev.payout]:[]));
-          g.payDirectInfo=rev.payDirect||null;
-          g.payout=g.payoutMethods[0]||{};
+          if(g.directPay){
+            // Item 274: direct-pay gifts skip reveal — the biller details
+            // come from the bill itself, not the payout methods.
+            g.payoutMethods=[];
+            g.payDirectInfo={billerName:bill.billerName||bill.biller_name||"", billerRef:g.billerRef||bill.billerRef||bill.biller_ref||"", billerDestination:bill.billerDestination||bill.biller_dest||""};
+            g.payout={};
+          } else {
+            var rev=await api("/gifts/"+encodeURIComponent(g.giftId)+"/reveal", {method:"POST"});
+            // The server returns payoutMethods (array) + an optional payDirect block.
+            g.payoutMethods=rev.payoutMethods||(rev.payoutMethod?[rev.payoutMethod]:(rev.payout?[rev.payout]:[]));
+            g.payDirectInfo=rev.payDirect||null;
+            g.payout=g.payoutMethods[0]||{};
+          }
           if(op!==NAV) return;
           g.step=3; draw();
-        }catch(e){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("show_details"); toast(e.message||t("err_generic"), true); }
+        }catch(e){ if(op!==NAV) return; if(e&&e.status===409){ giftErrorView(); return; } btn.disabled=false; btn.textContent=t("show_details"); toast(e.message||t("err_generic"), true); }
       };
     }
     function sendInstructions(method){
@@ -1812,11 +1884,50 @@ function renderGift(billId, q){
       return map[method]||t("send_instructions_generic");
     }
     function drawSend(){
+      // Item 274: direct-pay send step — no payout methods, biller only.
+      if(g.directPay){
+        var pd0=g.payDirectInfo||{};
+        view(stepHead()+'<h1>'+esc(t("direct_pay_send_title"))+'</h1>'+billCard()+demoHtml()
+          +'<div class="card" style="margin-top:12px"><h2>'+esc(t("pay_direct"))+'</h2>'
+          +'<div class="kv"><span>'+esc(t("biller"))+'</span><b>'+esc(pd0.billerName||"")+'</b></div>'
+          +(pd0.billerRef?'<div class="kv"><span>'+esc(t("reference_label"))+'</span><b>'+esc(pd0.billerRef)+'</b> <button class="btn ghost small" data-copy="'+esc(pd0.billerRef)+'">'+esc(t("copy_field"))+'</button></div>':"")
+          +(pd0.billerDestination?'<div class="kv"><span>'+esc(t("biller_destination"))+'</span><b>'+esc(pd0.billerDestination)+'</b></div>':"")
+          +'<div class="kv"><span>'+esc(t("you_send"))+'</span><b>'+esc(money(g.amountMinor,cur))+'</b></div>'
+          +'<p class="small">'+esc(t("pay_biller_steps"))+'</p>'
+          +'<p class="small">⚠️ '+esc(t("name_match_warn"))+'</p></div>'
+          +'<div class="btn-row"><button class="btn secondary small" id="g-fraud2">'+esc(t("report_fraud_btn"))+'</button></div>'
+          +'<div class="card" style="margin-top:12px"><label for="g-ref">'+esc(t("reference_opt"))+'</label><input id="g-ref" maxlength="80">'
+          +'<p class="small">'+esc(t("direct_pay_confirm_note"))+'</p>'
+          +'<div class="btn-row"><button class="btn" id="g-sent">'+esc(t("direct_pay_i_paid"))+'</button></div>'
+          +'<button class="btn ghost" id="g-cancel">'+esc(t("couldnt_send"))+'</button></div>');
+        $all("[data-copy]").forEach(function(b){ b.onclick=function(){ copyText(b.getAttribute("data-copy")||"", t("copied")); }; });
+        var fr2=$("#g-fraud2"); if(fr2) fr2.onclick=function(){ openReportSheet("bill", bill.id, "fraud"); };
+        $("#g-sent").onclick=async function(){
+          var btn=$("#g-sent"); btn.disabled=true; btn.textContent=t("loading");
+          var op=NAV;
+          try{
+            await api("/gifts/"+encodeURIComponent(g.giftId)+"/reported-sent", {method:"POST", body:{reference:$("#g-ref").value.trim()||undefined, billerRef:g.billerRef||undefined}});
+            if(op!==NAV) return;
+            g.step=4; draw();
+          }catch(e){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("direct_pay_i_paid"); toast(e.message||t("err_generic"), true); }
+        };
+        $("#g-cancel").onclick=function(){
+          confirmDialog(t("couldnt_send"), t("send_failed_note"), t("yes"), function(){ go("#/bill/"+encodeURIComponent(bill.id)); });
+        };
+        return;
+      }
       var methods=g.payoutMethods&&g.payoutMethods.length?g.payoutMethods:(g.payout&&g.payout.method?[g.payout]:[]);
       var first=methods[0]||{};
       var method=(first.method||bill.payout_method||"").toLowerCase();
       var copyVal=first.account||first.accountNumber||first.number||first.vpa||first.upiId||"";
       var feeForSend=(g.quote&&g.quote.feeMinor!=null)?g.quote.feeMinor:quoteLocal(g.amountMinor,cur,!!bill.charity).feeMinor;
+      // Item 233: wallet deep-links (best effort; copy buttons are the fallback).
+      function walletLink(m, account, holder){
+        if(m==="upi"&&account) return "upi://pay?pa="+encodeURIComponent(account)+"&pn="+encodeURIComponent(holder||name)+"&am="+fromMinor(g.amountMinor)+"&cu=INR";
+        if(m==="esewa") return "esewa://";
+        if(m==="khalti") return "khalti://";
+        return null;
+      }
       function methodCard(p, idx){
         var m=(p.method||"").toLowerCase();
         var account=p.account||p.accountNumber||p.number||p.vpa||p.upiId||"";
@@ -1826,18 +1937,26 @@ function renderGift(billId, q){
         var ifsc=p.ifsc||"";
         var link=p.link||p.paymentLink||(m==="payment_link"?account:"");
         var qr=p.qrUrl||(m==="fonepay_qr"?account:"");
+        var wl=walletLink(m, account, holder);
+        // Item 228: a copy button per payout field (not just the account).
+        function kvCopy(label, val){
+          if(!val) return "";
+          return '<div class="kv"><span>'+esc(label)+'</span><b class="money">'+esc(val)+'</b> <button class="btn ghost small" data-copy="'+esc(val)+'">'+esc(t("copy_field"))+'</button></div>';
+        }
         return '<div class="card" style="margin-top:12px"><p class="small">'+esc(t("details_shown"))+(methods.length>1?" ("+(idx+1)+"/"+methods.length+")":"")+'</p>'
           +'<div class="kv"><span>'+esc(t("payout_hint"))+'</span><b>'+esc(m||"—")+'</b></div>'
-          +(account&&m!=="payment_link"&&m!=="fonepay_qr"?'<div class="kv"><span>'+esc(t("account_no"))+'</span><b class="money">'+esc(account)+'</b></div>':"")
-          +(holder?'<div class="kv"><span>'+esc(t("holder_name"))+'</span><b>'+esc(holder)+'</b></div>':"")
-          +(bank?'<div class="kv"><span>'+esc(t("bank_name"))+'</span><b>'+esc(bank)+'</b></div>':"")
-          +(branch?'<div class="kv"><span>'+esc(t("branch"))+'</span><b>'+esc(branch)+'</b></div>':"")
-          +(ifsc?'<div class="kv"><span>'+esc(t("ifsc"))+'</span><b>'+esc(ifsc)+'</b></div>':"")
+          +(account&&m!=="payment_link"&&m!=="fonepay_qr"?kvCopy(t("account_no"), account):"")
+          +(holder?kvCopy(t("holder_name"), holder):"")
+          +(bank?kvCopy(t("bank_name"), bank):"")
+          +(branch?kvCopy(t("branch"), branch):"")
+          +(ifsc?kvCopy(t("ifsc"), ifsc):"")
           +(link?'<div class="kv"><span>'+esc(t("payment_link"))+'</span><b><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(t("open_cta"))+'</a></b></div>':"")
-          +(qr?'<div style="text-align:center;margin:8px 0"><img src="'+esc(qr)+'" alt="'+esc(t("qr_alt"))+'" style="max-width:220px;border-radius:12px"></div>':"")
+          +(qr?'<div style="text-align:center;margin:8px 0"><img src="'+esc(qr)+'" alt="'+esc(t("qr_alt"))+'" style="max-width:220px;border-radius:12px"></div>'
+            +'<div class="btn-row"><button class="btn secondary small" data-qr-dl="'+esc(qr)+'">'+esc(t("download_qr"))+'</button></div>':"")
           +'<div class="kv"><span>'+esc(t("you_send"))+'</span><b>'+esc(money(g.amountMinor,cur))+'</b></div>'
-          +(account?'<div class="btn-row"><button class="btn secondary" data-copy="'+esc(account)+'">'+esc(t("copy_number"))+'</button></div>':"")
+          +(wl?'<div class="btn-row"><a class="btn secondary small" href="'+esc(wl)+'">'+esc(t("open_wallet"))+'</a></div><p class="small">'+esc(t("wallet_hint"))+'</p>':"")
           +'<p style="margin-top:12px">'+esc(sendInstructions(m))+'</p>'
+          +'<p class="small">⚠️ '+esc(t("name_match_warn"))+'</p>'
           +'<p class="small">⚠️ '+esc(t("never_share_mpin"))+'</p>'
           +'<p class="small muted">'+esc(t("payout_revealed_log"))+'</p></div>';
       }
@@ -1850,11 +1969,25 @@ function renderGift(billId, q){
           +(pd.billerRef?'<div class="kv"><span>'+esc(t("reference_label"))+'</span><b>'+esc(pd.billerRef)+'</b></div>':"")
           +(pd.billerDestination?'<div class="kv"><span>'+esc(t("biller_destination"))+'</span><b>'+esc(pd.billerDestination)+'</b></div>':"")
           +'<p class="small">'+esc(t("pay_biller_steps"))+'</p></div>':"")
+        +'<div class="btn-row" style="margin-top:12px"><button class="btn secondary small" id="g-fraud">'+esc(t("report_fraud_btn"))+'</button><button class="btn ghost small" id="g-dnw">'+esc(t("details_dont_work"))+'</button></div>'
         +crossBorderHtml()
         +'<div class="card" style="margin-top:12px"><label for="g-ref">'+esc(t("reference_opt"))+'</label><input id="g-ref" maxlength="80">'
         +'<div class="btn-row"><button class="btn" id="g-sent">'+esc(t("i_sent_it"))+'</button></div>'
         +'<button class="btn ghost" id="g-cancel">'+esc(t("couldnt_send"))+'</button></div>');
       $all("[data-copy]").forEach(function(b){ b.onclick=function(){ copyText(b.getAttribute("data-copy")||"", t("copied")); }; });
+      // Item 234: download the Fonepay QR; fall back to opening it.
+      $all("[data-qr-dl]").forEach(function(b){ b.onclick=function(){
+        var url=b.getAttribute("data-qr-dl")||"";
+        fetch(url).then(function(r){ return r.blob(); }).then(function(blob){
+          var a=document.createElement("a");
+          a.href=URL.createObjectURL(blob);
+          a.download="sahay-pay-qr.png";
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+        }).catch(function(){ window.open(url, "_blank", "noopener"); });
+      }; });
+      var fr=$("#g-fraud"); if(fr) fr.onclick=function(){ openReportSheet("bill", bill.id, "fraud"); };
+      var dnw=$("#g-dnw"); if(dnw) dnw.onclick=function(){ openReportSheet("bill", bill.id, "mismatch"); };
       var gc=$("#g-copy"); if(gc) gc.onclick=function(){ copyText(copyVal, t("copied")); };
       $("#g-sent").onclick=async function(){
         var btn=$("#g-sent"); btn.disabled=true; btn.textContent=t("loading");
@@ -1870,11 +2003,25 @@ function renderGift(billId, q){
       };
     }
     function drawConfirmed(){
+      // Item 254: gift-all queue — continue to the next basket bill.
+      var queue=S.basketQueue||[];
+      var nextBtn="";
+      if(queue.length){
+        var nxt=queue[0];
+        nextBtn='<button class="btn" id="g-next-basket">'+esc(t("basket_next"))+' ('+esc(nxt.title||"")+' — '+esc(money(nxt.amountMinor||0, nxt.currency||cur))+')</button>';
+      } else if(g.fromBasket){
+        nextBtn='<p class="small">✅ '+esc(t("basket_done"))+'</p>';
+      }
       view(stepHead()+'<div class="center-page"><div class="slide-ic">💙</div><h1>'+esc(t("thanks_helping",{name:name}))+'</h1>'
         +'<p>'+esc(t("recipient_confirm_pending"))+'</p><p class="small">'+esc(t("waiting_confirm"))+'</p>'
-        +'<div style="width:100%;max-width:360px;display:grid;gap:10px"><a class="btn" href="#/founder-tip?gift='+encodeURIComponent(g.giftId||"")+'&amount='+g.amountMinor+'&currency='+cur+'">'+esc(t("founder_tip_title"))+'</a>'
+        +'<div style="width:100%;max-width:360px;display:grid;gap:10px">'+nextBtn+'<a class="btn" href="#/founder-tip?gift='+encodeURIComponent(g.giftId||"")+'&amount='+g.amountMinor+'&currency='+cur+'">'+esc(t("founder_tip_title"))+'</a>'
         +'<a class="btn secondary" href="#/swipe">'+esc(t("continue_helping"))+'</a>'
         +'<a class="btn secondary" href="#/mybills">'+esc(t("my_bills"))+'</a></div></div>');
+      var nb=$("#g-next-basket");
+      if(nb) nb.onclick=function(){
+        var item=S.basketQueue.shift();
+        if(item) go("#/gift/"+encodeURIComponent(item.billId)+"?basket=1&amount="+encodeURIComponent(item.amountMinor||""));
+      };
     }
   }).catch(function(e){
     if(tok!==NAV) return;
