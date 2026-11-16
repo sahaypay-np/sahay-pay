@@ -82,6 +82,7 @@ async function lookupSession(token) {
   const row = await db.get(
     `SELECT s.*, u.id AS user_id, u.display_name, u.username, u.age, u.country,
             u.city, u.about, u.language, u.photo_url, u.prefs_json, u.suspended,
+            u.suspended_until,
             u.terms_accepted_version, u.privacy_accepted_version,
             u.created_at AS user_created_at
      FROM sessions s JOIN users u ON u.id = s.user_id
@@ -92,6 +93,15 @@ async function lookupSession(token) {
   if (new Date(row.expires_at).getTime() <= Date.now()) {
     await db.run('DELETE FROM sessions WHERE token_hash = $1', [hashToken(token)]);
     return null;
+  }
+  // Lazy suspension expiry (Phase 2 item 384): a timed suspension ends on
+  // its own the first time the account is used after the end date.
+  if (row.suspended === 1 && row.suspended_until && new Date(row.suspended_until).getTime() <= Date.now()) {
+    await db.run(
+      `UPDATE users SET suspended = 0, suspended_reason = '', suspended_until = NULL, suspended_at = NULL WHERE id = $1`,
+      [row.user_id]
+    );
+    row.suspended = 0;
   }
   return row;
 }

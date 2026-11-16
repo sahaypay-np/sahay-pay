@@ -34,8 +34,8 @@ router.post('/reports', requireActive, rateLimit('report', 20, 60 * 60 * 1000), 
     const targetId = cleanStr(body.targetId, 64);
     const reason = cleanStr(body.reason, 32);
     const note = cleanStr(body.note || '', 600);
-    if (!['bill', 'brand', 'auction', 'user'].includes(targetType)) {
-      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Target type must be bill, brand, auction or user.' } });
+    if (!['bill', 'brand', 'auction', 'user', 'message'].includes(targetType)) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Target type must be bill, brand, auction, user or message.' } });
     }
     if (!targetId) return res.status(400).json({ error: { code: 'VALIDATION', message: 'A target is required.' } });
     if (!REASONS.includes(reason)) {
@@ -93,12 +93,15 @@ router.post('/complaints', requireActive, rateLimit('complaint', 10, 60 * 60 * 1
     }
     const subject = cleanStr(req.body?.subject, 200);
     const body = cleanStr(req.body?.body, 2000);
+    // Category (items 363/593): 'scam' (report a scam seen elsewhere),
+    // 'brand' (brand feedback), '' (general complaint).
+    const category = ['scam', 'brand'].includes(req.body?.category) ? req.body.category : '';
     if (subject.length < 3) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please give your complaint a subject.' } });
     if (body.length < 10) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please describe what happened (10+ characters).' } });
     const id = crypto.randomUUID();
     await db.run(
-      `INSERT INTO complaints (id, user_id, subject, body, status, created_at) VALUES ($1, $2, $3, $4, 'open', $5)`,
-      [id, req.user.id, subject, body, nowIso()]
+      `INSERT INTO complaints (id, user_id, subject, body, category, status, created_at) VALUES ($1, $2, $3, $4, $5, 'open', $6)`,
+      [id, req.user.id, subject, body, category, nowIso()]
     );
     await logAudit('user', req.user.id, 'complaint_filed', 'complaint', id, {});
     res.status(201).json({ ok: true, complaintId: id, message: 'We review every complaint.' });
