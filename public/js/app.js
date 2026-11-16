@@ -2096,7 +2096,7 @@ function renderGift(billId, q){
       };
     }
     function sendInstructions(method){
-      var map={esewa:t("send_instructions_esewa"),khalti:t("send_instructions_khalti"),upi:t("send_instructions_upi"),bank_in:t("send_instructions_bank"),bank_np:t("send_instructions_bank"),connectips:t("send_instructions_connectips")};
+      var map={esewa:t("send_instructions_esewa"),khalti:t("send_instructions_khalti"),upi:t("send_instructions_upi"),bank_in:t("send_instructions_bank"),bank_np:t("send_instructions_bank"),connectips:t("send_instructions_connectips"),fonepay_qr:t("send_instructions_fonepay"),payment_link:t("send_instructions_link")};
       return map[method]||t("send_instructions_generic");
     }
     function drawSend(){

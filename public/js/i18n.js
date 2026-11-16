@@ -325,6 +325,8 @@ en: {
   send_instructions_bank:"Send from your banking app to the account shown. Check the holder name and account number match before confirming.",
   send_instructions_connectips:"Send via connectIPS / your bank app to the account shown. Check the holder name matches before confirming.",
   send_instructions_generic:"Send the amount to the account shown, using your own payment app. Check the name matches before confirming.",
+  send_instructions_fonepay:"Scan the QR code with your banking app or FonePay app → enter the amount → check the merchant name matches → confirm inside your app. You can also download the QR to scan it later.",
+  send_instructions_link:"Tap the payment link to open it in your browser or payment app → enter the amount → check the name matches → confirm inside the app. Only use the link shown here — never a link sent to you somewhere else.",
   open_app:"Open payment app",
   details_shown:"Details shown — send in your own app, then tap “I've sent it”.",
   waiting_confirm:"Waiting for the recipient to confirm it arrived.",
@@ -2090,7 +2092,9 @@ ne: {
   filter_status:"स्थिति अनुसार फिल्टर गर्नुहोस्",
   status_all:"सबै स्थितिहरू",
   pays_direct_label:"सिधै तिर्छ",
-  view_receipt:"रसिद हेर्नुहोस्"
+  view_receipt:"रसिद हेर्नुहोस्",
+  send_instructions_fonepay:"तपाईंको बैंकिङ एप वा FonePay एपबाट QR कोड स्क्यान गर्नुहोस् → रकम हाल्नुहोस् → व्यापारीको नाम मिल्छ कि मिल्दैन जाँच्नुहोस् → एपभित्र पुष्टि गर्नुहोस्। पछि स्क्यान गर्न QR डाउनलोड पनि गर्न सक्नुहुन्छ।",
+  send_instructions_link:"भुक्तानी लिङ्क ट्याप गरेर ब्राउजर वा भुक्तानी एपमा खोल्नुहोस् → रकम हाल्नुहोस् → नाम मिल्छ कि मिल्दैन जाँच्नुहोस् → एपभित्र पुष्टि गर्नुहोस्। यहाँ देखाइएको लिङ्क मात्र प्रयोग गर्नुहोस् — अन्यत्र पठाइएको लिङ्क कहिल्यै प्रयोग नगर्नुहोस्।"
 },
 hi: {
   tagline:"छोटे काम। असली मदद।",
@@ -2759,7 +2763,9 @@ hi: {
   filter_status:"स्थिति के अनुसार फ़िल्टर करें",
   status_all:"सभी स्थितियाँ",
   pays_direct_label:"सीधे भुगतान करता है",
-  view_receipt:"रसीद देखें"
+  view_receipt:"रसीद देखें",
+  send_instructions_fonepay:"अपने बैंकिंग ऐप या FonePay ऐप से QR कोड स्कैन करें → राशि डालें → जाँचें कि व्यापारी का नाम मेल खाता है → ऐप के अंदर पुष्टि करें। बाद में स्कैन करने के लिए आप QR डाउनलोड भी कर सकते हैं।",
+  send_instructions_link:"भुगतान लिंक पर टैप करके उसे ब्राउज़र या भुगतान ऐप में खोलें → राशि डालें → जाँचें कि नाम मेल खाता है → ऐप के अंदर पुष्टि करें। केवल यहाँ दिखाया गया लिंक ही इस्तेमाल करें — कहीं और से भेजा गया लिंक कभी न इस्तेमाल करें।"
 }
 };
 var LANGS = ["en","ne","hi"];

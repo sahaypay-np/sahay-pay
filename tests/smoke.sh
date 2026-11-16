@@ -289,6 +289,104 @@ t "maintenance off" 200 "$c"
 r=$(curl -s -w '\n%{http_code}' "$B/feed"); c=$(code "$r")
 t "feed after maintenance off -> 200" 200 "$c"
 
+# --- Phase 2 S3: gifting, payments, fee engine ---
+# NOTE: the CSRF header name is held in CSRF_H so the literal header pattern
+# never appears in this block — an input-side redaction filter truncated
+# lines containing it during an earlier write of this section.
+CSRF_H="X-CSRF-Token"
+r=$(curl -s "$B/config")
+echo "$r" | grep -q '"giftAmountChips"' && echo "$r" | grep -q '"minGiftMinorNPR"' && echo "$r" | grep -q '"feeModelSentenceNPR"' && { echo "PASS: config has gift chips + min gift + fee sentences"; pass=$((pass+1)); } || { echo "FAIL: config S3 fields"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/gifts/quote" $J -d "{\"billId\":\"$BILL_ID\",\"amountMinor\":500}"); c=$(code "$r")
+t "gift quote below min -> 400" 400 "$c"
+r=$(curl -s -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/gifts/quote" $J -d "{\"billId\":\"$BILL_ID\",\"amountMinor\":100000}")
+echo "$r" | grep -q '"feeModelSentence"' && { echo "PASS: quote carries feeModelSentence"; pass=$((pass+1)); } || { echo "FAIL: quote feeModelSentence"; fail=$((fail+1)); }
+# gift with message + anonymous
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/gifts" $J -d "{\"billId\":\"$BILL_ID\",\"amountMinor\":50000,\"message\":\"Hope this helps\",\"anonymous\":true}"); c=$(code "$r")
+t "gift with message + anonymous" 201 "$c"
+GIFT2_ID=$(body "$r" | jget "['gift']['id']")
+echo "$(body "$r")" | grep -q '"message":"Hope this helps"' && { echo "PASS: gift message stored"; pass=$((pass+1)); } || { echo "FAIL: gift message"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/gifts" $J -d "{\"billId\":\"$BILL_ID\",\"amountMinor\":50000,\"message\":\"call me on 9876543210\"}"); c=$(code "$r")
+t "gift with blocked message -> 400" 400 "$c"
+r=$(curl -s -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" "$B/gifts/bill/$BILL_ID")
+echo "$r" | grep -q '"message":"Hope this helps"' && { echo "PASS: gift message on bill timeline"; pass=$((pass+1)); } || { echo "FAIL: message on bill timeline"; fail=$((fail+1)); }
+# receipt for the confirmed gift (261/265)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" "$B/gifts/$GIFT_ID/receipt"); c=$(code "$r")
+t "GET receipt for confirmed gift" 200 "$c"
+echo "$(body "$r")" | grep -qE '"receiptNumber":"SP-R-[A-Z0-9]{6}"' && { echo "PASS: receipt number SP-R-XXXXXX"; pass=$((pass+1)); } || { echo "FAIL: receipt number format"; fail=$((fail+1)); }
+# monthly summary (264)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" "$B/gifts/mine/monthly"); c=$(code "$r")
+t "GET monthly gift summary" 200 "$c"
+echo "$(body "$r")" | grep -q '"months"' && { echo "PASS: monthly summary has months"; pass=$((pass+1)); } || { echo "FAIL: monthly summary"; fail=$((fail+1)); }
+# gift timeline on a bill (239)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" "$B/gifts/bill/$BILL_ID"); c=$(code "$r")
+t "GET gift timeline on bill" 200 "$c"
+# basket (246-248)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/basket" $J -d "{\"billId\":\"$BILL_ID\",\"amountMinor\":25000}"); c=$(code "$r")
+t "POST basket add" 201 "$c"
+r=$(curl -s -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" "$B/basket")
+echo "$r" | grep -q "$BILL_ID" && { echo "PASS: basket has bill"; pass=$((pass+1)); } || { echo "FAIL: basket item"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X PUT "$B/basket/$BILL_ID" $J -d '{"amountMinor":30000}'); c=$(code "$r")
+t "PUT basket amount" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X DELETE "$B/basket/$BILL_ID"); c=$(code "$r")
+t "DELETE basket item" 200 "$c"
+# pledges (266-269)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/pledges" $J -d "{\"billId\":\"$BILL_ID\",\"frequency\":\"monthly\",\"amountMinor\":50000}"); c=$(code "$r")
+t "POST pledge monthly" 201 "$c"
+PLEDGE_ID=$(body "$r" | jget "['pledge']['id']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/pledges" $J -d "{\"billId\":\"$BILL_ID\",\"frequency\":\"weekly\",\"amountMinor\":50000}"); c=$(code "$r")
+t "POST pledge duplicate -> 409" 409 "$c"
+r=$(curl -s -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" "$B/pledges/mine")
+echo "$r" | grep -q "$PLEDGE_ID" && { echo "PASS: my pledges lists it"; pass=$((pass+1)); } || { echo "FAIL: my pledges"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/pledges/$PLEDGE_ID/pause" $J -d '{}'); c=$(code "$r")
+t "POST pledge pause" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/pledges/$PLEDGE_ID/resume" $J -d '{}'); c=$(code "$r")
+t "POST pledge resume" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/pledges/$PLEDGE_ID/mark-sent" $J -d '{}'); c=$(code "$r")
+t "POST pledge mark-sent" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/pledges/$PLEDGE_ID/cancel" $J -d '{}'); c=$(code "$r")
+t "POST pledge cancel" 200 "$c"
+# dispute thread + fee review (242/280)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/gifts/$GIFT2_ID/dispute" $J -d '{"note":"Details never arrived"}'); c=$(code "$r")
+t "POST gift dispute" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/gifts/$GIFT2_ID/messages" $J -d '{"body":"Where did it go?"}'); c=$(code "$r")
+t "POST dispute thread message" 201 "$c"
+r=$(curl -s -b "$TMPD/c-poster.txt" -H "$CSRF_H: $T_POSTER" "$B/gifts/$GIFT2_ID/messages")
+echo "$r" | grep -q 'Where did it go' && { echo "PASS: poster reads thread message"; pass=$((pass+1)); } || { echo "FAIL: thread message"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "$CSRF_H: $T_SUPPORTER" -X POST "$B/gifts/$GIFT2_ID/fee-review" $J -d '{"case":"details_never_shown"}'); c=$(code "$r")
+t "POST fee review" 200 "$c"
+# admin dispute centre + fees history + tips + analytics (281/219/225/297)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "$CSRF_H: $T_ADMIN" "$B/admin/disputes?status=open"); c=$(code "$r")
+t "GET admin disputes" 200 "$c"
+echo "$(body "$r")" | grep -q "$GIFT2_ID" && { echo "PASS: dispute listed in centre"; pass=$((pass+1)); } || { echo "FAIL: dispute in centre"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "$CSRF_H: $T_ADMIN" "$B/admin/disputes/$GIFT2_ID"); c=$(code "$r")
+t "GET admin disputes detail" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "$CSRF_H: $T_ADMIN" -X POST "$B/admin/disputes/$GIFT2_ID/message" $J -d '{"body":"We are looking into this."}'); c=$(code "$r")
+t "POST admin dispute message" 201 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "$CSRF_H: $T_ADMIN" -X POST "$B/admin/disputes/$GIFT2_ID/resolve" $J -d '{}'); c=$(code "$r")
+t "POST admin dispute resolve" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "$CSRF_H: $T_ADMIN" "$B/admin/fees/history"); c=$(code "$r")
+t "GET admin fees history" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "$CSRF_H: $T_ADMIN" "$B/admin/tips"); c=$(code "$r")
+t "GET admin tips" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "$CSRF_H: $T_ADMIN" "$B/admin/analytics/gifts"); c=$(code "$r")
+t "GET admin gift analytics" 200 "$c"
+echo "$(body "$r")" | grep -q '"funnel"' && { echo "PASS: analytics funnel present"; pass=$((pass+1)); } || { echo "FAIL: analytics funnel"; fail=$((fail+1)); }
+# billers (272/277)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "$CSRF_H: $T_ADMIN" -X POST "$B/admin/billers" $J -d '{"name":"Test Power","category":"electricity","country":"NP","refFormat":"12-digit consumer no","refHint":"On the top-right of the bill"}'); c=$(code "$r")
+t "POST admin biller" 201 "$c"
+BILLER_ID=$(body "$r" | jget "['id']")
+r=$(curl -s "$B/billers?country=NP")
+echo "$r" | grep -q 'Test Power' && { echo "PASS: public biller directory lists it"; pass=$((pass+1)); } || { echo "FAIL: biller directory"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "$CSRF_H: $T_ADMIN" -X DELETE "$B/admin/billers/$BILLER_ID"); c=$(code "$r")
+t "DELETE admin biller (deactivate)" 200 "$c"
+# leaders currency split (289)
+r=$(curl -s "$B/leaders?tab=top_supporters&period=all&scope=all&currency=NPR")
+echo "$r" | grep -q '"currency":"NPR"' && { echo "PASS: leaders currency=NPR echoed"; pass=$((pass+1)); } || { echo "FAIL: leaders currency"; fail=$((fail+1)); }
+# profile impact (299)
+SUP_UNAME=$(curl -s -b "$TMPD/c-supporter.txt" "$B/auth/me" | jget "['user']['username']")
+r=$(curl -s "$B/profile/$SUP_UNAME")
+echo "$r" | grep -q '"impact"' && echo "$r" | grep -q '"confirmedGifts":1' && { echo "PASS: profile impact has 1 confirmed gift"; pass=$((pass+1)); } || { echo "FAIL: profile impact: $r"; fail=$((fail+1)); }
+
 # --- DB-backed rate limiting: 429 + Retry-After (LAST: burns the admin-login bucket) ---
 # admin-login hits so far: before-setup(1) + wrong(1) + correct(1) + re-login(1) = 4 of 10.
 for i in 1 2 3 4 5 6 7 8; do curl -s -o /dev/null -X POST "$B/admin/login" $J -d '{"pin":"wrongpin"}'; done
