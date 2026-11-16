@@ -189,5 +189,103 @@ r=$(curl -s -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" "$B/uploads/pri
 t "A GET own private file -> 200" 200 "$r"
 
 
+# --- Phase 2 §7: message filter contract (685) — every category blocked, plain words allowed ---
+# The helper already has a gift on BILL_ID, so the thread gate is open.
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" -X POST "$B/messages/thread" $J -d "{\"billId\":\"$BILL_ID\"}"); t "contract: open thread" 201 "$(code "$r")"
+CT_THREAD=$(echo "$(body "$r")" | jget "['thread']['id']")
+has "thread shape has otherUser" "$(body "$r")" '"otherUser"'
+has "thread shape has billTitle" "$(body "$r")" '"billTitle"'
+for MSG in "see https://example.com/pay" "my UPI is bikash@okhdfc" "IFSC SBIN0001234" "my account number 1234567890" "the OTP is 482913"; do
+  r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" -X POST "$B/messages/$CT_THREAD" $J -d "{\"body\":\"$MSG\"}")
+  t "filter blocks: $MSG" 400 "$(code "$r")"
+  has "MESSAGE_BLOCKED for: $MSG" "$(body "$r")" 'MESSAGE_BLOCKED'
+done
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" -X POST "$B/messages/$CT_THREAD" $J -d '{"body":"I never share my OTP with anyone, that is the rule."}'); t "plain OTP word allowed" 201 "$(code "$r")"
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/messages/$CT_THREAD")
+has "thread messages carry mine flag" "$r" '"mine":false'
+has "thread messages carry isRead" "$r" '"isRead"'
+# IDOR: a third user cannot read or post to the thread
+r=$(curl -s -w '\n%{http_code}' -c "$TMPD/c-third.txt" -X POST "$B/auth/onboard" $J -d '{"displayName":"Third Person","age":22,"country":"NP","city":"Pokhara","termsAccepted":true,"privacyAccepted":true}'); t "onboard third user" 201 "$(code "$r")"
+T_THIRD=$(curl -s -b "$TMPD/c-third.txt" "$B/auth/csrf" | jget "['csrfToken']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-third.txt" "$B/messages/$CT_THREAD"); t "third user reads thread -> 404" 404 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-third.txt" -H "X-CSRF-Token: $T_THIRD" -X POST "$B/messages/$CT_THREAD" $J -d '{"body":"Hello from outside."}'); t "third user posts to thread -> 404" 404 "$(code "$r")"
+
+# --- Phase 2 §7: notifications pagination + kind filter contract (604/609) ---
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/notifications?limit=1")
+has "page 1 has nextCursor" "$r" '"nextCursor":"'
+CURSOR=$(echo "$r" | jget "['nextCursor']")
+FIRST_ID=$(echo "$r" | jget "['notifications'][0]['id']")
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/notifications?limit=1&cursor=$CURSOR")
+has "page 2 differs from page 1" "$r" '"notifications":[{'
+if echo "$r" | grep -q "$FIRST_ID"; then echo "FAIL: cursor page repeats first id"; fail=$((fail+1)); else echo "PASS: cursor page has no repeat"; pass=$((pass+1)); fi
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/notifications?kind=gifts")
+if echo "$r" | grep -q 'post_approved'; then echo "FAIL: gifts filter leaks bill kinds"; fail=$((fail+1)); else echo "PASS: gifts filter excludes bill kinds"; pass=$((pass+1)); fi
+
+# --- Phase 2 §7: notification prefs contract (610-618) ---
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X PATCH "$B/profile/me" $J -d '{"notifyTypes":{"messages":false,"thanks":false},"quietHours":{"start":22,"end":7},"tzOffsetMinutes":345,"notifyLang":"ne","digestOptOut":false,"referralOptOut":false,"soundEnabled":true,"pauseUntil":null}'); t "PATCH full prefs" 200 "$(code "$r")"
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/auth/me")
+has "prefs quietHours persisted" "$r" '"start":22'
+has "prefs notifyLang persisted" "$r" '"notifyLang":"ne"'
+has "prefs soundEnabled persisted" "$r" '"soundEnabled":true'
+has "prefs per-event messages off" "$r" '"messages":false'
+
+# --- Phase 2 §7: referrals + digest contract shapes (654-658, 671-680) ---
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/referrals/me")
+has "referrals/me has code" "$r" '"code":"'
+has "referrals/me has link" "$r" '"link":"'
+has "referrals/me has activeReferrals" "$r" '"activeReferrals"'
+has "referrals/me has badges" "$r" '"badges"'
+CT_REF=$(echo "$r" | jget "['code']")
+r=$(curl -s "$B/referrals/landing/$CT_REF")
+has "landing has referrerFirstName" "$r" '"referrerFirstName":"Asha"'
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/referrals/opt-out" $J -d '{}'); t "referral opt-out" 200 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' "$B/referrals/landing/$CT_REF"); t "landing 404 after opt-out" 404 "$(code "$r")"
+curl -s -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/referrals/opt-in" $J -d '{}' > /dev/null
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/digest/weekly")
+has "weekly digest has given totals" "$r" '"given":{"count"'
+has "weekly digest has newBillsInCity" "$r" '"newBillsInCity"'
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/digest/monthly")
+has "monthly digest has leaderboardRank" "$r" '"leaderboardRank"'
+has "monthly digest has month" "$r" '"month":"'
+
+# --- Phase 2 §7: thanks contract (692-695) — confirm the gift, then thank ---
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -H "X-CSRF-Token: $T_HELPER" -X POST "$B/gifts/$GIFT_ID/reported-sent" $J -d '{"reference":"CT123"}'); t "contract gift reported-sent" 200 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/gifts/$GIFT_ID/confirm" $J -d '{}'); t "contract gift confirm" 200 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/thanks" $J -d "{\"giftId\":\"$GIFT_ID\",\"body\":\"Dhanyabad, Bikash!\",\"isPublic\":true}"); t "contract thank-you note" 201 "$(code "$r")"
+r=$(curl -s "$B/thanks/bill/$BILL_ID")
+has "thanks wall has senderName" "$r" '"senderName":"Asha Sharma"'
+has "thanks wall has body" "$r" 'Dhanyabad'
+
+# --- Phase 2 §8: admin role contract (771/772) — viewer is read-only ---
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/session"); t "owner session" 200 "$(code "$r")"
+has "owner session role owner" "$(body "$r")" '"role":"owner"'
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/admins" $J -d '{"displayName":"Contract Viewer","role":"viewer","pin":"555555"}'); t "create viewer admin" 201 "$(code "$r")"
+CT_VIEWER=$(echo "$(body "$r")" | jget "['adminUser']['id']")
+r=$(curl -s -w '\n%{http_code}' -c "$TMPD/c-viewer.txt" -X POST "$B/admin/login" $J -d "{\"adminId\":\"$CT_VIEWER\",\"pin\":\"555555\"}"); t "viewer login" 200 "$(code "$r")"
+has "viewer login returns role" "$(body "$r")" '"role":"viewer"'
+T_VIEWER=$(curl -s -b "$TMPD/c-viewer.txt" "$B/admin/csrf" | jget "['csrfToken']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-viewer.txt" "$B/admin/metrics"); t "viewer GET metrics" 200 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-viewer.txt" -H "X-CSRF-Token: $T_VIEWER" -X POST "$B/admin/review/bulk" $J -d '{"packetIds":[],"decision":"approve"}'); t "viewer POST bulk -> 403" 403 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-viewer.txt" "$B/admin/admins"); t "viewer GET admins -> 403 (owner only)" 403 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X DELETE "$B/admin/admins/$CT_VIEWER"); t "delete viewer admin" 200 "$(code "$r")"
+
+# --- Phase 2 §8: admin list shapes (queue/users/analytics/audit/export) ---
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/queue?status=approved")
+has "queue packets have flagged" "$r" '"flagged"'
+has "queue packets have watchlisted" "$r" '"watchlisted"'
+has "queue packets have approvedBy" "$r" '"approvedBy"'
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/users")
+has "users list has giftsSentCount" "$r" '"giftsSentCount"'
+has "users list has billCount" "$r" '"billCount"'
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/analytics")
+has "analytics has dau" "$r" '"dau"'
+has "analytics has funnel" "$r" '"funnel"'
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/audit/verify")
+has "audit verify ok" "$r" '"ok":true'
+has "audit verify checked count" "$r" '"checked"'
+curl -s -b "$TMPD/c-admin.txt" "$B/admin/export" > "$TMPD/contract-export.json"
+python3 -c "import json; d=json.load(open('$TMPD/contract-export.json')); t=d['tables']; assert 'message_threads' in t and 'messages' in t and 'thank_you_notes' in t and 'announcements' in t and 'appeals' in t and 'case_notes' in t and 'broadcasts' in t and 'audit_archive' in t, 'missing s7-8 tables'; assert all('pin_hash' not in str(a) for a in t.get('admin_users', [])), 'admin PIN hash in export'; assert all('code_hash' not in str(i) for i in t.get('admin_invites', [])), 'invite code hash in export'" && { echo "PASS: export has s7-8 tables, no admin hashes"; pass=$((pass+1)); } || { echo "FAIL: export s7-8 tables/hashes"; fail=$((fail+1)); }
+
+
 echo "=== $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

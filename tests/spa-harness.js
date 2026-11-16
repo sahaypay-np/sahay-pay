@@ -207,12 +207,12 @@ async function main() {
 
   // 5f. Help topic links (674): every topic renders, none 404s.
   let topicsOk = true;
-  for (const topic of ['helping', 'posting', 'faq', 'verification', 'fees', 'safety', 'complaints', 'privacy', 'terms']) {
+  for (const topic of ['helping', 'posting', 'faq', 'verification', 'fees', 'safety', 'complaints', 'privacy', 'terms', 'how-direct-payments-work', 'referrals', 'how-moderation-works', 'install']) {
     window.location.hash = '#/help?topic=' + topic;
     const ok = await waitFor(() => !!doc.querySelector('#view h1') && !text().includes('Page not found'), 3000, 'topic ' + topic);
     if (!ok) topicsOk = false;
   }
-  check('all 9 help topics render without a 404', topicsOk);
+  check('all 13 help topics render without a 404 (incl. 4 phase-2 §7 topics)', topicsOk);
 
   // 5g. Branded 404 (563/572) for unknown routes + unknown bills.
   window.location.hash = '#/does-not-exist';
@@ -264,6 +264,22 @@ async function main() {
   check('html lang matches the active locale (en)', doc.documentElement.lang === 'en');
   check('header uses the SVG logo', !!doc.querySelector('.logo-mark img[src="logo.svg"]'));
 
+  // 5m. Phase 2 section 7 user pages: notifications, messages, referrals,
+  // summary, updates, and the notification-prefs card in settings.
+  window.location.hash = '#/notifications';
+  check('notifications page renders with filter tabs', await waitFor(() => !!$('#nt-tabs') && !!$('#nt-readall'), 5000, 'notifications'));
+  check('notifications has 4 filter tabs (all/gifts/bills/account)', doc.querySelectorAll('#nt-tabs .tab-btn').length === 4);
+  window.location.hash = '#/messages';
+  check('messages page renders empty state', await waitFor(() => text().includes('Messages') && (!!doc.querySelector('.empty') || !!doc.querySelector('#msg-body')), 5000, 'messages'));
+  window.location.hash = '#/referrals';
+  check('referrals page renders with code + copy button', await waitFor(() => !!$('#ref-copy') && !!$('#ref-share'), 5000, 'referrals'));
+  window.location.hash = '#/summary';
+  check('summary page renders weekly digest', await waitFor(() => !!$('#sum-body') && text().includes('My summary'), 5000, 'summary'));
+  window.location.hash = '#/updates';
+  check('updates page renders empty state', await waitFor(() => text().includes('Updates') && !!$('#up-body'), 5000, 'updates'));
+  window.location.hash = '#/settings';
+  check('settings has notification-prefs card (pause-all)', await waitFor(() => !!$('#st-pause'), 5000, 'notif prefs'));
+
   // 6. Admin: PIN setup (fresh DB) -> login -> dashboard metrics load.
   window.location.hash = '#/admin';
   check('admin PIN setup screen renders', await waitFor(() => !!$('#ad-setup'), 5000, 'pin setup'));
@@ -280,6 +296,21 @@ async function main() {
   check('admin dashboard loads', await waitFor(() => window.location.hash.startsWith('#/admin/dashboard') && !!$('#ad-body'), 8000, 'dashboard'));
   check('admin export button present', !!$('#ad-export'));
   check('dashboard shows real metrics (1 user)', await waitFor(() => text().includes('1'), 5000, 'metrics'));
+
+  // 6a. Phase 2 section 8 admin pages render: analytics, complaints (the
+  // harness complaint from 5c must be listed), users, security, audit.
+  window.location.hash = '#/admin/analytics';
+  check('admin analytics renders with export', await waitFor(() => !!$('#an-export') && text().includes('Analytics'), 5000, 'admin analytics'));
+  window.location.hash = '#/admin/complaints';
+  check('admin complaints inbox lists the harness complaint', await waitFor(() => text().includes('Harness complaint'), 5000, 'admin complaints'));
+  window.location.hash = '#/admin/users';
+  check('admin users list shows the harness user', await waitFor(() => text().includes('Harness User'), 5000, 'admin users'));
+  window.location.hash = '#/admin/security';
+  check('admin security page renders', await waitFor(() => text().includes('Security') && !!$('#ad-body'), 5000, 'admin security'));
+  window.location.hash = '#/admin/audit';
+  check('admin audit log renders with verify + export', await waitFor(() => !!$('#audit-verify') && !!$('#audit-export'), 5000, 'admin audit'));
+  $('#audit-verify').click();
+  check('audit hash-chain verify reports ok', await waitFor(() => $('#audit-verify-out') && $('#audit-verify-out').textContent.includes('verified'), 5000, 'audit verify'), $('#audit-verify-out') ? $('#audit-verify-out').textContent : 'no output');
 
   // 6b. Logout resets the header (a): avatar back to '?', badge hidden.
   window.location.hash = '#/settings';
