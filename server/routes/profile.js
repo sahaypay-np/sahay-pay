@@ -423,6 +423,7 @@ router.get('/:username', async (req, res, next) => {
       })),
       thankYouRate: receivedGifts > 0 ? Math.round((thanked / receivedGifts) * 100) : null,
       bestWeekMinor: stats.bestWeekMinor,
+      bestWeek: stats.bestWeek || null,
       responseTimeHours,
       followers: prefs.hideFollowers && !isSelf ? null : Number(followCounts?.followers || 0),
       followingCount: prefs.hideFollowers && !isSelf ? null : Number(followCounts?.following || 0),

@@ -159,15 +159,24 @@ async function userGiftStats(userId) {
   const user = await db.get('SELECT created_at FROM users WHERE id = $1', [userId]);
   const first = await db.get('SELECT MIN(created_at) AS first FROM users');
   const streak = await computeStreak(userId);
-  // Most generous single week (item 499).
-  const bestWeek = await db.get(
-    `SELECT COALESCE(MAX(week_total), 0) AS best FROM (
-       SELECT SUM(amount_minor) AS week_total FROM gifts
-       WHERE supporter_id = $1 AND status = 'confirmed' AND confirmed_at IS NOT NULL
-       GROUP BY substr(confirmed_at, 1, 10)
-     )`,
+  // Most generous single ISO week (item 499): group confirmed gifts by
+  // ISO week in JS (portable across Postgres/SQLite, same weekKeyOf as
+  // the streak walk). Also records which week it was.
+  const weekRows = await db.query(
+    `SELECT amount_minor, confirmed_at FROM gifts
+     WHERE supporter_id = $1 AND status = 'confirmed' AND confirmed_at IS NOT NULL`,
     [userId]
   );
+  const weekTotals = new Map();
+  for (const g of weekRows.rows) {
+    const wk = weekKeyOf(new Date(g.confirmed_at));
+    weekTotals.set(wk, (weekTotals.get(wk) || 0) + Number(g.amount_minor || 0));
+  }
+  let bestWeekMinor = 0;
+  let bestWeekKey = null;
+  for (const [wk, total] of weekTotals) {
+    if (total > bestWeekMinor) { bestWeekMinor = total; bestWeekKey = wk; }
+  }
   return {
     gifts: Number(totals?.gifts || 0),
     billsHelped: Number(totals?.bills_helped || 0),
@@ -182,7 +191,8 @@ async function userGiftStats(userId) {
       user && first && first.first
         ? new Date(user.created_at).getTime() - new Date(first.first).getTime() <= 30 * 86400000
         : false,
-    bestWeekMinor: Number(bestWeek?.best || 0),
+    bestWeekMinor,
+    bestWeek: bestWeekKey,
   };
 }
 
