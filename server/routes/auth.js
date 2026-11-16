@@ -321,10 +321,21 @@ router.get('/signin-history', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/auth/appeal — appeal a suspension (item 384).
-router.post('/appeal', requireAuth, async (req, res, next) => {
+// A suspended user who logged out cannot recover (recover rejects
+// suspended accounts), so the appeal accepts either a live session OR
+// the recovery code as proof of identity.
+router.post('/appeal', rateLimit('appeal', 5, 60 * 60 * 1000), async (req, res, next) => {
   try {
-    const user = await db.get('SELECT * FROM users WHERE id = $1', [req.user.id]);
-    if (!user || user.suspended !== 1) {
+    let user = null;
+    if (req.user) {
+      user = await db.get('SELECT * FROM users WHERE id = $1', [req.user.id]);
+    } else if (req.body?.code) {
+      user = await findUserByRecoveryCode(req.body.code);
+    }
+    if (!user) {
+      return res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'Please sign in or enter your recovery code to appeal.' } });
+    }
+    if (user.suspended !== 1) {
       return res.status(409).json({ error: { code: 'INVALID_STATE', message: 'Your account is not suspended.' } });
     }
     const body = cleanStr(req.body?.body || '', 2000);
@@ -333,7 +344,7 @@ router.post('/appeal', requireAuth, async (req, res, next) => {
     }
     const existing = await db.get(
       `SELECT id FROM appeals WHERE target_type = 'user' AND target_id = $1 AND status = 'open'`,
-      [req.user.id]
+      [user.id]
     );
     if (existing) {
       return res.status(409).json({ error: { code: 'ALREADY_SUBMITTED', message: 'You already have an open appeal.' } });
@@ -342,9 +353,9 @@ router.post('/appeal', requireAuth, async (req, res, next) => {
     await db.run(
       `INSERT INTO appeals (id, user_id, target_type, target_id, body, status, reviewer_note, created_at, decided_at)
        VALUES ($1, $2, 'user', $3, $4, 'open', '', $5, NULL)`,
-      [id, req.user.id, req.user.id, body, nowIso()]
+      [id, user.id, user.id, body, nowIso()]
     );
-    await logAudit('user', req.user.id, 'appeal_filed', 'user', req.user.id, { appealId: id });
+    await logAudit('user', user.id, 'appeal_filed', 'user', user.id, { appealId: id });
     res.status(201).json({ ok: true, appealId: id });
   } catch (err) {
     next(err);

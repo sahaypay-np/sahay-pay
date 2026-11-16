@@ -583,9 +583,16 @@ var ROUTES = [
   {re:/^#\/admin$/, fn:renderAdminLogin, chrome:true},
   {re:/^#\/admin\/dashboard$/, fn:renderAdminDashboard, chrome:true},
   {re:/^#\/admin\/queue$/, fn:renderAdminQueue, chrome:true},
+  {re:/^#\/admin\/fraud$/, fn:renderAdminFraud, chrome:true},
   {re:/^#\/admin\/users$/, fn:renderAdminUsers, chrome:true},
   {re:/^#\/admin\/verifications$/, fn:renderAdminVerifications, chrome:true},
   {re:/^#\/admin\/reports$/, fn:renderAdminReports, chrome:true},
+  {re:/^#\/admin\/appeals$/, fn:renderAdminAppeals, chrome:true},
+  {re:/^#\/admin\/brands$/, fn:renderAdminBrands, chrome:true},
+  {re:/^#\/admin\/scam-notices$/, fn:renderAdminScamNotices, chrome:true},
+  {re:/^#\/admin\/velocity$/, fn:renderAdminVelocity, chrome:true},
+  {re:/^#\/admin\/trust-report$/, fn:renderAdminTrustReport, chrome:true},
+  {re:/^#\/admin\/drops$/, fn:renderAdminDrops, chrome:true},
   {re:/^#\/admin\/fees$/, fn:renderAdminFees, chrome:true},
   {re:/^#\/admin\/audit$/, fn:renderAdminAudit, chrome:true}
 ];
@@ -682,6 +689,8 @@ function renderOnboarding(){
   var lang=I.getLang();
   view('<div style="max-width:520px;margin:0 auto"><h1>'+esc(t("onboarding_title"))+'</h1><p>'+esc(t("onboarding_sub"))+'</p>'
     +'<div class="notice info">'+esc(t("consent_notice"))+'</div>'
+    // MPIN warning (item 358): shown before account creation.
+    +'<div class="notice warn" style="margin-top:10px">⚠️ '+esc(t("mpin_warning"))+'</div>'
     +'<p class="small">'+esc(t("required_note"))+'</p>'
     +'<form id="ob-form" class="card" style="margin-top:12px">'
     +'<label for="ob-name">'+esc(t("q_name"))+' '+reqStar()+'</label><input id="ob-name" maxlength="60" placeholder="'+esc(t("name_ph"))+'" autocomplete="name" aria-required="true" aria-describedby="e-name"><div class="field-err" id="e-name" role="alert"></div>'
@@ -789,6 +798,28 @@ function renderRecover(){
       go("#/swipe");
     }catch(err){
       btn.disabled=false; btn.textContent=t("recover_btn");
+      // Suspension notice + appeal (items 384/385): the recover error
+      // carries the reason, the end date (if timed) and canAppeal.
+      var einfo=(err.data&&err.data.error)||{};
+      if(err.code==="ACCOUNT_SUSPENDED"&&einfo.canAppeal){
+        view('<div style="max-width:480px;margin:0 auto"><h1>'+esc(t("account_suspended"))+'</h1>'
+          +'<div class="card"><p>'+esc(einfo.suspendedReason||t("suspended_no_reason"))+'</p>'
+          +(einfo.suspendedUntil?'<p class="small">'+esc(t("suspended_until"))+' '+esc(fmtDate(einfo.suspendedUntil))+'</p>':"")
+          +'<p class="small">'+esc(t("appeal_intro"))+'</p>'
+          +'<label for="rc-appeal">'+esc(t("your_appeal"))+'</label><textarea id="rc-appeal" maxlength="2000" rows="4"></textarea>'
+          +'<div class="btn-row"><button class="btn" id="rc-appeal-send">'+esc(t("submit_appeal"))+'</button></div>'
+          +'<p class="small" style="text-align:center;margin-top:10px"><a href="#/help?topic=appeals">'+esc(t("appeals_help"))+'</a></p></div></div>');
+        $("#rc-appeal-send").onclick=async function(){
+          var body=$("#rc-appeal").value.trim();
+          if(body.length<10){ toast(t("appeal_too_short"), true); return; }
+          var b2=$("#rc-appeal-send"); b2.disabled=true; b2.textContent=t("loading");
+          try{
+            await api("/auth/appeal", {method:"POST", body:{code:code, body:body}});
+            toast(t("appeal_submitted")); go("#/welcome");
+          }catch(e2){ b2.disabled=false; b2.textContent=t("submit_appeal"); toast(e2.message||t("err_generic"), true); }
+        };
+        return;
+      }
       $("#rc-err").textContent=err.message||t("err_generic");
     }
   });
@@ -969,7 +1000,17 @@ function pushRecentSearch(q){
 }
 function renderSwipe(){
   var streak=recordFeedVisit();
+  // First-week scam card (item 359): new accounts see a safety card on
+  // the feed for their first 7 days.
+  var firstWeekCard="";
+  if(S.user&&S.user.created_at){
+    var ageDays=(Date.now()-new Date(S.user.created_at).getTime())/86400000;
+    if(ageDays<7){
+      firstWeekCard='<div class="card" style="border-left:4px solid var(--warn);margin-bottom:12px"><strong>⚠️ '+esc(t("first_week_scam_title"))+'</strong><p class="small">'+esc(t("first_week_scam_body"))+'</p><p><a href="#/help?topic=scams">'+esc(t("learn_scams"))+' →</a></p></div>';
+    }
+  }
   view('<h1>'+esc(t("feed_title"))+'</h1><p>'+esc(t("feed_sub"))+'</p>'
+    +firstWeekCard
     +'<div id="feed-meta" class="small muted" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"></div>'
     +'<div style="position:relative;margin-bottom:10px"><label class="sr-only" for="feed-search">'+esc(t("search"))+'</label><input id="feed-search" type="search" value="'+esc(S.searchQ)+'" placeholder="'+esc(t("search_ph"))+'" autocomplete="off"><div id="feed-suggest"></div></div>'
     +'<div id="search-helpers" style="margin-bottom:8px"></div>'
@@ -1480,8 +1521,14 @@ function openReportSheet(targetType, targetId){
     try{
       var res=await api("/reports", {method:"POST", body:{targetType:targetType, targetId:targetId, reason:chosen, note:$("#rep-note").value.trim()}});
       closeSheets();
-      toast(res&&res.paused? t("report_paused") : t("report_sent"));
-      if(res&&res.paused) route();
+      // Report confirmation screen (item 355): reference + review time.
+      openSheet('<div style="text-align:center"><div class="slide-ic">✅</div><h2>'+esc(t("report_received"))+'</h2>'
+        +'<p>'+esc(t("report_received_body"))+'</p>'
+        +'<p><strong>'+esc(t("reference"))+':</strong> '+(res&&res.reportId?esc(res.reportId.slice(0,8).toUpperCase()):"—")+'</p>'
+        +'<p class="small">'+esc(t("report_review_time"))+'</p>'
+        +(res&&res.paused?'<p class="small">'+esc(t("report_paused"))+'</p>':"")
+        +'<button class="btn" id="rep-done">'+esc(t("done"))+'</button></div>');
+      $("#rep-done").onclick=function(){ closeSheets(); if(res&&res.paused) route(); };
     }catch(e){ btn.disabled=false; btn.textContent=t("send_report"); toast(e.message||t("err_generic"), true); }
   };
 }
@@ -1881,6 +1928,8 @@ function renderGift(billId, q){
           +'<p class="small">'+esc(t("pay_biller_steps"))+'</p></div>':"")
         +crossBorderHtml()
         +'<div class="card" style="margin-top:12px"><label for="g-ref">'+esc(t("reference_opt"))+'</label><input id="g-ref" maxlength="80">'
+        // Off-platform warning (item 361): keep the conversation here.
+        +'<p class="small" style="margin-top:10px">⚠️ '+esc(t("off_platform_warning"))+'</p>'
         +'<div class="btn-row"><button class="btn" id="g-sent">'+esc(t("i_sent_it"))+'</button></div>'
         +'<button class="btn ghost" id="g-cancel">'+esc(t("couldnt_send"))+'</button>'
         // Report button on the send step (item 346): something feels off
@@ -1905,9 +1954,13 @@ function renderGift(billId, q){
     function drawConfirmed(){
       // First-gift celebration (item 480) + share prompt (item 493) +
       // help-again shortcut (item 485).
+      // Rotating scam tip (item 364): one of five tips, rotated by day.
+      var scamTips=[t("scam_tip_1"),t("scam_tip_2"),t("scam_tip_3"),t("scam_tip_4"),t("scam_tip_5")];
+      var tipOfDay=scamTips[Math.floor(Date.now()/86400000)%scamTips.length];
       view(stepHead()+'<div class="center-page"><div class="slide-ic">💙</div><h1>'+esc(t("thanks_helping",{name:name}))+'</h1>'
         +(g.firstGift?'<div class="card" style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#fff"><h2 style="color:#fff;margin-top:0">🎉 '+esc(t("first_gift_title"))+'</h2><p>'+esc(t("first_gift_body"))+'</p></div>':"")
         +'<p>'+esc(t("recipient_confirm_pending"))+'</p><p class="small">'+esc(t("waiting_confirm"))+'</p>'
+        +'<div class="card" style="width:100%;max-width:360px;border-left:4px solid var(--warn)"><p class="small">⚠️ '+esc(tipOfDay)+' <a href="#/help?topic=scams">'+esc(t("learn_scams"))+'</a></p></div>'
         +'<div class="card" style="width:100%;max-width:360px"><h2>'+esc(t("share_prompt_title"))+'</h2><p class="small">'+esc(t("share_prompt_body"))+'</p><button class="btn secondary" id="g-share-bill">🔗 '+esc(t("share_bill"))+'</button></div>'
         +'<div style="width:100%;max-width:360px;display:grid;gap:10px"><a class="btn" href="#/founder-tip?gift='+encodeURIComponent(g.giftId||"")+'&amount='+g.amountMinor+'&currency='+cur+'">'+esc(t("founder_tip_title"))+'</a>'
         +'<a class="btn secondary" href="#/category/'+encodeURIComponent(bill.category||"")+'">'+esc(t("help_similar"))+'</a>'
@@ -2058,11 +2111,14 @@ function renderPost(arg, q){
       +'<div id="forwhom-wrap" '+(p.forWhom==="myself"?"hidden":"")+'><label for="f-rel">'+esc(t("relationship_label"))+'</label><input id="f-rel" maxlength="80" value="'+esc(p.relationship)+'" placeholder="'+esc(t("relationship_ph"))+'">'
       +'<label class="check-row" id="for-consent-row" '+(p.forWhom==="other"?"":"hidden")+'><input type="checkbox" id="f-for-consent" '+(p.forOtherConsent?"checked":"")+'> '+esc(t("for_other_consent"))+'</label></div>'
       +'<label for="f-story">'+esc(t("short_story"))+' '+reqStar()+' <span class="small muted">(<span id="story-n">'+p.story.length+'</span>/280)</span></label><textarea id="f-story" maxlength="280" spellcheck="true" placeholder="'+esc(t("story_hint"))+'" aria-required="true" aria-describedby="e-story">'+esc(p.story)+'</textarea><div class="field-err" id="e-story" role="alert"></div>'
+      +'<div id="privacy-warn" class="small" style="color:var(--warn)"></div>'
       +'<p class="small muted">'+esc(t("friend_hint"))+' '+esc(t("spellcheck_hint"))+'</p>'
       +'<p class="small" id="story-enc" style="color:var(--warn)">'+(p.story.length>0&&p.story.length<40?esc(t("story_short_encourage")):"")+'</p>'
       +'<p class="small">💡 <span id="story-prompt">'+esc(t("story_prompt_"+((new Date().getDate()%4)+1)))+'</span> <button type="button" class="btn ghost small" id="prompt-cycle">↻</button></p>'
       +'<button type="button" class="btn secondary small" id="story-template">'+esc(t("story_template_btn"))+'</button>'
       +'<details style="margin:8px 0"><summary><strong>'+esc(t("tone_guide_title"))+'</strong></summary><p class="small">'+esc(t("tone_guide_body"))+'</p></details>'
+      // "Who can see this?" (item 372) + will/won't-see list (item 369).
+      +'<details style="margin:8px 0"><summary><strong>'+esc(t("who_sees_title"))+'</strong></summary><p class="small">'+esc(t("who_sees_1"))+'</p><p class="small">'+esc(t("who_sees_2"))+'</p><p class="small">'+esc(t("who_sees_3"))+'</p><p class="small"><a href="#/help?topic=who-sees">'+esc(t("learn_more"))+'</a></p></details>'
       +'<label>'+esc(t("story_lang_label"))+'</label><div class="seg" id="f-storylang"><button type="button" data-v="en" class="'+(p.storyLang==="en"?"on":"")+'">English</button><button type="button" data-v="ne" class="'+(p.storyLang==="ne"?"on":"")+'">नेपाली</button><button type="button" data-v="hi" class="'+(p.storyLang==="hi"?"on":"")+'">हिन्दी</button></div>'
       +'<label for="f-details">'+esc(t("long_story"))+'</label><textarea id="f-details" maxlength="1500">'+esc(p.details)+'</textarea>'
       +'<label for="f-notpaid">'+esc(t("not_paid_label"))+'</label><input id="f-notpaid" maxlength="300" value="'+esc(p.notPaidConsequence)+'">'
@@ -2148,11 +2204,26 @@ function renderPost(arg, q){
       $all("#f-storylang button").forEach(function(x){ x.classList.toggle("on", x===b); });
       saveDraft(p);
     }; });
+    // Pre-publish privacy scan (item 367): same patterns as the server
+    // scan — phone, email, account numbers. Warns, never blocks.
+    function privacyScan(){
+      var hay=($("#f-story").value||"")+"\n"+($("#f-details").value||"")+"\n"+($("#f-title").value||"");
+      var kinds=[];
+      if(/\b(?:\+?977[- ]?)?9[678]\d{8}\b/.test(hay)||/\b\d{10}\b/.test(hay)) kinds.push(t("privacy_phone"));
+      if(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(hay)) kinds.push(t("privacy_email"));
+      if(/\b\d{12,20}\b/.test(hay)||/\b[A-Z]{4}0[A-Z0-9]{6}\b/.test(hay)) kinds.push(t("privacy_account"));
+      var box=$("#privacy-warn");
+      if(box) box.innerHTML=kinds.length? "⚠️ "+esc(t("privacy_warn"))+" "+esc(kinds.join(", ")) : "";
+    }
     $("#f-story").addEventListener("input", function(){
       var n=$("#f-story").value.length;
       $("#story-n").textContent=String(n);
       $("#story-enc").textContent=(n>0&&n<40)?t("story_short_encourage"):"";
+      privacyScan();
     });
+    $("#f-details").addEventListener("input", privacyScan);
+    $("#f-title").addEventListener("input", privacyScan);
+    privacyScan();
     var promptIdx=(new Date().getDate()%4)+1;
     $("#prompt-cycle").onclick=function(){ promptIdx=promptIdx%4+1; $("#story-prompt").textContent=t("story_prompt_"+promptIdx); };
     $("#story-template").onclick=function(){
@@ -3435,6 +3506,8 @@ function renderCommunity(){
   api("/community").then(function(d){
     if(tok!==NAV) return;
     var h='<h1>'+esc(t("community_title"))+'</h1>';
+    // Scam notices (item 365) shown at the top of the community page.
+    h+='<div id="cm-scam"></div>';
     // Community banner (item 459) + milestone banner (item 478).
     var dg=d.digest||{};
     h+='<div class="card" style="background:linear-gradient(135deg,#1d4ed8,#0ea5e9);color:#fff"><h2 style="color:#fff;margin-top:0">'+esc(t("community_banner"))+'</h2>'
@@ -3477,6 +3550,15 @@ function renderCommunity(){
       }).join("");
     }
     view(h);
+    api("/scam-notices").then(function(sd){
+      var box=$("#cm-scam"); if(!box) return;
+      var list=sd.notices||[];
+      if(list.length){
+        box.innerHTML=list.slice(0,3).map(function(n){
+          return '<div class="card" style="border-left:4px solid var(--warn)"><strong>⚠️ '+esc(n.title||"")+'</strong><p class="small">'+esc(n.body||"")+'</p></div>';
+        }).join("")+'<p class="small"><a href="#/help?topic=scams">'+esc(t("learn_scams"))+' →</a></p>';
+      }
+    }).catch(function(){});
   }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderCommunity); });
 }
 
@@ -3645,8 +3727,10 @@ function renderSettings(){
     +'<label for="st-name">'+esc(t("display_name"))+'</label><input id="st-name" maxlength="60" value="'+esc(u.display_name||u.displayName||"")+'" autocomplete="name">'
     +'<label for="st-username">'+esc(t("username"))+'</label><input id="st-username" maxlength="30" value="'+esc(u.username||"")+'" autocomplete="username"><p class="small">'+esc(t("username_rules"))+'</p>'
     +'<label for="st-city">'+esc(t("city"))+'</label><input id="st-city" value="'+esc(u.city||"")+'" autocomplete="address-level2">'
-    +'<label for="st-about">'+esc(t("about"))+'</label><textarea id="st-about" maxlength="500">'+esc(u.about||"")+'</textarea>'
-    +'<label for="st-photo">'+esc(t("q_photo"))+'</label><input type="file" id="st-photo" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("photo_change_review"))+'</p>'
+    +'<label for="st-about">'+esc(t("about"))+'</label><textarea id="st-about" maxlength="300">'+esc(u.about||"")+'</textarea><p class="small" id="st-about-count"></p>'
+    +'<label for="st-photo">'+esc(t("q_photo"))+'</label><input type="file" id="st-photo" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("photo_change_review"))+'</p><div id="st-photo-crop"></div>'
+    +'<label for="st-cover">'+esc(t("cover_image"))+'</label><input type="file" id="st-cover" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("cover_image_note"))+'</p>'
+    +(u.coverUrl||u.cover_url?'<p><button class="btn secondary small" id="st-cover-remove">'+esc(t("remove_cover"))+'</button></p>':"")
     +'<label>'+esc(t("country"))+'</label><div class="seg" id="st-country"><button type="button" data-c="NP" class="'+(countryCode(u.country)==="NP"?"on":"")+'">🇳🇵 '+esc(t("nepal"))+'</button><button type="button" data-c="IN" class="'+(countryCode(u.country)==="IN"?"on":"")+'">🇮🇳 '+esc(t("india"))+'</button></div><p class="small">'+esc(t("change_country_note"))+'</p>'
     +'<button class="btn" id="st-save-profile" style="margin-top:12px">'+esc(t("save"))+'</button></div>'
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("prefs_section"))+'</h2>'
@@ -3660,13 +3744,24 @@ function renderSettings(){
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("privacy_section"))+'</h2>'
     +'<label class="check-row"><input type="checkbox" id="st-show" '+(showTotals?"checked":"")+'> '+esc(t("show_history"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="st-anon" '+(anonDefault?"checked":"")+'> '+esc(t("anon_default"))+'</label>'
+    +'<label class="check-row"><input type="checkbox" id="st-hide-gh" '+(prefs.hideGiftHistory?"checked":"")+'> '+esc(t("hide_gift_history"))+'</label>'
+    +'<label class="check-row"><input type="checkbox" id="st-hide-la" '+(prefs.hideLiveAsks?"checked":"")+'> '+esc(t("hide_live_asks"))+'</label>'
+    +'<label class="check-row"><input type="checkbox" id="st-hide-fl" '+(prefs.hideFollowers?"checked":"")+'> '+esc(t("hide_followers"))+'</label>'
+    +'<label class="check-row"><input type="checkbox" id="st-hide-sw" '+(prefs.hideFromSupporterWall?"checked":"")+'> '+esc(t("hide_supporter_wall"))+'</label>'
     +'<h3 style="margin-top:12px">'+esc(t("blocked_users"))+' ('+S.blocked.length+')</h3>'
     +(S.blocked.length? S.blocked.map(function(b){ return '<div class="kv"><span>'+esc(b)+'</span><button class="btn secondary small" data-unblock="'+esc(b)+'">'+esc(t("unblock"))+'</button></div>'; }).join("") : '<p class="small">'+esc(t("no_blocked"))+'</p>')
     +'<button class="btn secondary" id="st-save-priv" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("security_section"))+'</h2>'
+    // "Secure your account" checklist (item 390).
+    +'<ul id="st-checklist" class="small" style="line-height:1.9"></ul>'
+    +'<h3 style="margin-top:12px">'+esc(t("signin_history"))+'</h3><div id="st-signins"><p class="small">'+esc(t("loading"))+'</p></div>'
+    +'<p class="small">'+esc(t("signin_history_note"))+'</p></div>'
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("support_section"))+'</h2>'
     +'<div style="display:grid;gap:8px"><a class="btn secondary" href="#/help">'+esc(t("help_centre"))+'</a><a class="btn secondary" href="#/verify">'+esc(t("verify_centre"))+'</a><a class="btn secondary" href="#/help?topic=ranking">'+esc(t("topic_ranking"))+'</a><button class="btn secondary" id="st-tour">'+esc(t("tour_replay"))+'</button><a class="btn secondary" href="#/admin">'+esc(t("open_console"))+'</a></div>'
     +'<p class="small" style="margin-top:10px">'+esc(t("ranking_note_settings"))+'</p>'
     +'<p class="small" style="margin-top:10px">'+esc(t("sessions_note"))+'</p></div>'
+    // Support Sahay Pay (item 566).
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("support_sahay_pay"))+'</h2><p class="small">'+esc(t("support_sahay_pay_body"))+'</p><div style="display:grid;gap:8px"><a class="btn secondary" href="#/founder">'+esc(t("founder_page"))+'</a><a class="btn secondary" href="#/supporters-wall">'+esc(t("supporters_wall"))+'</a></div></div>'
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("account_section"))+'</h3>'
     +'<div style="display:grid;gap:8px"><button class="btn secondary" id="st-export">'+esc(t("download_data"))+'</button><button class="btn secondary" id="st-logout">'+esc(t("logout"))+'</button><button class="btn secondary" id="st-logout-all">'+esc(t("logout_all"))+'</button><button class="btn danger" id="st-delete">'+esc(t("delete_account"))+'</button></div>'
     +'<h3 style="margin-top:14px">'+esc(t("sessions_title"))+'</h3><div id="st-sessions"><p class="small">'+esc(t("loading"))+'</p></div>'
@@ -3674,6 +3769,53 @@ function renderSettings(){
     +'<p class="small legal" style="margin-top:12px">'+esc(t("version_note"))+'</p></div>');
   // Data export (items 183/273/429): download profile, bills, gifts,
   // notifications as one JSON file.
+  // Bio character counter (item 464: 300 characters).
+  var aboutEl=$("#st-about"), aboutCount=$("#st-about-count");
+  function updateAboutCount(){ if(aboutEl&&aboutCount) aboutCount.textContent=aboutEl.value.length+" / 300"; }
+  if(aboutEl){ aboutEl.addEventListener("input", updateAboutCount); updateAboutCount(); }
+  // Avatar crop step (item 465): centre-square crop preview; the cropped
+  // image (max 512px) is what gets uploaded.
+  var croppedPhotoBlob=null;
+  var photoInput=$("#st-photo");
+  if(photoInput){
+    photoInput.addEventListener("change", function(){
+      croppedPhotoBlob=null;
+      var f=photoInput.files[0]; if(!f) return;
+      var img=new Image();
+      img.onload=function(){
+        var side=Math.min(img.naturalWidth, img.naturalHeight);
+        var sx=(img.naturalWidth-side)/2, sy=(img.naturalHeight-side)/2;
+        var size=Math.min(512, side);
+        var c=document.createElement("canvas"); c.width=size; c.height=size;
+        c.getContext("2d").drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        c.toBlob(function(blob){ croppedPhotoBlob=blob; }, "image/jpeg", 0.85);
+        var box=$("#st-photo-crop");
+        if(box) box.innerHTML='<p class="small">'+esc(t("crop_preview"))+'</p><img src="'+c.toDataURL("image/jpeg", 0.85)+'" alt="" style="width:120px;height:120px;object-fit:cover;border-radius:50%">';
+        URL.revokeObjectURL(img.src);
+      };
+      img.src=URL.createObjectURL(f);
+    });
+  }
+  // Security checklist (item 390) + sign-in history (item 386).
+  (function loadSecurity(){
+    var checklist=[
+      {done:!!(u.photoUrl||u.photo_url), label:t("sec_photo")},
+      {done:!!(u.about&&u.about.length>=20), label:t("sec_about")},
+      {done:!!(u.city), label:t("sec_city")},
+      {done:!!(u.verified||(u.badges&&u.badges.length)), label:t("sec_verified")},
+      {done:true, label:t("sec_recovery")},
+    ];
+    var cl=$("#st-checklist");
+    if(cl) cl.innerHTML=checklist.map(function(c){ return '<li>'+(c.done?"✅ ":"⬜ ")+esc(c.label)+'</li>'; }).join("");
+    var box=$("#st-signins"); if(!box) return;
+    api("/auth/signin-history").then(function(d){
+      var list=d.history||[];
+      if(!list.length){ box.innerHTML='<p class="small">'+esc(t("no_signins"))+'</p>'; return; }
+      box.innerHTML=list.map(function(s){
+        return '<div class="kv"><span>'+esc(s.device||t("session_device_unknown"))+'</span><b>'+esc(fmtDate(s.createdAt))+'</b></div>';
+      }).join("");
+    }).catch(function(){ box.innerHTML='<p class="small">'+esc(t("err_generic"))+'</p>'; });
+  })();
   $("#st-tour").onclick=function(){ try{ localStorage.removeItem("sp_tour_seen"); }catch(e){} go("#/swipe"); };
   $("#st-export").onclick=async function(){
     var btn=$("#st-export"); btn.disabled=true; btn.textContent=t("loading");
@@ -3717,9 +3859,16 @@ function renderSettings(){
     var btn=$("#st-save-profile"); btn.disabled=true; btn.textContent=t("loading");
     try{
       var photoUrl=null; var f=$("#st-photo").files[0];
-      if(f){ var up=await uploadFile(f,"avatar"); photoUrl=up.url||up.fileUrl||up.path; }
+      if(f){
+        // Upload the cropped square when the crop step produced one.
+        var up=await uploadFile(croppedPhotoBlob?new File([croppedPhotoBlob], "avatar.jpg", {type:"image/jpeg"}):f, "avatar");
+        photoUrl=up.url||up.fileUrl||up.path;
+      }
+      var coverUrl=null; var cf=$("#st-cover").files[0];
+      if(cf){ var up2=await uploadFile(cf, "cover"); coverUrl=up2.url||up2.fileUrl||up2.path; }
       var body={displayName:$("#st-name").value.trim(), username:$("#st-username").value.trim(), city:$("#st-city").value.trim(), about:$("#st-about").value.trim(), country:newCountry};
       if(photoUrl) body.photoUrl=photoUrl;
+      if(coverUrl) body.coverUrl=coverUrl;
       var res=await api("/profile/me", {method:"PATCH", body:body});
       S.user=res.user||res.profile||S.user;
       if(newCountry!==countryCode(u.country)) toast(t("country_changed"));
@@ -3728,6 +3877,13 @@ function renderSettings(){
     }catch(e){ toast(e.message||t("err_generic"), true); }
     finally{ btn.disabled=false; btn.textContent=t("save"); }
   };
+  var coverRemove=$("#st-cover-remove");
+  if(coverRemove){
+    coverRemove.onclick=async function(){
+      try{ await api("/profile/me", {method:"PATCH", body:{coverUrl:""}}); toast(t("cover_removed")); route(); }
+      catch(e){ toast(e.message||t("err_generic"), true); }
+    };
+  }
   $("#st-save-prefs").onclick=async function(){
     var b=$("#st-save-prefs"); b.disabled=true; b.textContent=t("loading");
     try{ await api("/profile/me", {method:"PATCH", body:{notifyPrefs:{posts:$("#st-n1").checked, gifts:$("#st-n2").checked, brands:$("#st-n3").checked}}}); toast(t("notification_prefs_saved")); }
@@ -3736,7 +3892,7 @@ function renderSettings(){
   };
   $("#st-save-priv").onclick=async function(){
     var b=$("#st-save-priv"); b.disabled=true; b.textContent=t("loading");
-    try{ await api("/profile/me", {method:"PATCH", body:{showTotals:$("#st-show").checked, anonDefault:$("#st-anon").checked}}); toast(t("saved")); }
+    try{ await api("/profile/me", {method:"PATCH", body:{showTotals:$("#st-show").checked, anonDefault:$("#st-anon").checked, hideGiftHistory:$("#st-hide-gh").checked, hideLiveAsks:$("#st-hide-la").checked, hideFollowers:$("#st-hide-fl").checked, hideFromSupporterWall:$("#st-hide-sw").checked}}); toast(t("saved")); }
     catch(e){ toast(e.message||t("err_generic"), true); }
     finally{ b.disabled=false; b.textContent=t("save"); }
   };
@@ -3847,7 +4003,18 @@ var HELP_TOPICS=[
   {id:"content-rules", titleKey:"topic_content_rules", body:function(){ return '<p>'+esc(t("content_rules_body"))+'</p>'+CONTENT_RULES_HTML; }},
   {id:"complaints", titleKey:"topic_complaints", body:function(){ return '<p>'+esc(t("complaints_body"))+'</p><div id="complaint-form"></div>'; }},
   {id:"privacy", titleKey:"topic_privacy", body:function(){ return '<p>'+esc(t("privacy_body"))+'</p>'+LEGAL_PRIVACY_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }},
-  {id:"terms", titleKey:"topic_terms", body:function(){ return '<p>'+esc(t("terms_body"))+'</p>'+LEGAL_TERMS_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }}
+  {id:"terms", titleKey:"topic_terms", body:function(){ return '<p>'+esc(t("terms_body"))+'</p>'+LEGAL_TERMS_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }},
+  // Scam-education hub (items 357/360/362/392/393) — 356/457 skipped per
+  // coordinator (covered by s9-10 items 934/971).
+  {id:"scams", titleKey:"topic_scams", body:function(){ return '<div id="scam-notices"></div><p>'+esc(t("scams_body"))+'</p><ul><li>'+esc(t("scam_tip_1"))+'</li><li>'+esc(t("scam_tip_2"))+'</li><li>'+esc(t("scam_tip_3"))+'</li><li>'+esc(t("scam_tip_4"))+'</li><li>'+esc(t("scam_tip_5"))+'</li></ul><p>'+esc(t("scams_report"))+'</p>'; }},
+  {id:"appeals", titleKey:"topic_appeals", body:function(){ return '<p>'+esc(t("appeals_body"))+'</p><p class="small">'+esc(t("appeals_note"))+'</p>'; }},
+  {id:"leaderboard", titleKey:"topic_leaderboard", body:function(){ return '<p>'+esc(t("leaderboard_body"))+'</p><p class="small">'+esc(t("leaders_fairness"))+'</p>'; }},
+  {id:"featured-brand", titleKey:"topic_featured_brand", body:function(){ return '<p>'+esc(t("featured_brand_body"))+'</p>'; }},
+  {id:"reviewer-guide", titleKey:"topic_reviewer_guide", body:function(){ return '<p>'+esc(t("reviewer_guide_body"))+'</p><ul><li>'+esc(t("reviewer_step_1"))+'</li><li>'+esc(t("reviewer_step_2"))+'</li><li>'+esc(t("reviewer_step_3"))+'</li><li>'+esc(t("reviewer_step_4"))+'</li></ul>'; }},
+  {id:"install", titleKey:"topic_install", body:function(){ return '<p>'+esc(t("install_body"))+'</p><p>'+esc(t("install_android"))+'</p><p>'+esc(t("install_ios"))+'</p>'; }},
+  {id:"brand-connect", titleKey:"topic_brand_connect", body:function(){ return '<p>'+esc(t("brand_connect_body"))+'</p><p class="small">'+esc(t("brand_connect_note"))+'</p>'; }},
+  {id:"drops", titleKey:"topic_drops", body:function(){ return '<p>'+esc(t("drops_body"))+'</p>'; }},
+  {id:"who-sees", titleKey:"topic_who_sees", body:function(){ return '<p>'+esc(t("who_sees_body"))+'</p><ul><li>'+esc(t("who_sees_1"))+'</li><li>'+esc(t("who_sees_2"))+'</li><li>'+esc(t("who_sees_3"))+'</li></ul>'; }}
 ];
 function renderHelp(id, q){
   var topic=q&&q.topic;
@@ -3859,18 +4026,32 @@ function renderHelp(id, q){
       var form=$("#complaint-form");
       // Honeypot (item 788): hidden "website" field no human ever sees —
       // bots fill it and the server rejects the submission.
-      form.innerHTML='<label for="cp-subject">'+esc(t("complaint_subject"))+'</label><input id="cp-subject" maxlength="120" aria-describedby="cp-err"><label for="cp-body">'+esc(t("complaint_body"))+'</label><textarea id="cp-body" maxlength="2000" aria-describedby="cp-err"></textarea><input id="cp-website" name="website" autocomplete="off" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0"><div class="field-err" id="cp-err" role="alert"></div><button class="btn" id="cp-send" style="margin-top:10px">'+esc(t("file_complaint"))+'</button>';
+      form.innerHTML='<label for="cp-category">'+esc(t("complaint_category"))+'</label><select id="cp-category"><option value="general">'+esc(t("complaint_general"))+'</option><option value="scam">'+esc(t("complaint_scam"))+'</option><option value="brand">'+esc(t("complaint_brand"))+'</option></select><label for="cp-subject">'+esc(t("complaint_subject"))+'</label><input id="cp-subject" maxlength="120" aria-describedby="cp-err"><label for="cp-body">'+esc(t("complaint_body"))+'</label><textarea id="cp-body" maxlength="2000" aria-describedby="cp-err"></textarea><input id="cp-website" name="website" autocomplete="off" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0"><div class="field-err" id="cp-err" role="alert"></div><button class="btn" id="cp-send" style="margin-top:10px">'+esc(t("file_complaint"))+'</button>';
       $("#cp-send").onclick=async function(){
         if(!needUser()) return;
         var s=$("#cp-subject").value.trim(), b=$("#cp-body").value.trim();
         if(!s||!b){ $("#cp-err").textContent=t("err_complaint_fields"); return; }
         $("#cp-err").textContent="";
         var btn=$("#cp-send"); btn.disabled=true; btn.textContent=t("loading");
-        try{ await api("/complaints", {method:"POST", body:{subject:s, body:b, website:($("#cp-website").value||"")}}); toast(t("complaint_sent")); var cs=$("#cp-subject"); if(cs) cs.value=""; var cb=$("#cp-body"); if(cb) cb.value=""; }
+        try{ await api("/complaints", {method:"POST", body:{subject:s, body:b, category:$("#cp-category").value, website:($("#cp-website").value||"")}}); toast(t("complaint_sent")); var cs=$("#cp-subject"); if(cs) cs.value=""; var cb=$("#cp-body"); if(cb) cb.value=""; }
 
         catch(e){ toast(e.message||t("err_generic"), true); }
         finally{ btn.disabled=false; btn.textContent=t("file_complaint"); }
       };
+    }
+    // Scam notices (item 365): owner-posted warnings shown in the hub.
+    if(topic==="scams"){
+      var snBox=$("#scam-notices");
+      if(snBox){
+        api("/scam-notices").then(function(d){
+          var list=d.notices||[];
+          if(list.length){
+            snBox.innerHTML=list.map(function(n){
+              return '<div class="card" style="border-left:4px solid var(--warn);margin-bottom:10px"><strong>⚠️ '+esc(n.title||"")+'</strong><p>'+esc(n.body||"")+'</p><p class="small">'+esc(fmtDate(n.created_at))+'</p></div>';
+            }).join("");
+          }
+        }).catch(function(){ /* notices are best-effort */ });
+      }
     }
     return;
   }
@@ -3919,7 +4100,13 @@ function renderNotifications(){
 /* ---------- verification centre ---------- */
 function renderVerify(){
   if(!S.user){ view(emptyState("✅", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
-  view('<h1>'+esc(t("verify_centre"))+'</h1><p>'+esc(t("verify_centre_intro"))+'</p><div id="vf-body">'+skeleton(2)+'</div>');
+  view('<h1>'+esc(t("verify_centre"))+'</h1><p>'+esc(t("verify_centre_intro"))+'</p>'
+    // "Why verify?" explainer (item 310) + upload guidance (item 321).
+    +'<div class="card"><h2>'+esc(t("why_verify"))+'</h2><p>'+esc(t("why_verify_body"))+'</p>'
+    +'<p class="small">'+esc(t("verify_upload_guidance"))+'</p>'
+    +'<p class="small">'+esc(t("verify_privacy_note"))+'</p></div>'
+    +'<div id="vf-body">'+skeleton(2)+'</div>'
+    +'<h2 style="margin-top:14px">'+esc(t("your_documents"))+'</h2><div id="vf-docs"><p class="small">'+esc(t("loading"))+'</p></div>');
   load();
   async function load(){
     var body=$("#vf-body"); if(!body) return;
@@ -3931,27 +4118,48 @@ function renderVerify(){
       {type:"name", label:t("verify_name"), help:t("verify_name_help"), kind:"private_proof"},
       {type:"biller", label:t("verify_biller"), help:t("verify_biller_help"), kind:"private_proof"}
     ];
+    var docTypes=[["bill",t("doc_type_bill")],["id_card",t("doc_type_id")],["passport",t("doc_type_passport")],["bank_statement",t("doc_type_bank")],["other",t("doc_type_other")]];
     body.innerHTML=defs.map(function(def){
       var v=mine.find(function(x){ return x.type===def.type; });
       var status=v? v.status : "not_submitted";
       var label={not_submitted:t("not_submitted"),submitted:t("submitted"),under_review:t("under_review"),approved:t("approved"),rejected:t("rejected"),more_required:t("more_required")}[status]||status;
+      // Expiry + re-verify prompt (item 306).
+      var expHtml="";
+      if(v&&v.status==="approved"&&v.expiresAt){
+        var daysLeft=Math.ceil((new Date(v.expiresAt).getTime()-Date.now())/86400000);
+        expHtml='<p class="small">'+esc(t("badge_expires"))+' '+esc(fmtDate(v.expiresAt))
+          +(daysLeft<=30? ' · <strong>'+esc(t("reverify_soon"))+'</strong>':"")+'</p>';
+      }
+      if(v&&v.expired) expHtml='<p class="small" style="color:var(--warn)">⚠️ '+esc(t("badge_expired_reverify"))+'</p>';
       return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(def.label)+'</strong><span class="chip">'+esc(label)+'</span></div>'
         +'<p class="small">'+esc(def.help)+'</p>'
         +(v&&v.reviewer_note?'<p class="small"><strong>'+esc(t("reviewer_msg"))+':</strong> '+esc(v.reviewer_note)+'</p>':"")
+        +expHtml
+        // Document-type selector (item 323).
+        +'<label for="vf-doctype-'+def.type+'">'+esc(t("document_type"))+'</label><select id="vf-doctype-'+def.type+'">'+docTypes.map(function(dt){ return '<option value="'+dt[0]+'">'+esc(dt[1])+'</option>'; }).join("")+'</select>'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input type="file" id="vf-file-'+def.type+'" accept="image/jpeg,image/png,image/webp,application/pdf" aria-label="'+esc(def.label)+'" style="flex:1;min-width:180px">'
-        +'<button class="btn small" data-vf="'+def.type+'" data-kind="'+def.kind+'">'+esc(t("verify_submit"))+'</button></div></div>';
+        +'<button class="btn small" data-vf="'+def.type+'" data-kind="'+def.kind+'">'+esc(v&&v.expired?t("reverify"):t("verify_submit"))+'</button></div></div>';
     }).join("");
+    // "Your documents" section (item 328): what was submitted, when, status.
+    var docsEl=$("#vf-docs");
+    if(docsEl){
+      if(!mine.length) docsEl.innerHTML='<p class="small">'+esc(t("no_documents"))+'</p>';
+      else docsEl.innerHTML=mine.map(function(v){
+        return '<div class="card row-card"><div class="grow"><div class="t">'+esc(v.type||"")+(v.docType?' · '+esc(v.docType):"")+'</div><div class="s">'+esc(fmtDate(v.createdAt||v.created_at))+' · '+esc(v.status||"")+(v.expiresAt?' · '+esc(t("badge_expires"))+' '+esc(fmtDate(v.expiresAt)):"")+'</div></div></div>';
+      }).join("");
+    }
     $all("[data-vf]", body).forEach(function(btn){
       btn.onclick=async function(){
         var type=btn.getAttribute("data-vf"), kind=btn.getAttribute("data-kind");
         var inp=$("#vf-file-"+type);
         var f=inp.files[0];
         if(!f){ toast(t("verify_upload_first"), true); return; }
+        var docType=$("#vf-doctype-"+type)?$("#vf-doctype-"+type).value:"other";
         btn.disabled=true; btn.textContent=t("loading");
         try{
           var up=await uploadFile(f, kind);
           var url=up.url||up.fileUrl||up.path;
-          await api("/verification", {method:"POST", body:{type:type, docUrl:url}});
+          await api("/verification", {method:"POST", body:{type:type, docUrl:url, docType:docType}});
           toast(t("verification_submitted")); load();
         }catch(e){ btn.disabled=false; btn.textContent=t("verify_submit"); toast(e.message||t("err_generic"), true); }
       };
@@ -3995,7 +4203,7 @@ function renderFounderTip(q){
 
 /* ---------- admin ---------- */
 function adminNav(active){
-  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["users",t("users")],["verifications",t("verifications")],["reports",t("reports")],["fees",t("fees")],["audit",t("audit_log")]];
+  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["fraud",t("admin_fraud")],["users",t("users")],["verifications",t("verifications")],["reports",t("reports")],["appeals",t("admin_appeals")],["brands",t("admin_brands")],["scam-notices",t("admin_scam")],["velocity",t("admin_velocity")],["trust-report",t("admin_trust")],["drops",t("admin_drops")],["fees",t("fees")],["audit",t("audit_log")]];
   return '<div class="admin-nav">'+links.map(function(l){ return '<a href="#/admin/'+l[0]+'" class="'+(active===l[0]?"on":"")+'">'+esc(l[1])+'</a>'; }).join("")+'</div>';
 }
 function adminGuard(){
@@ -4120,6 +4328,12 @@ async function renderAdminDashboard(){
       +statBox(t("metrics_confirmed_inr"), money(volFor("INR")||m.confirmedInrMinor||m.confirmed_inr_minor||0,"INR"))
       +statBox(t("open_reports"), m.openReports||m.open_reports||0)
       +statBox(t("open_complaints"), m.openComplaints!=null?m.openComplaints:(m.open_complaints||0))
+      +statBox(t("pending_appeals"), m.pendingAppeals||m.pending_appeals||0)
+      +statBox(t("open_fraud_flags"), m.openFraudFlags||m.open_fraud_flags||0)
+      +statBox(t("high_risk_flags"), m.highRiskFlags||m.high_risk_flags||0)
+      +statBox(t("pending_brand_profiles"), m.pendingBrandProfiles||m.pending_brand_profiles||0)
+      +statBox(t("open_partnerships"), m.openPartnerships||m.open_partnerships||0)
+      +statBox(t("pending_connects"), m.pendingConnects||m.pending_connects||0)
       +'</div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("fee_mode"))+'</h2><p>'+esc(t("current_mode"))+': <strong>'+esc((S.config&&S.config.feeMode)||"supporter_fee")+'</strong></p><p class="small">'+esc(feeSentence())+'</p><a class="btn secondary small" href="#/admin/fees">'+esc(t("fees"))+'</a></div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("maintenance_mode"))+'</h2><p class="small">'+esc(t("maintenance_note"))+'</p><p id="mt-state" class="small">'+esc(t("loading"))+'</p><button class="btn secondary small" id="mt-toggle" disabled>'+esc(t("maintenance_toggle"))+'</button></div>'
@@ -4261,9 +4475,29 @@ function renderAdminUsers(){
       $all("[data-u]", body).forEach(function(btn){
         btn.onclick=async function(){
           var act=btn.getAttribute("data-act"), id=btn.getAttribute("data-u");
-          btn.disabled=true;
-          try{ await api("/admin/users/"+encodeURIComponent(id)+"/"+act, {method:"POST"}); toast(act==="suspend"?t("user_suspended"):t("user_restored")); load(); }
-          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          if(act==="restore"){
+            btn.disabled=true;
+            try{ await api("/admin/users/"+encodeURIComponent(id)+"/restore", {method:"POST"}); toast(t("user_restored")); load(); }
+            catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+            return;
+          }
+          // Suspend with reason + duration (item 384). Duration empty =
+          // indefinite; the user is told the reason and can appeal.
+          openSheet('<h2>'+esc(t("suspend"))+'</h2>'
+            +'<label for="sp-reason">'+esc(t("suspend_reason"))+'</label><textarea id="sp-reason" maxlength="600" rows="3"></textarea>'
+            +'<label for="sp-days">'+esc(t("suspend_days"))+'</label><input id="sp-days" type="number" min="1" max="3650" placeholder="'+esc(t("suspend_days_ph"))+'">'
+            +'<p class="small">'+esc(t("suspend_note"))+'</p>'
+            +'<div class="btn-row"><button class="btn secondary" id="sp-cancel">'+esc(t("cancel"))+'</button><button class="btn danger" id="sp-go">'+esc(t("suspend"))+'</button></div>');
+          $("#sp-cancel").onclick=closeSheets;
+          $("#sp-go").onclick=async function(){
+            var reason=$("#sp-reason").value.trim();
+            if(reason.length<5){ toast(t("suspend_reason_needed"), true); return; }
+            var days=parseInt($("#sp-days").value, 10);
+            try{
+              await api("/admin/users/"+encodeURIComponent(id)+"/suspend", {method:"POST", body:{reason:reason, durationDays:isNaN(days)?undefined:days}});
+              closeSheets(); toast(t("user_suspended")); load();
+            }catch(e){ toast(e.message||t("err_generic"), true); }
+          };
         };
       });
     }catch(e){
@@ -4274,31 +4508,68 @@ function renderAdminUsers(){
 }
 function renderAdminVerifications(){
   if(!adminGuard()) return;
-  view('<h1>'+esc(t("verifications"))+'</h1>'+adminNav("verifications")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  view('<h1>'+esc(t("verifications"))+'</h1>'+adminNav("verifications")
+    +'<p class="small">'+esc(t("verif_sla_note"))+'</p>'
+    +'<div class="tabs"><button class="tab-btn on" data-s="">'+esc(t("all"))+'</button><button class="tab-btn" data-s="submitted">'+esc(t("submitted"))+'</button><button class="tab-btn" data-s="under_review">'+esc(t("under_review"))+'</button><button class="tab-btn" data-s="approved">'+esc(t("approved"))+'</button><button class="tab-btn" data-s="rejected">'+esc(t("rejected"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
   bindAdminLogout();
+  var status="";
+  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ status=b.getAttribute("data-s"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
   load();
   async function load(){
     var body=$("#ad-body"); if(!body) return;
     try{
-      var d=await api("/admin/verifications");
+      var d=await api("/admin/verifications"+(status?"?status="+encodeURIComponent(status):""));
       var list=pickList(d,["verifications"]);
       if(!list.length){ body.innerHTML=emptyState("✅", t("no_verifications"), ""); return; }
       body.innerHTML=list.map(function(v){
-        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(v.type||"")+'</strong><span class="chip">'+esc(v.status||"")+'</span></div>'
-          +'<p class="small">'+esc(v.display_name||v.username||v.user_id||"")+(v.bill_id?' · '+esc(t("bill"))+' '+esc(v.bill_id):"")+' · '+esc(timeAgo(v.created_at||v.createdAt))+'</p>'
-          +(v.doc_url?'<p><a href="'+esc(v.doc_url)+'" target="_blank" rel="noopener">'+esc(t("verif_doc"))+'</a></p>':"")
+        var sla=(v.waitHours||0)>48;
+        var isImg=v.doc_url&&/\.(jpe?g|png|webp)$/i.test(v.doc_url);
+        return '<div class="card list-item" '+(sla?'style="border-left:4px solid var(--warn)"':"")+'><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(v.type||"")+(v.doc_type?' ('+esc(v.doc_type)+')':"")+'</strong><span class="chip">'+esc(v.status||"")+'</span></div>'
+          +'<p class="small">'+esc(v.user_name||v.username||v.user_id||"")+(v.bill_title?' · '+esc(t("bill"))+': '+esc(v.bill_title)+' ('+esc(v.bill_category||"")+(v.bill_amount_minor!=null?', '+esc(money(v.bill_amount_minor, v.bill_currency||"NPR")):"")+')':"")+' · '+esc(timeAgo(v.created_at||v.createdAt))+' · '+esc(t("wait"))+' '+esc(v.waitHours||0)+'h'+(sla?' · <strong style="color:var(--warn)">⚠️ '+esc(t("sla_over_48h"))+'</strong>':"")+'</p>'
+          +(v.duplicateDoc?'<p class="small" style="color:var(--warn)">⚠️ '+esc(t("duplicate_doc_flag"))+'</p>':"")
+          // Reviewer checklist (item 312).
+          +'<div class="small" style="margin:8px 0"><strong>'+esc(t("verif_checklist"))+'</strong><ul>'
+          +'<li>'+esc(t("verif_check_name"))+'</li><li>'+esc(t("verif_check_doc"))+'</li><li>'+esc(t("verif_check_expiry"))+'</li><li>'+esc(t("verif_check_overshare"))+'</li></ul></div>'
+          // Side-by-side compare + zoom (item 313): document next to the
+          // bill photo (when the verification is tied to a bill).
+          +(v.doc_url?'<div class="compare-row">'+(isImg?'<a href="'+esc(v.doc_url)+'" target="_blank" rel="noopener"><img src="'+esc(v.doc_url)+'" alt="'+esc(t("verif_doc"))+'" style="max-width:100%;max-height:240px;border-radius:8px"></a>':'<p><a href="'+esc(v.doc_url)+'" target="_blank" rel="noopener">'+esc(t("verif_doc"))+'</a></p>')+'</div>':"")
+          +(v.reviewer_note?'<p class="small"><strong>'+esc(t("reviewer_msg"))+':</strong> '+esc(v.reviewer_note)+'</p>':"")
+          +'<p><button class="btn secondary small" data-hist="'+esc(v.id)+'">'+esc(t("verif_history"))+'</button></p><div id="hist-'+esc(v.id)+'"></div>'
           +'<label for="vn-'+esc(v.id)+'">'+esc(t("verif_note"))+'</label><textarea id="vn-'+esc(v.id)+'" maxlength="500"></textarea>'
+          +'<label for="vr-'+esc(v.id)+'">'+esc(t("reject_reason"))+'</label><select id="vr-'+esc(v.id)+'"><option value="">'+esc(t("reject_reason_none"))+'</option><option value="unclear">'+esc(t("reject_unclear"))+'</option><option value="mismatch">'+esc(t("reject_mismatch"))+'</option><option value="expired">'+esc(t("reject_expired"))+'</option><option value="oversharing">'+esc(t("reject_oversharing"))+'</option><option value="other">'+esc(t("report_other"))+'</option></select>'
           +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
           +'<button class="btn small" data-v="'+esc(v.id)+'" data-dec="approved">'+esc(t("verif_approve"))+'</button>'
           +'<button class="btn secondary small" data-v="'+esc(v.id)+'" data-dec="more_required">'+esc(t("verif_more"))+'</button>'
-          +'<button class="btn danger small" data-v="'+esc(v.id)+'" data-dec="rejected">'+esc(t("verif_reject"))+'</button></div></div>';
+          +'<button class="btn danger small" data-v="'+esc(v.id)+'" data-dec="rejected">'+esc(t("verif_reject"))+'</button>'
+          +(v.status==="approved"?'<button class="btn danger small" data-v="'+esc(v.id)+'" data-dec="revoke">'+esc(t("verif_revoke"))+'</button>':"")
+          +'</div></div>';
       }).join("");
+      $all("[data-hist]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          var id=btn.getAttribute("data-hist");
+          var box=$("#hist-"+CSS.escape(id)); if(!box) return;
+          try{
+            var hd=await api("/admin/verifications/"+encodeURIComponent(id)+"/history");
+            var hist=hd.history||[];
+            box.innerHTML=hist.length? '<div class="small">'+hist.map(function(h){ return '<div>'+esc(fmtDate(h.createdAt))+' · '+esc(h.action)+(h.meta&&h.meta.note?' — '+esc(h.meta.note):"")+'</div>'; }).join("")+'</div>' : '<p class="small">'+esc(t("no_history"))+'</p>';
+          }catch(e){ box.innerHTML=errBox(e.message); }
+        };
+      });
       $all("[data-v]", body).forEach(function(btn){
         btn.onclick=async function(){
           var id=btn.getAttribute("data-v"), dec=btn.getAttribute("data-dec");
+          var noteEl=$("#vn-"+CSS.escape(id));
+          var reasonEl=$("#vr-"+CSS.escape(id));
+          var note=(noteEl?noteEl.value.trim():"");
+          var reason=(reasonEl?reasonEl.value:"");
+          // Over-sharing rejection (item 329) is a named reason.
+          if((dec==="rejected"||dec==="revoke")&&!note&&!reason){ toast(t("verif_reason_needed"), true); return; }
           btn.disabled=true;
-          try{ await api("/admin/verifications/"+encodeURIComponent(id), {method:"POST", body:{decision:dec, note:$("#vn-"+CSS.escape(id)).value.trim()||undefined}}); toast(t("verification_decided")); load(); }
-          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          try{
+            await api("/admin/verifications/"+encodeURIComponent(id), {method:"POST", body:{decision:dec, note:(reason? "["+reason+"] ":"")+note||undefined}});
+            toast(t("verification_decided")); load();
+          }catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
         };
       });
     }catch(e){
@@ -4321,15 +4592,22 @@ function renderAdminReports(){
       body.innerHTML=list.map(function(r){
         return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(r.reason||"")+'</strong><span class="chip">'+esc(r.status||"")+'</span></div>'
           +'<p class="small">'+esc(t("reports_target"))+': '+esc(r.target_type||"")+' '+esc(r.target_id||"")+' · '+esc(timeAgo(r.created_at||r.createdAt))+'</p>'
+          // Reporter + decision columns (item 353) + false-report flag (354).
+          +'<p class="small">'+esc(t("reporter"))+': '+esc(r.reporter_name||r.reporter_username||"")+(r.reporterFlagged?' · <strong style="color:var(--warn)">⚠️ '+esc(t("reporter_flagged"))+' ('+esc(r.reporterDismissedCount||0)+' '+esc(t("dismissed"))+')</strong>':"")+'</p>'
+          +(r.decision?'<p class="small">'+esc(t("decision"))+': '+esc(r.decision)+(r.decision_reason?' — '+esc(r.decision_reason):"")+(r.decided_at?' · '+esc(fmtDate(r.decided_at)):"")+'</p>':"")
           +(r.note?'<p>'+esc(r.note)+'</p>':"")
+          +'<label for="rr-'+esc(r.id)+'">'+esc(t("decision_reason"))+'</label><input id="rr-'+esc(r.id)+'" maxlength="600" placeholder="'+esc(t("reason_ph"))+'">'
           +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
           +[["dismiss",t("dismiss")],["hide",t("hide_post")],["pause",t("pause_bill")],["remove",t("remove_bill")],["suspend",t("suspend_account")],["restore",t("restore_bill")]].map(function(a){ return '<button class="btn secondary small" data-r="'+esc(r.id)+'" data-a="'+a[0]+'">'+esc(a[1])+'</button>'; }).join("")
           +'</div></div>';
       }).join("");
       $all("[data-r]", body).forEach(function(btn){
         btn.onclick=async function(){
+          var id=btn.getAttribute("data-r");
+          var reasonEl=$("#rr-"+CSS.escape(id));
+          var reason=reasonEl?reasonEl.value.trim():"";
           btn.disabled=true;
-          try{ await api("/admin/reports/"+encodeURIComponent(btn.getAttribute("data-r")), {method:"POST", body:{action:btn.getAttribute("data-a")}}); toast(t("decision_saved")); load(); }
+          try{ await api("/admin/reports/"+encodeURIComponent(id), {method:"POST", body:{action:btn.getAttribute("data-a"), reason:reason||undefined}}); toast(t("decision_saved")); load(); }
           catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
         };
       });
@@ -4432,11 +4710,17 @@ function renderAdminFees(){
 function renderAdminAudit(){
   if(!adminGuard()) return;
   view('<h1>'+esc(t("audit_log"))+'</h1>'+adminNav("audit")
-    +'<div style="display:flex;gap:8px;margin-bottom:10px"><label class="sr-only" for="audit-filter">'+esc(t("audit_filter"))+'</label><input id="audit-filter" placeholder="'+esc(t("audit_filter"))+'" style="flex:1"><button class="btn secondary small" id="audit-export">'+esc(t("export_audit"))+'</button></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap"><label class="sr-only" for="audit-filter">'+esc(t("audit_filter"))+'</label><input id="audit-filter" placeholder="'+esc(t("audit_filter"))+'" style="flex:1;min-width:140px">'
+    // Per-bill / per-user views + date range (items 378/379/380).
+    +'<input id="audit-bill" placeholder="'+esc(t("audit_bill_id"))+'" style="flex:1;min-width:120px">'
+    +'<input id="audit-user" placeholder="'+esc(t("audit_user_id"))+'" style="flex:1;min-width:120px">'
+    +'<input id="audit-from" type="date" aria-label="'+esc(t("audit_from"))+'"><input id="audit-to" type="date" aria-label="'+esc(t("audit_to"))+'">'
+    +'<button class="btn secondary small" id="audit-apply">'+esc(t("apply"))+'</button><button class="btn secondary small" id="audit-export">'+esc(t("export_audit"))+'</button></div>'
     +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
   bindAdminLogout();
   var rows=[];
   $("#audit-filter").addEventListener("input", draw);
+  $("#audit-apply").onclick=load;
   $("#audit-export").onclick=function(){
     if(!rows.length) return;
     var csv="when,actor,action,target\n"+rows.map(function(r){ return [r.created_at||r.createdAt||"", r.actor_type||r.actorType||"", r.action||"", (r.target_type||"")+"/"+(r.target_id||"")].map(function(x){ return '"'+String(x).replace(/"/g,'""')+'"'; }).join(","); }).join("\n");
@@ -4448,7 +4732,15 @@ function renderAdminAudit(){
   async function load(){
     var body=$("#ad-body"); if(!body) return;
     try{
-      var d=await api("/admin/audit");
+      var q=new URLSearchParams();
+      var billId=$("#audit-bill").value.trim(), userId=$("#audit-user").value.trim();
+      var from=$("#audit-from").value, to=$("#audit-to").value;
+      if(billId) q.set("billId", billId);
+      if(userId) q.set("userId", userId);
+      if(from) q.set("from", from);
+      if(to) q.set("to", to+"T23:59:59Z");
+      q.set("limit", "500");
+      var d=await api("/admin/audit?"+q.toString());
       rows=pickList(d,["audit","logs","entries"]);
       draw();
     }catch(e){
@@ -4463,6 +4755,345 @@ function renderAdminAudit(){
     if(!list.length){ body.innerHTML=emptyState("📋", t("no_audit"), ""); return; }
     body.innerHTML='<div class="card" style="overflow-x:auto"><table class="tbl"><tr><th>'+esc(t("audit_when"))+'</th><th>'+esc(t("audit_who"))+'</th><th>'+esc(t("audit_what"))+'</th><th>'+esc(t("audit_target"))+'</th></tr>'
       +list.map(function(r){ return '<tr><td>'+esc(timeAgo(r.created_at||r.createdAt))+'</td><td>'+esc((r.actor_type||"")+" "+(r.actor_id||""))+'</td><td>'+esc(r.action||"")+'</td><td>'+esc((r.target_type||"")+" "+(r.target_id||""))+'</td></tr>'; }).join("")+'</table></div>';
+  }
+}
+
+/* ---------- admin: fraud dashboard (items 331–345, 398) ---------- */
+function renderAdminFraud(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_fraud"))+'</h1>'+adminNav("fraud")
+    +'<p class="small">'+esc(t("fraud_note"))+'</p>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/fraud");
+      var flags=d.flags||[];
+      var h='<div class="grid2">'
+        +'<div class="card stat"><div class="n">'+esc(flags.length)+'</div><div class="l">'+esc(t("open_fraud_flags"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.unresolvedHighRisk||0)+'</div><div class="l">'+esc(t("high_risk_flags"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc((d.riskBands&&d.riskBands.high)||0)+'</div><div class="l">'+esc(t("high_risk_bills"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc((d.riskBands&&d.riskBands.medium)||0)+'</div><div class="l">'+esc(t("medium_risk_bills"))+'</div></div></div>'
+        +'<h2 style="margin-top:14px">'+esc(t("top_signals"))+'</h2><div class="card">'
+        +((d.bySignal||[]).length? d.bySignal.map(function(s){ return '<div class="kv"><span>'+esc(s.signal)+'</span><b>'+esc(s.count)+'</b></div>'; }).join("") : '<p class="small">'+esc(t("no_signals"))+'</p>')
+        +'</div>'
+        +'<h2 style="margin-top:14px">'+esc(t("signal_weights"))+'</h2><div class="card"><p class="small">'+esc(t("weights_note"))+'</p>'
+        +Object.keys(d.weights||{}).map(function(k){ var w=d.weights[k]; return '<div class="kv"><span>'+esc(w.label||k)+'</span><b>'+esc(w.weight)+'</b></div>'; }).join("")
+        +'</div>'
+        +'<h2 style="margin-top:14px">'+esc(t("trend_30d"))+'</h2><div class="card">'
+        +((d.trend30d||[]).length? d.trend30d.map(function(tr){ return '<div class="kv"><span>'+esc(tr.day)+'</span><b>'+esc(tr.count)+'</b></div>'; }).join("") : '<p class="small">'+esc(t("no_trend"))+'</p>')
+        +'</div>'
+        +'<h2 style="margin-top:14px">'+esc(t("weekly_review"))+'</h2>'
+        +(flags.length? flags.map(function(f){
+          return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(f.signal||"")+'</strong><span class="chip '+(f.severity==="high"?"bad":f.severity==="medium"?"warn":"")+'">'+esc(f.severity||"")+'</span></div>'
+            +'<p class="small">'+(f.billTitle?esc(t("bill"))+': '+esc(f.billTitle)+' · ':"")+(f.userName?esc(f.userName)+' · ':"")+esc(timeAgo(f.createdAt))+'</p>'
+            +(f.detail?'<p>'+esc(f.detail)+'</p>':"")
+            +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+            +(f.billId?'<a class="btn secondary small" href="#/bill/'+encodeURIComponent(f.billId)+'">'+esc(t("view_bill"))+'</a>':"")
+            +'<button class="btn secondary small" data-resolve="'+esc(f.id)+'">'+esc(t("resolve_flag"))+'</button>'
+            +(f.billId?'<button class="btn secondary small" data-override="'+esc(f.billId)+'">'+esc(t("fraud_override"))+'</button>':"")
+            +'</div></div>';
+        }).join("") : '<p>'+esc(t("no_flags"))+'</p>');
+      body.innerHTML=h;
+      $all("[data-resolve]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          btn.disabled=true;
+          try{ await api("/admin/fraud/"+encodeURIComponent(btn.getAttribute("data-resolve"))+"/resolve", {method:"POST"}); toast(t("flag_resolved")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+      $all("[data-override]", body).forEach(function(btn){
+        btn.onclick=function(){
+          var billId=btn.getAttribute("data-override");
+          openSheet('<h2>'+esc(t("fraud_override"))+'</h2>'
+            +'<label for="fo-band">'+esc(t("fraud_band"))+'</label><select id="fo-band"><option value="low">'+esc(t("band_low"))+'</option><option value="medium">'+esc(t("band_medium"))+'</option><option value="high">'+esc(t("band_high"))+'</option><option value="">'+esc(t("clear_override"))+'</option></select>'
+            +'<label for="fo-reason">'+esc(t("decision_reason"))+'</label><textarea id="fo-reason" maxlength="600"></textarea>'
+            +'<div class="btn-row"><button class="btn secondary" id="fo-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="fo-go">'+esc(t("save"))+'</button></div>');
+          $("#fo-cancel").onclick=closeSheets;
+          $("#fo-go").onclick=async function(){
+            var band=$("#fo-band").value, reason=$("#fo-reason").value.trim();
+            if(band&&reason.length<5){ toast(t("override_reason_needed"), true); return; }
+            try{ await api("/admin/bills/"+encodeURIComponent(billId)+"/fraud-override", {method:"POST", body:{band:band||null, reason:reason}}); closeSheets(); toast(t("override_saved")); load(); }
+            catch(e){ toast(e.message||t("err_generic"), true); }
+          };
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: appeals (items 351, 384) ---------- */
+function renderAdminAppeals(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_appeals"))+'</h1>'+adminNav("appeals")
+    +'<div class="tabs"><button class="tab-btn on" data-s="open">'+esc(t("open"))+'</button><button class="tab-btn" data-s="overturned">'+esc(t("overturned"))+'</button><button class="tab-btn" data-s="upheld">'+esc(t("upheld"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  var status="open";
+  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ status=b.getAttribute("data-s"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/appeals?status="+encodeURIComponent(status));
+      var list=d.appeals||[];
+      if(!list.length){ body.innerHTML=emptyState("⚖️", t("no_appeals"), ""); return; }
+      body.innerHTML=list.map(function(a){
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(a.target_type||"")+' '+esc(a.target_id||"")+'</strong><span class="chip">'+esc(a.status||"")+'</span></div>'
+          +'<p class="small">'+esc(a.user_name||a.user_username||"")+' · '+esc(timeAgo(a.created_at))+'</p>'
+          +(a.reason?'<p>'+esc(a.reason)+'</p>':"")
+          +(a.reviewer_note?'<p class="small"><strong>'+esc(t("reviewer_msg"))+':</strong> '+esc(a.reviewer_note)+'</p>':"")
+          +(a.status==="open"?'<label for="an-'+esc(a.id)+'">'+esc(t("appeal_note"))+'</label><textarea id="an-'+esc(a.id)+'" maxlength="600"></textarea>'
+          +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn small" data-ap="'+esc(a.id)+'" data-dec="overturn">'+esc(t("overturn"))+'</button><button class="btn secondary small" data-ap="'+esc(a.id)+'" data-dec="uphold">'+esc(t("uphold"))+'</button></div>':"")
+          +'</div>';
+      }).join("");
+      $all("[data-ap]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          var id=btn.getAttribute("data-ap"), dec=btn.getAttribute("data-dec");
+          var noteEl=$("#an-"+CSS.escape(id));
+          btn.disabled=true;
+          try{ await api("/admin/appeals/"+encodeURIComponent(id), {method:"POST", body:{decision:dec, note:noteEl?noteEl.value.trim()||undefined:undefined}}); toast(t("appeal_decided")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: brands — connects, partnerships, featured, verify (items 521/531/544/554/506) ---------- */
+function renderAdminBrands(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_brands"))+'</h1>'+adminNav("brands")
+    +'<div class="tabs"><button class="tab-btn on" data-t="connects">'+esc(t("connects"))+'</button><button class="tab-btn" data-t="partnerships">'+esc(t("partnerships"))+'</button><button class="tab-btn" data-t="featured">'+esc(t("featured_brand"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  var tab="connects";
+  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ tab=b.getAttribute("data-t"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    body.innerHTML=skeleton(2);
+    try{
+      if(tab==="connects"){
+        var d=await api("/admin/connects?status=pending");
+        var list=d.connects||[];
+        if(!list.length){ body.innerHTML=emptyState("🤝", t("no_connects"), ""); return; }
+        body.innerHTML=list.map(function(c){
+          return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(c.brand_name||"")+'</strong><span class="chip">'+esc(c.plan||"")+' · '+esc(c.status||"")+'</span></div>'
+            +'<p class="small">'+esc(t("ask"))+': '+esc(c.ask_name||"")+' · '+esc(t("asker"))+': '+esc(c.asker_name||"")+' · '+esc(timeAgo(c.created_at))+'</p>'
+            +(c.contact_name?'<p class="small">'+esc(c.contact_name)+(c.work_email?' · '+esc(c.work_email):"")+(c.phone?' · '+esc(c.phone):"")+'</p>':"")
+            +(c.industry?'<p class="small">'+esc(t("industry"))+': '+esc(c.industry)+'</p>':"")
+            +(c.offer?'<p>'+esc(c.offer)+'</p>':"")
+            +(c.note?'<p class="small">'+esc(c.note)+'</p>':"")
+            +'<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" data-cn="'+esc(c.id)+'" data-dec="approve">'+esc(t("approve_intro"))+'</button><button class="btn secondary small" data-cn="'+esc(c.id)+'" data-dec="decline">'+esc(t("decline"))+'</button></div>'
+            +'<p class="small" style="margin-top:6px">'+esc(t("connect_email_note"))+'</p></div>';
+        }).join("");
+        $all("[data-cn]", body).forEach(function(btn){
+          btn.onclick=async function(){
+            btn.disabled=true;
+            try{ await api("/admin/connects/"+encodeURIComponent(btn.getAttribute("data-cn")), {method:"POST", body:{decision:btn.getAttribute("data-dec")}}); toast(t("connect_decided")); load(); }
+            catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          };
+        });
+        return;
+      }
+      if(tab==="partnerships"){
+        var dp=await api("/admin/partnerships?status=open");
+        var plist=dp.partnerships||[];
+        if(!plist.length){ body.innerHTML=emptyState("🤝", t("no_partnerships"), ""); return; }
+        body.innerHTML=plist.map(function(p){
+          return '<div class="card list-item"><strong>'+esc(p.org_name||"")+'</strong><span class="chip">'+esc(p.type||"")+'</span>'
+            +'<p class="small">'+esc(p.contact_email||"")+' · '+esc(timeAgo(p.created_at))+'</p><p>'+esc(p.proposal||"")+'</p>'
+            +'<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn secondary small" data-ps="'+esc(p.id)+'" data-st="reviewed">'+esc(t("mark_reviewed"))+'</button><button class="btn secondary small" data-ps="'+esc(p.id)+'" data-st="declined">'+esc(t("decline"))+'</button></div></div>';
+        }).join("");
+        $all("[data-ps]", body).forEach(function(btn){
+          btn.onclick=async function(){
+            btn.disabled=true;
+            try{ await api("/admin/partnerships/"+encodeURIComponent(btn.getAttribute("data-ps")), {method:"POST", body:{status:btn.getAttribute("data-st")}}); toast(t("partnership_updated")); load(); }
+            catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          };
+        });
+        return;
+      }
+      // Featured brand of the week (items 544/547).
+      var dd=await api("/brand-directory/directory");
+      var brands=dd.brands||[];
+      body.innerHTML='<div class="card"><h2>'+esc(t("featured_brand"))+'</h2><p class="small">'+esc(t("featured_brand_note"))+'</p>'
+        +'<label for="fb-select">'+esc(t("brand"))+'</label><select id="fb-select"><option value="">'+esc(t("none"))+'</option>'
+        +brands.map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.name)+' ('+esc(b.industry||"")+', '+esc(b.country||"")+')</option>'; }).join("")
+        +'</select><button class="btn" id="fb-save" style="margin-top:10px">'+esc(t("set_featured"))+'</button></div>'
+        +'<p class="small" style="margin-top:10px"><a href="#/help?topic=featured-brand">'+esc(t("how_featured_chosen"))+'</a></p>';
+      $("#fb-save").onclick=async function(){
+        var btn=$("#fb-save"); btn.disabled=true;
+        try{ await api("/admin/featured-brand", {method:"PUT", body:{brandProfileId:$("#fb-select").value||undefined}}); toast(t("featured_set")); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ btn.disabled=false; }
+      };
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: scam notices (item 365) ---------- */
+function renderAdminScamNotices(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_scam"))+'</h1>'+adminNav("scam-notices")
+    +'<div class="card"><h2>'+esc(t("post_scam_notice"))+'</h2>'
+    +'<label for="sn-title">'+esc(t("title"))+'</label><input id="sn-title" maxlength="200">'
+    +'<label for="sn-body">'+esc(t("message"))+'</label><textarea id="sn-body" maxlength="2000" rows="4"></textarea>'
+    +'<button class="btn" id="sn-post" style="margin-top:8px">'+esc(t("post_notice"))+'</button></div>'
+    +'<div id="ad-body" style="margin-top:12px">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  $("#sn-post").onclick=async function(){
+    var btn=$("#sn-post"); btn.disabled=true;
+    try{
+      await api("/admin/scam-notices", {method:"POST", body:{title:$("#sn-title").value.trim(), body:$("#sn-body").value.trim()}});
+      toast(t("notice_posted")); $("#sn-title").value=""; $("#sn-body").value=""; load();
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ btn.disabled=false; }
+  };
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/scam-notices");
+      var list=d.notices||[];
+      body.innerHTML=list.length? list.map(function(n){
+        return '<div class="card list-item"><strong>'+esc(n.title||"")+'</strong><p>'+esc(n.body||"")+'</p><p class="small">'+esc(fmtDate(n.created_at))+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_notices"))+'</p>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: velocity caps (item 333) ---------- */
+function renderAdminVelocity(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_velocity"))+'</h1>'+adminNav("velocity")
+    +'<p class="small">'+esc(t("velocity_note"))+'</p>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/velocity");
+      body.innerHTML='<div class="card">'
+        +'<label for="vc-day">'+esc(t("bill_day_cap"))+'</label><input id="vc-day" type="number" min="1" max="1000" value="'+esc(d.billDayCap||3)+'">'
+        +'<label for="vc-week">'+esc(t("bill_week_cap"))+'</label><input id="vc-week" type="number" min="1" max="1000" value="'+esc(d.billWeekCap||10)+'">'
+        +'<label for="vc-gift">'+esc(t("gift_hour_cap"))+'</label><input id="vc-gift" type="number" min="1" max="1000" value="'+esc(d.giftHourCap||10)+'">'
+        +'<label for="vc-reveal">'+esc(t("reveal_day_cap"))+'</label><input id="vc-reveal" type="number" min="1" max="1000" value="'+esc(d.revealDayCap||20)+'">'
+        +'<button class="btn" id="vc-save" style="margin-top:10px">'+esc(t("save"))+'</button></div>';
+      $("#vc-save").onclick=async function(){
+        var btn=$("#vc-save"); btn.disabled=true;
+        try{
+          await api("/admin/velocity", {method:"PUT", body:{
+            billDayCap:parseInt($("#vc-day").value,10), billWeekCap:parseInt($("#vc-week").value,10),
+            giftHourCap:parseInt($("#vc-gift").value,10), revealDayCap:parseInt($("#vc-reveal").value,10),
+          }});
+          toast(t("caps_saved"));
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ btn.disabled=false; }
+      };
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: monthly trust report (item 399) ---------- */
+function renderAdminTrustReport(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_trust"))+'</h1>'+adminNav("trust-report")
+    +'<label for="tr-month">'+esc(t("month"))+'</label><input id="tr-month" type="month" value="'+new Date().toISOString().slice(0,7)+'">'
+    +'<div id="ad-body" style="margin-top:12px">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  $("#tr-month").addEventListener("change", load);
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var month=$("#tr-month").value||new Date().toISOString().slice(0,7);
+      var d=await api("/admin/trust-report?month="+encodeURIComponent(month));
+      body.innerHTML='<div class="grid2">'
+        +'<div class="card stat"><div class="n">'+esc(d.verificationsCompleted||0)+'</div><div class="l">'+esc(t("verifications_completed"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.verificationsApproved||0)+'</div><div class="l">'+esc(t("verifications_approved"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.reportsFiled||0)+'</div><div class="l">'+esc(t("reports_filed"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.reportsResolved||0)+'</div><div class="l">'+esc(t("reports_resolved"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.billsPaused||0)+'</div><div class="l">'+esc(t("bills_paused"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.fraudFlags||0)+'</div><div class="l">'+esc(t("fraud_flags"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.appealsDecided||0)+'</div><div class="l">'+esc(t("appeals_decided"))+'</div></div>'
+        +'</div>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: drops (items 539–543) ---------- */
+function renderAdminDrops(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_drops"))+'</h1>'+adminNav("drops")
+    +'<div class="card"><h2>'+esc(t("new_drop"))+'</h2>'
+    +'<label for="dr-brand">'+esc(t("brand"))+'</label><input id="dr-brand" maxlength="120">'
+    +'<label for="dr-title">'+esc(t("title"))+'</label><input id="dr-title" maxlength="200">'
+    +'<label for="dr-product">'+esc(t("product"))+'</label><input id="dr-product" maxlength="300">'
+    +'<label for="dr-qty">'+esc(t("quantity"))+'</label><input id="dr-qty" type="number" min="1" value="1">'
+    +'<label for="dr-elig">'+esc(t("eligibility"))+'</label><textarea id="dr-elig" maxlength="1000"></textarea>'
+    +'<button class="btn" id="dr-create" style="margin-top:8px">'+esc(t("create_drop"))+'</button></div>'
+    +'<div id="ad-body" style="margin-top:12px">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  $("#dr-create").onclick=async function(){
+    var btn=$("#dr-create"); btn.disabled=true;
+    try{
+      await api("/admin/drops", {method:"POST", body:{
+        brandName:$("#dr-brand").value.trim(), title:$("#dr-title").value.trim(),
+        product:$("#dr-product").value.trim(), quantity:parseInt($("#dr-qty").value,10)||1,
+        eligibility:$("#dr-elig").value.trim(),
+      }});
+      toast(t("drop_created")); load();
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ btn.disabled=false; }
+  };
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/drops");
+      var list=d.drops||[];
+      body.innerHTML=list.length? list.map(function(dr){
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(dr.title||"")+'</strong><span class="chip">'+esc(dr.status||"")+'</span></div>'
+          +'<p class="small">'+esc(dr.brandName||"")+' · '+esc(dr.product||"")+' × '+esc(dr.quantity||1)+' · '+esc(dr.entries||0)+' '+esc(t("entries"))+(dr.drawnAt?' · '+esc(t("drawn"))+' '+esc(fmtDate(dr.drawnAt)):"")+'</p>'
+          +(dr.eligibility?'<p class="small">'+esc(dr.eligibility)+'</p>':"")
+          +(dr.status==="open"?'<button class="btn small" data-draw="'+esc(dr.id)+'">'+esc(t("draw_winner"))+'</button>':"")
+          +'</div>';
+      }).join("") : '<p>'+esc(t("no_drops"))+'</p>';
+      $all("[data-draw]", body).forEach(function(btn){
+        btn.onclick=function(){
+          confirmDialog(t("draw_winner"), t("draw_confirm"), t("draw_winner"), async function(){
+            try{ var r=await api("/admin/drops/"+encodeURIComponent(btn.getAttribute("data-draw"))+"/draw", {method:"POST"}); toast(t("draw_done")+" ("+(r.entries||0)+" "+t("entries")+")"); load(); }
+            catch(e){ toast(e.message||t("err_generic"), true); }
+          });
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
   }
 }
 
