@@ -166,8 +166,16 @@ loadSeen();
 /* ---------- theme ---------- */
 function applyTheme(){
   var pref="system"; try{ pref=localStorage.getItem("sp_theme")||"system"; }catch(e){}
+  var contrast=false; try{ contrast=localStorage.getItem("sp_contrast")==="1"; }catch(e){}
   var dark = pref==="dark" || (pref==="system" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
-  document.documentElement.setAttribute("data-theme", dark?"dark":"light");
+  // Item 947: high-contrast theme overrides light/dark.
+  document.documentElement.setAttribute("data-theme", contrast?"contrast":(dark?"dark":"light"));
+  // Item 946: text size (normal / large).
+  var size="normal"; try{ size=localStorage.getItem("sp_text_size")||"normal"; }catch(e){}
+  document.documentElement.setAttribute("data-text-size", size);
+  // Item 948: reduced motion (also honours the OS preference in CSS).
+  var rm=false; try{ rm=localStorage.getItem("sp_reduced_motion")==="1"; }catch(e){}
+  document.documentElement.classList.toggle("reduce-motion", rm);
 }
 applyTheme();
 
@@ -190,6 +198,15 @@ async function api(path, opts){
   var res;
   try{ res=await fetch("/api"+path, init); }
   catch(e){ showOfflineBanner(false); var err=new Error(t("err_network")); err.code="NETWORK"; throw err; }
+  // Items 806/810: the server destroyed this session because the browser
+  // fingerprint changed (a different browser took over the cookie). Tell
+  // the user and send them to recovery — do not keep using the dead session.
+  if(res.headers && res.headers.get && res.headers.get("X-Session-Suspicious")){
+    S.user=null; S.csrfToken=null; resetTopbar();
+    toast(t("session_suspicious"), true);
+    go("#/recover");
+    var serr=new Error(t("session_suspicious")); serr.code="SESSION_SUSPICIOUS"; serr.status=401; throw serr;
+  }
   var data=null;
   var text=await res.text();
   if(text){ try{ data=JSON.parse(text); }catch(e){ data={raw:text}; } }
@@ -314,6 +331,88 @@ function demoHtml(){ return '<div class="demo">'+esc(t("demo_mode"))+'</div>'; }
 function neverHoldsHtml(){ return '<p class="small" style="text-align:center">🔒 '+esc(t("never_holds"))+'</p>'; }
 function feeSentenceHtml(){ return '<p class="small" style="text-align:center">'+esc(feeSentence())+'</p>'; }
 
+/* Fraud banner (item 974) + emergency freeze notice (item 883), both
+   driven by /api/config so the owner can switch them on instantly. */
+function fraudBannerHtml(){
+  var fb=S.config&&S.config.fraudBanner;
+  if(!fb) return "";
+  return '<div class="notice warn" role="alert" style="margin-bottom:10px">⚠️ '+esc(fb.message||"")+' <a href="#/help?topic=known-scams">'+esc(t("learn_more"))+'</a></div>';
+}
+function freezeBannerHtml(){
+  if(!(S.config&&S.config.emergencyFreeze)) return "";
+  return '<div class="notice warn" role="alert" style="margin-bottom:10px">⏸️ '+esc(t("freeze_notice"))+'</div>';
+}
+
+/* ---------- admin elevation (item 808) ---------- */
+// Sensitive admin actions (review decisions, fee changes) need a PIN
+// re-auth within the last 10 minutes. On ELEVATION_REQUIRED the owner is
+// asked for the PIN and the action is retried once.
+function promptElevation(){
+  return new Promise(function(resolve){
+    openModal('<h2>'+esc(t("elevate_title"))+'</h2><p>'+esc(t("elevate_body"))+'</p>'
+      +'<label for="el-pin">'+esc(t("pin_label"))+'</label><input id="el-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="current-password">'
+      +'<div class="field-err" id="el-err" role="alert"></div>'
+      +'<div class="btn-row"><button class="btn secondary" id="el-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="el-go">'+esc(t("elevate_confirm"))+'</button></div>');
+    $("#el-cancel").onclick=function(){ closeSheets(); resolve(false); };
+    $("#el-go").onclick=async function(){
+      var pin=$("#el-pin").value;
+      if(!pin){ $("#el-err").textContent=t("pin_required"); return; }
+      var btn=$("#el-go"); btn.disabled=true; btn.textContent=t("loading");
+      try{ await api("/admin/elevate", {method:"POST", body:{pin:pin}}); closeSheets(); resolve(true); }
+      catch(e){ btn.disabled=false; btn.textContent=t("elevate_confirm"); $("#el-err").textContent=e.message||t("wrong_pin"); }
+    };
+  });
+}
+async function withElevation(fn){
+  try{ return await fn(); }
+  catch(e){
+    if(e.code!=="ELEVATION_REQUIRED") throw e;
+    var ok=await promptElevation();
+    if(!ok) throw e;
+    return await fn();
+  }
+}
+
+/* ---------- sensitive-number scan (items 866/867, no OCR) ---------- */
+// Pattern-based scan of text the user types (never OCR on photos — too
+// heavy for this SPA): long digit runs, Nepali/Indian mobile shapes and
+// UPI IDs. Only masked values are ever shown back to the user.
+function findSensitiveNumbersLocal(text){
+  var out=[];
+  var s=String(text||"");
+  var re=/\b\d[\d\s\-]{7,21}\d\b/g, m;
+  while((m=re.exec(s))!==null){
+    var digits=m[0].replace(/[\s\-]/g,"");
+    if(digits.length>=9) out.push({text:m[0], digits:digits});
+  }
+  var upi=s.match(/[a-zA-Z0-9._\-]{2,}@[a-zA-Z]{2,}/g)||[];
+  upi.forEach(function(u){ out.push({text:u, digits:null}); });
+  return out;
+}
+function maskNumberLocal(digits){
+  if(!digits) return "••••";
+  if(digits.length<=4) return "••••";
+  return digits.slice(0,2)+"••••"+digits.slice(-2);
+}
+/* Arithmetic challenge modal (item 847): the server returns a question
+   like "What is 7 + 8?" and a challenge id; the answer is verified
+   server-side with an HMAC, so no answer ever travels in the page. */
+function promptChallenge(question){
+  return new Promise(function(resolve){
+    openModal('<h2>'+esc(t("challenge_title"))+'</h2><p>'+esc(t("challenge_body"))+'</p>'
+      +'<p style="font-size:20px;font-weight:800;text-align:center;margin:14px 0">'+esc(question)+'</p>'
+      +'<label for="ch-ans">'+esc(t("challenge_answer"))+'</label><input id="ch-ans" type="number" inputmode="numeric">'
+      +'<div class="field-err" id="ch-err" role="alert"></div>'
+      +'<div class="btn-row"><button class="btn secondary" id="ch-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="ch-go">'+esc(t("challenge_submit"))+'</button></div>');
+    $("#ch-cancel").onclick=function(){ closeSheets(); resolve(null); };
+    $("#ch-go").onclick=function(){
+      var v=$("#ch-ans").value.trim();
+      if(v===""){ $("#ch-err").textContent=t("err_required"); return; }
+      closeSheets(); resolve(parseInt(v,10));
+    };
+  });
+}
+
 /* badge explanation (delegated) */
 document.addEventListener("click", function(e){
   var b=e.target.closest(".badge-btn");
@@ -423,6 +522,10 @@ var ROUTES = [
   {re:/^#\/notifications$/, fn:renderNotifications, chrome:true},
   {re:/^#\/verify$/, fn:renderVerify, chrome:true},
   {re:/^#\/gift\/([^\/\?]+)$/, fn:renderGift, chrome:true},
+  {re:/^#\/receipt\/([^\/\?]+)$/, fn:renderReceipt, chrome:true},
+  {re:/^#\/dispute\/([^\/\?]+)$/, fn:renderDisputeStatus, chrome:true},
+  {re:/^#\/delete-data$/, fn:renderDeleteData, chrome:true},
+  {re:/^#\/complaint-status$/, fn:renderComplaintStatus, chrome:true},
   {re:/^#\/founder-tip$/, fn:renderFounderTip, chrome:true},
   {re:/^#\/admin$/, fn:renderAdminLogin, chrome:true},
   {re:/^#\/admin\/dashboard$/, fn:renderAdminDashboard, chrome:true},
@@ -430,6 +533,9 @@ var ROUTES = [
   {re:/^#\/admin\/users$/, fn:renderAdminUsers, chrome:true},
   {re:/^#\/admin\/verifications$/, fn:renderAdminVerifications, chrome:true},
   {re:/^#\/admin\/reports$/, fn:renderAdminReports, chrome:true},
+  {re:/^#\/admin\/complaints$/, fn:renderAdminComplaints, chrome:true},
+  {re:/^#\/admin\/abuse$/, fn:renderAdminAbuse, chrome:true},
+  {re:/^#\/admin\/security$/, fn:renderAdminSecurity, chrome:true},
   {re:/^#\/admin\/fees$/, fn:renderAdminFees, chrome:true},
   {re:/^#\/admin\/audit$/, fn:renderAdminAudit, chrome:true}
 ];
@@ -723,12 +829,17 @@ function swipeCardHtml(bill, pos){
     +'<p>'+esc(story.length>180?story.slice(0,180)+"…":story)+' '+(story.length>180?'<a href="#/bill/'+encodeURIComponent(bill.id)+'">…'+esc(t("more"))+'</a>':"")+'</p>'
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">'+badgesHtml(bill)
     +(bill.charity?'<span class="chip">💛 '+esc(t("charity_only"))+'</span>':"")
-    +(bill.payout_hint||bill.payoutHint?'<span class="chip">'+esc(bill.payout_hint||bill.payoutHint)+'</span>':"")+'</div>'
+    +(bill.payout_hint||bill.payoutHint?'<span class="chip">'+esc(bill.payout_hint||bill.payoutHint)+'</span>':"")
+    // Item 926: Demo Mode is labelled on every card, not only in the footer.
+    +'<span class="chip">Demo</span></div>'
     + progressHtml(bill)
-    +'<p class="small muted">'+esc(t("tap_photo"))+'</p></div></article>';
+    +'<p class="small muted">'+esc(t("tap_photo"))+'</p>'
+    // Item 850: report from the card itself (overlap with §1.99).
+    +'<button type="button" class="btn secondary small" data-act="report" style="margin-top:6px">🚩 '+esc(t("report"))+'</button></div></article>';
 }
 function renderSwipe(){
   view('<h1>'+esc(t("feed_title"))+'</h1><p>'+esc(t("feed_sub"))+'</p>'
+    +fraudBannerHtml()+freezeBannerHtml()
     +'<div style="display:flex;gap:8px;margin-bottom:10px"><button class="btn secondary small" id="f-open" style="flex:1">🔍 '+esc(t("filters"))+'</button>'
     +'<button class="btn secondary small" id="f-refresh" style="flex:1">🔁 '+esc(t("refresh"))+'</button></div>'
     +'<div id="deck-wrap">'+skeleton(1)+'</div>'
@@ -798,6 +909,7 @@ function renderSwipe(){
           var id=card.getAttribute("data-id");
           var bill=S.feed.find(function(b){ return String(b.id)===String(id); });
           if(act.getAttribute("data-act")==="photo") go("#/photo/"+encodeURIComponent(id));
+          if(act.getAttribute("data-act")==="report"){ e.stopPropagation(); openReportSheet("bill", id); }
           if(act.getAttribute("data-act")==="profile" && bill){ var u=(bill.user||bill.poster||{}).username||bill.username; if(u) go("#/profile/"+encodeURIComponent(u)); }
         }
       }
@@ -879,6 +991,12 @@ function renderBill(id){
       +'<div class="btn-row"><a class="btn" href="#/gift/'+encodeURIComponent(bill.id)+'">💙 '+esc(t("help_this_bill"))+'</a></div>'
       +((bill.pay_direct||bill.payDirect)?'<div class="btn-row"><button class="btn secondary" id="pay-direct-btn">'+esc(t("pay_direct"))+'</button></div>':"")
       +'<div class="btn-row"><button class="btn secondary small" id="share-btn">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="basket-btn">🧺 '+esc(t("add_basket"))+'</button><button class="btn secondary small" id="report-btn">🚩 '+esc(t("report"))+'</button></div>'
+      // Items 851/910/975/926: report the poster (not just the bill),
+      // how to complain, report-a-scam, and the Demo label.
+      +'<div class="btn-row">'+(!isOwner?'<button class="btn secondary small" id="report-user-btn">🚩 '+esc(t("report_user"))+'</button>':"")
+      +'<a class="btn secondary small" href="#/help?topic=how-to-complain">'+esc(t("how_to_complain_link"))+'</a>'
+      +'<a class="btn secondary small" href="#/help?topic=scam-warning">⚠️ '+esc(t("report_scam_link"))+'</a></div>'
+      +demoHtml()
       +(isOwner?'<div class="btn-row"><a class="btn secondary small" href="#/mybills">'+esc(t("my_bills"))+'</a></div>':"")
       +'</div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("supporters_title"))+' ('+supporters.length+')</h2>'
@@ -892,6 +1010,7 @@ function renderBill(id){
       if(S.basket.indexOf(bill.id)<0){ S.basket.push(bill.id); saveBasket(); toast(t("add_to_basket_done")); } else toast(t("basket"));
     };
     $("#report-btn").onclick=function(){ openReportSheet("bill", bill.id); };
+    var ru=$("#report-user-btn"); if(ru) ru.onclick=function(){ openReportSheet("user", bill.user_id||bill.userId||uname); };
     var pd=$("#pay-direct-btn"); if(pd) pd.onclick=function(){ openPayDirect(bill); };
   }).catch(function(e){
     if(tok!==NAV) return;
@@ -981,6 +1100,11 @@ function renderGift(billId, q){
       var chips=[10000,50000,100000];
       view(stepHead()+'<h1>'+esc(t("gift_amount_title"))+'</h1>'+billCard()+demoHtml()
         +(direct?'<div class="notice info" style="margin-top:10px">'+esc(t("direct_pay_note"))+'</div>':"")
+        // Item 933: never pay outside the contacts shown here.
+        +'<div class="notice warn" style="margin-top:10px">⚠️ '+esc(t("never_pay_outside"))+'</div>'
+        // Item 939: gifts cannot be refunded — the money never passes
+        // through Sahay Pay, so nothing can be reversed.
+        +'<p class="small" style="margin-top:8px">'+esc(t("cannot_refund_note"))+'</p>'
         +'<div class="card" style="margin-top:12px"><label>'+esc(t("choose_amount"))+'</label>'
         +'<div class="grid2">'+chips.map(function(c){ return '<button type="button" class="btn secondary chip-amt" data-v="'+c+'">'+esc(money(c,cur))+'</button>'; }).join("")
         +'<button type="button" class="btn secondary chip-amt" data-v="'+remaining+'">'+esc(t("full_remaining"))+' ('+esc(money(remaining,cur))+')</button></div>'
@@ -1025,6 +1149,16 @@ function renderGift(billId, q){
         +'<div class="kv"><span><strong>'+esc(t("total_send"))+'</strong></span><b>'+esc(money(total,cur))+'</b></div>'
         +'<p class="small" style="margin-top:10px">'+esc(t("fee_demo_note",{fee:money(fee,cur),amount:money(g.amountMinor,cur),name:name}))+'</p></div>'
         +feeSentenceHtml()
+        // Item 928: pay-direct card in the gift flow (overlap §3.229) —
+        // the biller and destination, so the supporter pays the biller,
+        // not a person, when this bill supports it.
+        +(direct?'<div class="card" style="margin-top:12px"><h2>'+esc(t("pay_direct"))+'</h2>'
+          +'<div class="kv"><span>'+esc(t("biller"))+'</span><b>'+esc(bill.biller_name||bill.billerName||bill.company||"—")+'</b></div>'
+          +(bill.biller_destination||bill.billerDestination?'<div class="kv"><span>'+esc(t("biller_destination"))+'</span><b>'+esc(bill.biller_destination||bill.billerDestination)+'</b></div>':"")
+          +'<p class="small">'+esc(t("pay_biller_steps"))+'</p></div>':"")
+        // Item 935: verify-before-you-pay checklist.
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("verify_check_title"))+'</h2><ul>'
+        +'<li>'+esc(t("verify_check_1"))+'</li><li>'+esc(t("verify_check_2"))+'</li><li>'+esc(t("verify_check_3"))+'</li><li>'+esc(t("verify_check_4"))+'</li></ul></div>'
         +'<div class="card" style="margin-top:12px"><label>'+esc(t("tip_label"))+'</label>'
         +'<div class="seg" id="tip-seg"><button type="button" data-tip="none" class="'+(g.tipChoice==="none"?"on":"")+'">'+esc(t("no_tip"))+'</button><button type="button" data-tip="5" class="'+(g.tipChoice==="5"?"on":"")+'">5%</button><button type="button" data-tip="10" class="'+(g.tipChoice==="10"?"on":"")+'">10%</button><button type="button" data-tip="custom" class="'+(g.tipChoice==="custom"?"on":"")+'">'+esc(t("custom"))+'</button></div>'
         +'<div id="tip-custom-wrap" '+(g.tipChoice==="custom"?"":"hidden")+'>'+'<label for="tip-custom">'+esc(t("tip_custom"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="tip-custom" type="number" min="0" step="1" value="'+(g.tipChoice==="custom"&&g.tipMinor?fromMinor(g.tipMinor):"")+'"></div>'
@@ -1057,11 +1191,17 @@ function renderGift(billId, q){
         try{
           var created=await api("/gifts", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor, tipMinor:g.tipMinor||0}});
           g.giftId=created.id||created.giftId||(created.gift&&created.gift.id);
-          var rev=await api("/gifts/"+encodeURIComponent(g.giftId)+"/reveal", {method:"POST"});
+          // Item 847: arithmetic challenge before the payout details are
+          // revealed — a small human check, verified server-side.
+          var ch=await api("/gifts/"+encodeURIComponent(g.giftId)+"/challenge");
+          var ans=await promptChallenge(ch.question||"");
+          if(ans===null){ btn.disabled=false; btn.textContent=t("show_details"); return; }
+          var rev=await api("/gifts/"+encodeURIComponent(g.giftId)+"/reveal", {method:"POST", body:{challengeId:ch.challengeId, answer:ans}});
           // The server returns payoutMethods (array) + an optional payDirect block.
           g.payoutMethods=rev.payoutMethods||(rev.payoutMethod?[rev.payoutMethod]:(rev.payout?[rev.payout]:[]));
           g.payDirectInfo=rev.payDirect||null;
           g.payout=g.payoutMethods[0]||{};
+          g.revealExpired=false;
           if(op!==NAV) return;
           g.step=3; draw();
         }catch(e){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("show_details"); toast(e.message||t("err_generic"), true); }
@@ -1086,23 +1226,30 @@ function renderGift(billId, q){
         var ifsc=p.ifsc||"";
         var link=p.link||p.paymentLink||(m==="payment_link"?account:"");
         var qr=p.qrUrl||(m==="fonepay_qr"?account:"");
+        // Item 829: after the 60-second reveal window the details are
+        // masked again — only a masked hint stays visible.
+        var shownAccount=g.revealExpired&&account? maskNumberLocal(String(account).replace(/\D/g,""))||"••••" : account;
         return '<div class="card" style="margin-top:12px"><p class="small">'+esc(t("details_shown"))+(methods.length>1?" ("+(idx+1)+"/"+methods.length+")":"")+'</p>'
           +'<div class="kv"><span>'+esc(t("payout_hint"))+'</span><b>'+esc(m||"—")+'</b></div>'
-          +(account&&m!=="payment_link"&&m!=="fonepay_qr"?'<div class="kv"><span>'+esc(t("account_no"))+'</span><b class="money">'+esc(account)+'</b></div>':"")
+          +(account&&m!=="payment_link"&&m!=="fonepay_qr"?'<div class="kv"><span>'+esc(t("account_no"))+'</span><b class="money">'+esc(shownAccount)+'</b></div>':"")
           +(holder?'<div class="kv"><span>'+esc(t("holder_name"))+'</span><b>'+esc(holder)+'</b></div>':"")
           +(bank?'<div class="kv"><span>'+esc(t("bank_name"))+'</span><b>'+esc(bank)+'</b></div>':"")
           +(branch?'<div class="kv"><span>'+esc(t("branch"))+'</span><b>'+esc(branch)+'</b></div>':"")
-          +(ifsc?'<div class="kv"><span>'+esc(t("ifsc"))+'</span><b>'+esc(ifsc)+'</b></div>':"")
-          +(link?'<div class="kv"><span>'+esc(t("payment_link"))+'</span><b><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(t("open_cta"))+'</a></b></div>':"")
-          +(qr?'<div style="text-align:center;margin:8px 0"><img src="'+esc(qr)+'" alt="'+esc(t("qr_alt"))+'" style="max-width:220px;border-radius:12px"></div>':"")
+          +(ifsc&&!g.revealExpired?'<div class="kv"><span>'+esc(t("ifsc"))+'</span><b>'+esc(ifsc)+'</b></div>':"")
+          +(link&&!g.revealExpired?'<div class="kv"><span>'+esc(t("payment_link"))+'</span><b><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(t("open_cta"))+'</a></b></div>':"")
+          +(qr&&!g.revealExpired?'<div style="text-align:center;margin:8px 0"><img src="'+esc(qr)+'" alt="'+esc(t("qr_alt"))+'" style="max-width:220px;border-radius:12px"></div>':"")
           +'<div class="kv"><span>'+esc(t("you_send"))+'</span><b>'+esc(money(g.amountMinor,cur))+'</b></div>'
-          +(account?'<div class="btn-row"><button class="btn secondary" data-copy="'+esc(account)+'">'+esc(t("copy_number"))+'</button></div>':"")
+          +(account&&!g.revealExpired?'<div class="btn-row"><button class="btn secondary" data-copy="'+esc(account)+'">'+esc(t("copy_number"))+'</button></div>':"")
           +'<p style="margin-top:12px">'+esc(sendInstructions(m))+'</p>'
           +'<p class="small">⚠️ '+esc(t("never_share_mpin"))+'</p>'
           +'<p class="small muted">'+esc(t("payout_revealed_log"))+'</p></div>';
       }
       var pd=g.payDirectInfo;
       view(stepHead()+'<h1>'+esc(t("gift_send_title"))+'</h1>'+billCard()+demoHtml()
+        // Item 829: 60-second reveal window with a visible countdown.
+        +(g.revealExpired
+          ?'<div class="notice warn" style="margin-top:10px">'+esc(t("reveal_expired"))+' <button class="btn small" id="g-rereveal">'+esc(t("reveal_again"))+'</button></div>'
+          :'<p class="small" style="text-align:center;margin-top:8px" id="reveal-count" role="timer">'+esc(t("reveal_expires_in",{n:60}))+'</p>')
         +(methods.length? methods.map(methodCard).join("") : '<div class="card" style="margin-top:12px"><p>'+esc(t("no_payout_methods"))+'</p></div>')
         +'<p class="small" style="text-align:center;margin-top:10px">'+esc(t("fee_demo_note",{fee:money(feeForSend,cur),amount:money(g.amountMinor,cur),name:name}))+'</p>'
         +(pd?'<div class="card" style="margin-top:12px"><h2>'+esc(t("pay_direct"))+'</h2>'
@@ -1112,15 +1259,53 @@ function renderGift(billId, q){
           +'<p class="small">'+esc(t("pay_biller_steps"))+'</p></div>':"")
         +crossBorderHtml()
         +'<div class="card" style="margin-top:12px"><label for="g-ref">'+esc(t("reference_opt"))+'</label><input id="g-ref" maxlength="80">'
+        // Item 929: which payment method the supporter used.
+        +'<label for="g-method">'+esc(t("payment_method_used"))+'</label><select id="g-method">'
+        +'<option value="">—</option>'
+        +[["esewa","eSewa"],["khalti","Khalti"],["connectips","connectIPS"],["bank","Bank transfer"],["upi","UPI"],["cash","Cash"],["other",t("payment_method_other")]].map(function(o){ return '<option value="'+o[0]+'">'+esc(o[1])+'</option>'; }).join("")
+        +'</select>'
         +'<div class="btn-row"><button class="btn" id="g-sent">'+esc(t("i_sent_it"))+'</button></div>'
-        +'<button class="btn ghost" id="g-cancel">'+esc(t("couldnt_send"))+'</button></div>');
+        +'<button class="btn ghost" id="g-cancel">'+esc(t("couldnt_send"))+'</button>'
+        // Item 937: report a failed payment (goes to the complaint form,
+        // prefilled so the owner can trace it by gift id).
+        +'<p class="small" style="text-align:center;margin-top:8px"><a href="#/help?topic=complaints&subject='+encodeURIComponent(t("failed_payment_subject",{id:g.giftId||""}))+'&body='+encodeURIComponent(t("failed_payment_body",{id:g.giftId||""}))+'">'+esc(t("report_failed_payment"))+'</a></p></div>');
+      // Reveal-window timer (item 829): mask the details again after 60s.
+      if(!g.revealExpired){
+        var op2=NAV;
+        g.revealEndsAt=Date.now()+60000;
+        if(g.revealTimer) clearTimeout(g.revealTimer);
+        if(g.revealCountdown) clearInterval(g.revealCountdown);
+        g.revealTimer=setTimeout(function(){ if(op2!==NAV) return; g.revealExpired=true; drawSend(); }, 60000);
+        g.revealCountdown=setInterval(function(){
+          var el2=$("#reveal-count");
+          if(!el2){ clearInterval(g.revealCountdown); return; }
+          var left=Math.max(0, Math.ceil((g.revealEndsAt-Date.now())/1000));
+          el2.textContent=t("reveal_expires_in",{n:left});
+          if(left<=0) clearInterval(g.revealCountdown);
+        }, 1000);
+      }
+      var rr=$("#g-rereveal");
+      if(rr) rr.onclick=async function(){
+        rr.disabled=true; rr.textContent=t("loading");
+        try{
+          var ch=await api("/gifts/"+encodeURIComponent(g.giftId)+"/challenge");
+          var ans=await promptChallenge(ch.question||"");
+          if(ans===null){ rr.disabled=false; rr.textContent=t("reveal_again"); return; }
+          var rev=await api("/gifts/"+encodeURIComponent(g.giftId)+"/reveal", {method:"POST", body:{challengeId:ch.challengeId, answer:ans}});
+          g.payoutMethods=rev.payoutMethods||(rev.payoutMethod?[rev.payoutMethod]:(rev.payout?[rev.payout]:[]));
+          g.payDirectInfo=rev.payDirect||null;
+          g.payout=g.payoutMethods[0]||{};
+          g.revealExpired=false;
+          drawSend();
+        }catch(e){ rr.disabled=false; rr.textContent=t("reveal_again"); toast(e.message||t("err_generic"), true); }
+      };
       $all("[data-copy]").forEach(function(b){ b.onclick=function(){ copyText(b.getAttribute("data-copy")||"", t("copied")); }; });
       var gc=$("#g-copy"); if(gc) gc.onclick=function(){ copyText(copyVal, t("copied")); };
       $("#g-sent").onclick=async function(){
         var btn=$("#g-sent"); btn.disabled=true; btn.textContent=t("loading");
         var op=NAV;
         try{
-          await api("/gifts/"+encodeURIComponent(g.giftId)+"/reported-sent", {method:"POST", body:{reference:$("#g-ref").value.trim()||undefined}});
+          await api("/gifts/"+encodeURIComponent(g.giftId)+"/reported-sent", {method:"POST", body:{reference:$("#g-ref").value.trim()||undefined, paymentMethod:$("#g-method").value||undefined}});
           if(op!==NAV) return;
           g.step=4; draw();
         }catch(e){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("i_sent_it"); toast(e.message||t("err_generic"), true); }
@@ -1132,7 +1317,16 @@ function renderGift(billId, q){
     function drawConfirmed(){
       view(stepHead()+'<div class="center-page"><div class="slide-ic">💙</div><h1>'+esc(t("thanks_helping",{name:name}))+'</h1>'
         +'<p>'+esc(t("recipient_confirm_pending"))+'</p><p class="small">'+esc(t("waiting_confirm"))+'</p>'
-        +'<div style="width:100%;max-width:360px;display:grid;gap:10px"><a class="btn" href="#/founder-tip?gift='+encodeURIComponent(g.giftId||"")+'&amount='+g.amountMinor+'&currency='+cur+'">'+esc(t("founder_tip_title"))+'</a>'
+        // Item 930: Sahay Pay cannot verify the payment itself.
+        +'<div class="notice info" style="width:100%;max-width:420px">'+esc(t("payment_not_verified"))+'</div>'
+        // Item 940: what happens next.
+        +'<div class="card" style="width:100%;max-width:420px;text-align:left;margin-top:12px"><h2>'+esc(t("what_next_title"))+'</h2><ul>'
+        +'<li>'+esc(t("what_next_1"))+'</li><li>'+esc(t("what_next_2"))+'</li><li>'+esc(t("what_next_3"))+'</li></ul></div>'
+        +'<div style="width:100%;max-width:360px;display:grid;gap:10px;margin-top:12px">'
+        // Item 936: receipt page (overlap §3.261).
+        +'<a class="btn" href="#/receipt/'+encodeURIComponent(g.giftId||"")+'">🧾 '+esc(t("view_receipt"))+'</a>'
+        +'<a class="btn secondary" href="#/dispute/'+encodeURIComponent(g.giftId||"")+'">'+esc(t("dispute_status_link"))+'</a>'
+        +'<a class="btn secondary" href="#/founder-tip?gift='+encodeURIComponent(g.giftId||"")+'&amount='+g.amountMinor+'&currency='+cur+'">'+esc(t("founder_tip_title"))+'</a>'
         +'<a class="btn secondary" href="#/swipe">'+esc(t("continue_helping"))+'</a>'
         +'<a class="btn secondary" href="#/mybills">'+esc(t("my_bills"))+'</a></div></div>');
     }
@@ -1148,7 +1342,7 @@ function blankPost(){
     story:"", details:"", charity:false, charityDesc:"",
     photoFile:null, photoDataUrl:null, photoUrl:null, redactRects:[], redactConfirmed:false, redactedDataUrl:null,
     privateProofFile:null, privateProofUrl:null, supportFile:null, supportDataUrl:null, supportUrl:null,
-    anonymous:false, payouts:[], payDirect:false, billerName:"", billerRef:"", billerDest:"",
+    anonymous:false, payouts:[], payDirect:false, billerName:"", billerRef:"", billerDest:"", payoutConsent:false,
     verif:{bill:false,id:false,name:false,biller:false}, idFile:null, idUrl:null, billId:null, requestCode:null};
 }
 function loadDraft(){
@@ -1211,11 +1405,25 @@ function renderPost(){
       +'<label for="f-city">'+esc(t("city"))+'</label><input id="f-city" maxlength="80" value="'+esc(p.city)+'" autocomplete="address-level2">'
       +'<label for="f-story">'+esc(t("short_story"))+' '+reqStar()+' <span class="small muted">(<span id="story-n">'+p.story.length+'</span>/280)</span></label><textarea id="f-story" maxlength="280" placeholder="'+esc(t("story_hint"))+'" aria-required="true" aria-describedby="e-story">'+esc(p.story)+'</textarea><div class="field-err" id="e-story" role="alert"></div>'
       +'<label for="f-details">'+esc(t("long_story"))+'</label><textarea id="f-details" maxlength="1500">'+esc(p.details)+'</textarea>'
+      // Items 866/867 (no-OCR form): warn when the story or details look
+      // like they contain an account/card number. The warning is a
+      // reminder to remove it — the post can still go ahead.
+      +'<div id="sensitive-warn" class="notice warn" role="alert" hidden style="margin-top:10px"></div>'
       +'<label class="check-row"><input type="checkbox" id="f-charity" '+(p.charity?"checked":"")+'> '+esc(t("charity_toggle"))+'</label>'
       +'<div id="charity-wrap" '+(p.charity?"":"hidden")+'><label>'+esc(t("charity_desc"))+'</label><input id="f-charity-desc" maxlength="200" value="'+esc(p.charityDesc)+'"></div>'
       +'</div>'+nav(false, t("next"), null, true));
     $all("#f-cats .chip").forEach(function(b){ b.onclick=function(){ p.category=b.getAttribute("data-cat"); $all("#f-cats .chip").forEach(function(x){ x.classList.toggle("on", x===b); x.setAttribute("aria-pressed", x===b?"true":"false"); }); }; });
-    $("#f-story").addEventListener("input", function(){ $("#story-n").textContent=String($("#f-story").value.length); });
+    $("#f-story").addEventListener("input", function(){ $("#story-n").textContent=String($("#f-story").value.length); checkSensitive(); });
+    $("#f-details").addEventListener("input", checkSensitive);
+    function checkSensitive(){
+      var box=$("#sensitive-warn"); if(!box) return;
+      var found=findSensitiveNumbersLocal(($("#f-story").value||"")+" "+($("#f-details").value||""));
+      if(found.length){
+        box.hidden=false;
+        box.innerHTML="⚠️ "+esc(t("sensitive_number_warn"))+" "+found.slice(0,3).map(function(f){ return "<strong>"+esc(maskNumberLocal(f.digits))+"</strong>"; }).join(", ");
+      } else box.hidden=true;
+    }
+    checkSensitive();
     $("#f-charity").addEventListener("change", function(){ $("#charity-wrap").hidden=!$("#f-charity").checked; });
     bindNav(null, function(){
       p.title=$("#f-title").value.trim(); p.company=$("#f-company").value.trim();
@@ -1273,6 +1481,9 @@ function renderPost(){
     function showRedactor(){
       var area=$("#redact-area"); if(!area) return;
       area.innerHTML='<h3 style="margin-top:14px">'+esc(t("redact_title"))+'</h3><p class="small">'+esc(t("redact_body"))+'</p><p class="small">'+esc(t("drag_redact"))+'</p>'
+        // Item 868: detection-driven reminder — check the photo for
+        // account numbers, customer numbers and barcodes before confirming.
+        +'<div class="notice warn" style="margin-bottom:10px">⚠️ '+esc(t("photo_number_reminder"))+'</div>'
         +'<div class="redact-wrap"><canvas id="redact-canvas"></canvas></div>'
         +'<div class="btn-row"><button class="btn secondary small" id="rd-clear">'+esc(t("clear_redactions"))+'</button><button class="btn small" id="rd-confirm">'+esc(t("confirm_public"))+'</button></div>'
         +'<p class="small" id="rd-state">'+(p.redactConfirmed?"✓ "+esc(t("redact_done")):"")+'</p>';
@@ -1367,6 +1578,10 @@ function renderPost(){
       +'<label for="f-bdest">'+esc(t("biller_dest"))+'</label><input id="f-bdest" value="'+esc(p.billerDest)+'" placeholder="https://…">'
       +'<p class="small">'+esc(t("direct_pay_note"))+'</p></div>'
       +'<label class="check-row"><input type="checkbox" id="f-belongs"> '+esc(t("payout_belongs"))+'</label>'
+      // Item 920: explicit consent for how payout details are stored
+      // (encrypted) and shown (masked hint, full details only to a
+      // helper at the Send step). The server requires this flag.
+      +'<label class="check-row"><input type="checkbox" id="f-consent" '+(p.payoutConsent?"checked":"")+'> '+esc(t("payout_consent_label"))+'</label>'
       +'<div class="field-err" id="e-payout" role="alert"></div></div>'
       +nav(true, t("next"), null, true));
     function collect(){
@@ -1404,6 +1619,8 @@ function renderPost(){
       collect();
       $("#e-payout").textContent="";
       if(!$("#f-belongs").checked){ $("#e-payout").textContent=t("payout_belongs"); return; }
+      if(!$("#f-consent").checked){ $("#e-payout").textContent=t("payout_consent_label"); return; }
+      p.payoutConsent=true;
       var ok=true;
       $all("[data-payout]").forEach(function(card){
         var i=parseInt(card.getAttribute("data-payout"),10);
@@ -1454,6 +1671,8 @@ function renderPost(){
       +'<div class="kv"><span>'+esc(t("pay_direct"))+'</span><b>'+(p.payDirect?t("yes")+" — "+esc(p.billerName):t("no"))+'</b></div>'
       +'<div class="kv"><span>'+esc(t("verify_centre"))+'</span><b>'+(["bill","id","name","biller"].filter(function(k){ return p.verif[k]; }).map(function(k){ return {bill:t("verify_bill"),id:t("verify_id"),name:t("verify_name"),biller:t("verify_biller")}[k]; }).join(", ")||"—")+'</b></div></div>'
       +'<div class="notice info" style="margin-top:12px">'+esc(t("owner_approval_note"))+'</div>'
+      // Item 846: honeypot — hidden "website" field no human ever sees.
+      +'<input id="p-website" name="website" autocomplete="off" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0">'
       +'<div class="field-err" id="e-submit" role="alert"></div>'
       +nav(true, t("submit_approval"), null, true));
     bindNav(function(){ p.step=5; draw(); }, async function(){
@@ -1479,10 +1698,20 @@ function renderPost(){
           photoUrl:p.photoUrl||undefined, privateProofUrl:p.privateProofUrl||undefined, supportPhotoUrl:p.supportUrl||undefined,
           payDirect:!!p.payDirect, billerName:p.billerName||undefined, billerRef:p.billerRef||undefined, billerDestination:p.billerDest||undefined,
           payoutMethods:p.payouts.map(function(po){ return {method:po.method, holderName:po.holder||undefined, account:po.account||undefined, bankName:po.bank||undefined, ifsc:po.ifsc||undefined, branch:po.branch||undefined, qrUrl:po.qrUrl||undefined}; }),
-          submit:true
+          submit:true, payoutConsent:!!p.payoutConsent,
+          website:($("#p-website")?$("#p-website").value:"")||undefined
         };
         var res=await api("/bills", {method:"POST", body:payload});
         var bill=res.bill||res;
+        // Server-side flags (items 853/866): show the poster the warnings
+        // the server attached — sensitive numbers and scam phrases.
+        var warnHtml="";
+        if(res.sensitiveWarning&&res.sensitiveWarning.length){
+          warnHtml+='<div class="notice warn" style="width:100%;max-width:420px;margin-top:10px">⚠️ '+esc(t("sensitive_number_warn"))+' '+res.sensitiveWarning.map(function(w){ return "<strong>"+esc(w.masked||"")+"</strong>"; }).join(", ")+'</div>';
+        }
+        if(res.scamWarning&&res.scamWarning.length){
+          warnHtml+='<div class="notice warn" style="width:100%;max-width:420px;margin-top:10px">⚠️ '+esc(t("scam_phrase_warn"))+'</div>';
+        }
         p.billId=bill.id; p.requestCode=bill.request_code||bill.requestCode||bill.id;
         // Verification requests from step 5 go to the verification centre
         // (best-effort: a failed request never blocks the submitted post).
@@ -1498,6 +1727,7 @@ function renderPost(){
         if(op!==NAV) return; // submitted, but the user left; don't clobber the new view
         view('<div class="center-page"><div class="slide-ic">✅</div><h1>'+esc(t("post_submitted"))+'</h1>'
           +'<div class="card" style="width:100%;max-width:420px"><div class="kv"><span>'+esc(t("request_code"))+'</span><b>'+esc(p.requestCode)+'</b></div><div class="kv"><span>'+esc(t("bill_status_label"))+'</span><b>'+esc(t("pending_review"))+'</b></div></div>'
+          +warnHtml
           +'<p>'+esc(t("what_next"))+'</p><a class="btn" style="max-width:360px" href="#/mybills">'+esc(t("see_mybills"))+'</a></div>');
       }catch(e){
         if(op!==NAV) return;
@@ -1510,7 +1740,7 @@ function renderPost(){
 
 /* ---------- leaders ---------- */
 function renderLeaders(){
-  view('<h1>'+esc(t("leaders_title"))+'</h1><p class="small">'+esc(t("leaders_scope_note"))+'</p>'
+  view('<h1>'+esc(t("leaders_title"))+'</h1><p class="small">'+esc(t("leaders_scope_note"))+'</p>'+demoHtml()
     +'<div class="tabs" id="ld-tabs">'
     +[["top_supporters",t("top_supporters")],["most_received",t("most_received")],["top_bills",t("top_bills")],["fully_paid",t("fully_paid")],["brands",t("leaders_brands")]].map(function(x){ return '<button class="tab-btn'+(S.leadersTab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")
     +'</div>'
@@ -1947,6 +2177,8 @@ function renderProfile(username){
       +'<div class="grid2" style="margin-top:12px"><div class="card stat"><div class="n">'+esc(u.live_asks!=null?u.live_asks:bills.length)+'</div><div class="l">'+esc(t("live_asks"))+'</div></div>'
       +'<div class="card stat"><div class="n">'+esc(u.completed_asks||0)+'</div><div class="l">'+esc(t("completed_asks"))+'</div></div></div>'
       +(u.show_totals===false?'<p class="small">'+esc(t("totals_private"))+'</p>':'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(money(u.total_given_minor||0, curOf(u.country)))+'</div><div class="l">'+esc(t("given"))+'</div></div><div class="card stat"><div class="n">'+esc(money(u.total_received_minor||0, curOf(u.country)))+'</div><div class="l">'+esc(t("received_total"))+'</div></div></div>')
+      // Item 926: totals are Demo Mode figures.
+      +'<p class="small muted" style="margin-top:8px">'+esc(t("demo_totals_note"))+'</p>'
       +'<div class="btn-row"><button class="btn secondary small" id="pf-share">🔗 '+esc(t("share_profile"))+'</button><button class="btn secondary small" id="pf-report">🚩 '+esc(t("report_user"))+'</button><button class="btn secondary small" id="pf-block">'+esc(blocked?t("unblock"):t("block_user"))+'</button></div></div>'
       +'<h2>'+esc(t("live_asks"))+'</h2><div id="pf-bills">'
       +(bills.length? bills.map(function(b){ return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amount_minor||b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.category||"")+'</div></div><span>›</span></a>'; }).join("") : '<p>'+esc(t("empty_mybills"))+'</p>')
@@ -1972,7 +2204,14 @@ function renderSettings(){
   var showTotals=prefs.showTotals!==false && u.show_totals!==false;
   var anonDefault=prefs.anonDefault===true || u.anon_default===true;
   var themePref="system"; try{ themePref=localStorage.getItem("sp_theme")||"system"; }catch(e){}
-  view('<h1>'+esc(t("settings"))+'</h1>'
+  var textSize="normal"; try{ textSize=localStorage.getItem("sp_text_size")||"normal"; }catch(e){}
+  var contrast=false; try{ contrast=localStorage.getItem("sp_contrast")==="1"; }catch(e){}
+  var reducedMotion=false; try{ reducedMotion=localStorage.getItem("sp_reduced_motion")==="1"; }catch(e){}
+  // Item 817: new-device banner — the account is less than a day old.
+  var accountAgeMs=u.createdAt? (Date.now()-new Date(u.createdAt).getTime()) : Infinity;
+  var newDeviceBanner=accountAgeMs<24*3600*1000
+    ? '<div class="notice info" style="margin-bottom:12px">👋 '+esc(t("new_device_banner"))+'</div>' : "";
+  view('<h1>'+esc(t("settings"))+'</h1>'+newDeviceBanner
     +'<div class="card"><h2>'+esc(t("edit_profile"))+'</h2>'
     +'<label for="st-name">'+esc(t("display_name"))+'</label><input id="st-name" maxlength="60" value="'+esc(u.display_name||u.displayName||"")+'" autocomplete="name">'
     +'<label for="st-username">'+esc(t("username"))+'</label><input id="st-username" maxlength="30" value="'+esc(u.username||"")+'" autocomplete="username"><p class="small">'+esc(t("username_rules"))+'</p>'
@@ -1984,6 +2223,11 @@ function renderSettings(){
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("prefs_section"))+'</h2>'
     +'<label>'+esc(t("language"))+'</label><div class="seg" id="st-lang"><button type="button" data-l="en" class="'+(I.getLang()==="en"?"on":"")+'">English</button><button type="button" data-l="ne" class="'+(I.getLang()==="ne"?"on":"")+'">नेपाली</button><button type="button" data-l="hi" class="'+(I.getLang()==="hi"?"on":"")+'">हिन्दी</button></div>'
     +'<label>'+esc(t("theme"))+'</label><div class="seg" id="st-theme"><button type="button" data-v="system" class="'+(themePref==="system"?"on":"")+'">'+esc(t("theme_system"))+'</button><button type="button" data-v="light" class="'+(themePref==="light"?"on":"")+'">'+esc(t("theme_light"))+'</button><button type="button" data-v="dark" class="'+(themePref==="dark"?"on":"")+'">'+esc(t("theme_dark"))+'</button></div>'
+    // Item 946: text size. Item 947: high-contrast theme. Item 948:
+    // reduced motion. All stored locally and applied by applyTheme().
+    +'<label>'+esc(t("text_size"))+'</label><div class="seg" id="st-textsize"><button type="button" data-v="normal" class="'+(textSize==="normal"?"on":"")+'">'+esc(t("text_size_normal"))+'</button><button type="button" data-v="large" class="'+(textSize==="large"?"on":"")+'">'+esc(t("text_size_large"))+'</button></div>'
+    +'<label class="check-row"><input type="checkbox" id="st-contrast" '+(contrast?"checked":"")+'> '+esc(t("contrast_label"))+'</label>'
+    +'<label class="check-row"><input type="checkbox" id="st-motion" '+(reducedMotion?"checked":"")+'> '+esc(t("reduced_motion_label"))+'</label>'
     +'<label>'+esc(t("notifications_pref"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="st-n1" '+(npPosts?"checked":"")+'> '+esc(t("notif_post_approved"))+' / '+esc(t("notif_gift_confirmed"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="st-n2" '+(npGifts?"checked":"")+'> '+esc(t("notif_gift_sent"))+'</label>'
@@ -1997,9 +2241,23 @@ function renderSettings(){
     +'<button class="btn secondary" id="st-save-priv" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("support_section"))+'</h2>'
     +'<div style="display:grid;gap:8px"><a class="btn secondary" href="#/help">'+esc(t("help_centre"))+'</a><a class="btn secondary" href="#/verify">'+esc(t("verify_centre"))+'</a><a class="btn secondary" href="#/admin">'+esc(t("open_console"))+'</a></div>'
+    // Item 984: installed-app indicator.
+    +'<p class="small" style="margin-top:10px">'+esc((window.matchMedia&&window.matchMedia("(display-mode: standalone)").matches)||window.navigator.standalone ? t("app_installed") : t("app_not_installed"))+'</p>'
+    +(deferredInstallPrompt?'<button class="btn secondary small" id="st-install" style="margin-top:8px">'+esc(t("install_app"))+'</button>':"")
     +'<p class="small" style="margin-top:10px">'+esc(t("sessions_note"))+'</p></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("security_section"))+'</h2>'
+    // Item 825: security activity timeline (own audit events).
+    +'<h3>'+esc(t("security_activity_title"))+'</h3><div id="st-activity"><p class="small">'+esc(t("loading"))+'</p></div>'
+    // Item 823: regenerate the recovery code (old one stops working).
+    +'<div style="display:grid;gap:8px;margin-top:12px"><button class="btn secondary" id="st-regen">'+esc(t("regen_recovery"))+'</button>'
+    // Item 821: log out of every other device.
+    +'<button class="btn secondary" id="st-logout-others">'+esc(t("logout_others"))+'</button></div></div>'
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("account_section"))+'</h3>'
-    +'<div style="display:grid;gap:8px"><button class="btn secondary" id="st-export">'+esc(t("download_data"))+'</button><button class="btn secondary" id="st-logout">'+esc(t("logout"))+'</button><button class="btn secondary" id="st-logout-all">'+esc(t("logout_all"))+'</button><button class="btn danger" id="st-delete">'+esc(t("delete_account"))+'</button></div>'
+    // Item 921: consent record — which Terms/Privacy versions were
+    // accepted, and when.
+    +'<div class="kv"><span>'+esc(t("consent_terms"))+'</span><b>'+esc(u.termsAcceptedVersion?("v"+u.termsAcceptedVersion+" · "+fmtDate(u.termsAcceptedAt)):"—")+'</b></div>'
+    +'<div class="kv"><span>'+esc(t("consent_privacy"))+'</span><b>'+esc(u.privacyAcceptedVersion?("v"+u.privacyAcceptedVersion+" · "+fmtDate(u.privacyAcceptedAt)):"—")+'</b></div>'
+    +'<div style="display:grid;gap:8px"><button class="btn secondary" id="st-export">'+esc(t("download_data"))+'</button><button class="btn secondary" id="st-logout">'+esc(t("logout"))+'</button><button class="btn secondary" id="st-logout-all">'+esc(t("logout_all"))+'</button><a class="btn secondary" href="#/delete-data">'+esc(t("delete_data_link"))+'</a><button class="btn danger" id="st-delete">'+esc(t("delete_account"))+'</button></div>'
     +'<h3 style="margin-top:14px">'+esc(t("sessions_title"))+'</h3><div id="st-sessions"><p class="small">'+esc(t("loading"))+'</p></div>'
 
     +'<p class="small legal" style="margin-top:12px">'+esc(t("version_note"))+'</p></div>');
@@ -2018,7 +2276,8 @@ function renderSettings(){
     }catch(e){ toast(e.message||t("err_generic"), true); }
     finally{ btn.disabled=false; btn.textContent=t("download_data"); }
   };
-  // Active sessions list with per-session revoke (item 112).
+  // Active sessions list with per-session revoke (item 112) and device
+  // labels + trusted notes (items 801/805/816).
   (async function loadSessions(){
     var box=$("#st-sessions"); if(!box) return;
     try{
@@ -2026,9 +2285,16 @@ function renderSettings(){
       var list=pickList(d, ["sessions"]);
       if(!list.length){ box.innerHTML='<p class="small">'+esc(t("sessions_none"))+'</p>'; return; }
       box.innerHTML=list.map(function(s){
-        var dev=(s.userAgent||"").slice(0, 80)||t("session_device_unknown");
-        return '<div class="kv"><span><strong>'+(s.current?esc(t("session_current")):esc(dev))+'</strong><br><span class="small">'+esc(t("session_last_seen"))+' '+esc(s.lastSeenAt?timeAgo(s.lastSeenAt):"—")+'</span></span>'
-          +(s.current?"":'<button class="btn secondary small" data-revoke="'+esc(s.id)+'">'+esc(t("session_revoke"))+'</button>')+'</div>';
+        var dev=s.deviceLabel||(s.userAgent||"").slice(0, 80)||t("session_device_unknown");
+        var cls=s.deviceClass||"";
+        var browser=s.browser||"";
+        return '<div class="kv"><span><strong>'+(s.current?esc(t("session_current"))+" — ":"")+esc(dev)+'</strong>'
+          +'<br><span class="small">'+esc([cls, browser].filter(Boolean).join(" · "))+'</span>'
+          +(s.trustedNote?'<br><span class="small">📝 '+esc(s.trustedNote)+'</span>':"")
+          +'<br><span class="small">'+esc(t("session_last_seen"))+' '+esc(s.lastSeenAt?timeAgo(s.lastSeenAt):"—")+'</span></span>'
+          +'<span style="display:grid;gap:6px"><input data-note-for="'+esc(s.id)+'" maxlength="40" placeholder="'+esc(t("session_note_ph"))+'" value="'+esc(s.trustedNote||"")+'" style="max-width:150px">'
+          +'<button class="btn secondary small" data-note-save="'+esc(s.id)+'">'+esc(t("session_note_save"))+'</button>'
+          +(s.current?"":'<button class="btn secondary small" data-revoke="'+esc(s.id)+'">'+esc(t("session_revoke"))+'</button>')+'</span></div>';
       }).join("");
       $all("[data-revoke]", box).forEach(function(b){
         b.onclick=async function(){
@@ -2036,8 +2302,55 @@ function renderSettings(){
           catch(e){ toast(e.message||t("err_generic"), true); }
         };
       });
+      $all("[data-note-save]", box).forEach(function(b){
+        b.onclick=async function(){
+          var id=b.getAttribute("data-note-save");
+          var inp=box.querySelector('[data-note-for="'+CSS.escape(id)+'"]');
+          try{ await api("/auth/sessions/"+encodeURIComponent(id)+"/note", {method:"PATCH", body:{note:inp?inp.value.trim():""}}); toast(t("session_note_saved")); loadSessions(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        };
+      });
     }catch(e){ box.innerHTML='<p class="small">'+esc(t("err_generic"))+'</p>'; }
   })();
+  // Security activity timeline (item 825): the user's own audit events.
+  (async function loadActivity(){
+    var box=$("#st-activity"); if(!box) return;
+    try{
+      var d=await api("/auth/security-activity");
+      var list=pickList(d, ["events"]);
+      if(!list.length){ box.innerHTML='<p class="small">'+esc(t("no_security_activity"))+'</p>'; return; }
+      box.innerHTML=list.slice(0,15).map(function(e){
+        var label=t("activity_"+(e.action||""));
+        if(label==="activity_"+(e.action||"")) label=String(e.action||"").replace(/_/g," ");
+        return '<div class="kv"><span>'+esc(label)+'</span><b class="small">'+esc(e.createdAt?timeAgo(e.createdAt):"")+'</b></div>';
+      }).join("");
+    }catch(e){ box.innerHTML='<p class="small">'+esc(t("err_generic"))+'</p>'; }
+  })();
+  // Recovery-code regeneration (item 823): the new code is shown once.
+  $("#st-regen").onclick=function(){
+    confirmDialog(t("regen_recovery"), t("regen_recovery_warn"), t("regen_recovery"), async function(){
+      try{
+        var d=await api("/auth/recovery-code/regenerate", {method:"POST"});
+        var code=d.recoveryCode||"";
+        openModal('<h2>'+esc(t("new_recovery_code"))+'</h2><p>'+esc(t("recovery_code_once"))+'</p>'
+          +'<p style="font-size:22px;font-weight:800;text-align:center;letter-spacing:2px;margin:16px 0">'+esc(code)+'</p>'
+          +'<div class="btn-row"><button class="btn secondary" id="rg-copy">'+esc(t("copy_number"))+'</button><button class="btn" id="rg-done">'+esc(t("got_it"))+'</button></div>');
+        $("#rg-copy").onclick=function(){ copyText(code, t("copied")); };
+        $("#rg-done").onclick=closeSheets;
+      }catch(e){ toast(e.message||t("err_generic"), true); }
+    }, true);
+  };
+  // Log out of every other device (item 821).
+  $("#st-logout-others").onclick=function(){
+    confirmDialog(t("logout_others"), t("logout_others_confirm"), t("logout_others"), async function(){
+      try{ var d=await api("/auth/logout-others", {method:"POST"}); toast(t("logout_others_done",{n:d.revoked||0})); }
+      catch(e){ toast(e.message||t("err_generic"), true); }
+    });
+  };
+  $all("#st-textsize button").forEach(function(b){ b.onclick=function(){ try{ localStorage.setItem("sp_text_size", b.getAttribute("data-v")); }catch(e){} applyTheme(); $all("#st-textsize button").forEach(function(x){ x.classList.toggle("on", x===b); }); }; });
+  var inst=$("#st-install"); if(inst) inst.onclick=function(){ if(deferredInstallPrompt){ deferredInstallPrompt.prompt(); deferredInstallPrompt=null; } };
+  $("#st-contrast").addEventListener("change", function(){ try{ localStorage.setItem("sp_contrast", $("#st-contrast").checked?"1":"0"); }catch(e){} applyTheme(); });
+  $("#st-motion").addEventListener("change", function(){ try{ localStorage.setItem("sp_reduced_motion", $("#st-motion").checked?"1":"0"); }catch(e){} applyTheme(); });
   var newCountry=countryCode(u.country);
   $all("#st-country button").forEach(function(b){ b.onclick=function(){ newCountry=b.getAttribute("data-c"); $all("#st-country button").forEach(function(x){ x.classList.toggle("on", x===b); }); }; });
   $all("#st-lang button").forEach(function(b){ b.onclick=function(){ I.setLang(b.getAttribute("data-l")); $all("#st-lang button").forEach(function(x){ x.classList.toggle("on", x===b); }); applyI18nStatic(); toast(t("language_changed")); route(); }; });
@@ -2322,9 +2635,113 @@ function renderFounderTip(q){
   };
 }
 
+/* ---------- receipt / dispute / delete-data / complaint status ---------- */
+// Item 936: receipt page for a gift (overlap §3.261). Party-only — the
+// server returns 403 for anyone else.
+function renderReceipt(giftId){
+  var tok=view(skeleton(2));
+  api("/gifts/"+encodeURIComponent(giftId)).then(function(d){
+    if(tok!==NAV) return;
+    var g=d.gift||d;
+    var cur=g.currency||"NPR";
+    view('<a href="#/mybills" class="small">← '+esc(t("back"))+'</a><h1 style="margin-top:8px">🧾 '+esc(t("receipt_title"))+'</h1>'+demoHtml()
+      +'<div class="card" style="margin-top:12px">'
+      +'<div class="kv"><span>'+esc(t("receipt_gift_id"))+'</span><b>'+esc(g.id||giftId)+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("receipt_bill"))+'</span><b>'+esc((g.bill&&g.bill.title)||g.billId||"—")+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("receipt_amount"))+'</span><b>'+esc(money(g.amountMinor||g.amount_minor||0,cur))+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("fee_label"))+'</span><b>'+esc(money(g.feeMinor||g.fee_minor||0,cur))+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("receipt_status"))+'</span><b>'+esc(g.status||"")+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("payment_method_used"))+'</span><b>'+esc(g.paymentMethod||g.payment_method||"—")+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("reference_label"))+'</span><b>'+esc(g.reference||"—")+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("receipt_date"))+'</span><b>'+esc(g.createdAt?fmtDate(g.createdAt):(g.created_at?fmtDate(g.created_at):"—"))+'</b></div>'
+      +'</div>'
+      +'<p class="small" style="margin-top:10px">'+esc(t("receipt_note"))+'</p>'
+      +'<div class="btn-row"><button class="btn secondary" id="rc-copy">'+esc(t("copy_receipt"))+'</button><a class="btn secondary" href="#/dispute/'+encodeURIComponent(giftId)+'">'+esc(t("dispute_status_link"))+'</a></div>');
+    $("#rc-copy").onclick=function(){
+      copyText(t("receipt_title")+" — Sahay Pay\n"+t("receipt_gift_id")+": "+(g.id||giftId)+"\n"+t("receipt_amount")+": "+money(g.amountMinor||g.amount_minor||0,cur)+"\n"+t("receipt_status")+": "+(g.status||""), t("copied"));
+    };
+  }).catch(function(e){ if(tok!==NAV) return; view(emptyState("🧾", t("receipt_not_found"), e.message||"", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>', "h1")); });
+}
+// Item 938 (standalone part): dispute status + audit timeline. The admin
+// review queue for disputes is §8 item 754 (out of scope) — the page
+// honestly shows "waiting for owner review" when that flag is set.
+function renderDisputeStatus(giftId){
+  var tok=view(skeleton(2));
+  api("/gifts/"+encodeURIComponent(giftId)+"/dispute-status").then(function(d){
+    if(tok!==NAV) return;
+    var events=pickList(d,["events"]);
+    view('<a href="#/receipt/'+encodeURIComponent(giftId)+'" class="small">← '+esc(t("receipt_title"))+'</a><h1 style="margin-top:8px">'+esc(t("dispute_status_title"))+'</h1>'
+      +'<div class="card" style="margin-top:12px"><div class="kv"><span>'+esc(t("receipt_status"))+'</span><b>'+esc(d.status||"")+'</b></div>'
+      +(d.ownerReviewPending?'<p class="small">'+esc(t("dispute_owner_review"))+'</p>':"")
+      +'<p class="small">'+esc(t("dispute_help"))+'</p></div>'
+      +'<div class="card" style="margin-top:12px"><h2>'+esc(t("dispute_timeline"))+'</h2>'
+      +(events.length? events.map(function(e){
+        var label=t("activity_"+(e.action||""));
+        if(label==="activity_"+(e.action||"")) label=String(e.action||"").replace(/_/g," ");
+        return '<div class="kv"><span>'+esc(label)+'</span><b class="small">'+esc(e.createdAt?timeAgo(e.createdAt):"")+'</b></div>';
+      }).join("") : '<p class="small">'+esc(t("no_security_activity"))+'</p>')
+      +'</div>'
+      +'<div class="btn-row"><a class="btn secondary" href="#/help?topic=complaints&subject='+encodeURIComponent(t("dispute_subject"))+'&body='+encodeURIComponent(t("dispute_body",{id:giftId}))+'">'+esc(t("dispute_report"))+'</a></div>');
+  }).catch(function(e){ if(tok!==NAV) return; view(emptyState("⚖️", t("dispute_not_found"), e.message||"", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>', "h1")); });
+}
+// Item 916: delete your data with only the recovery code — for a user
+// who is logged out and has no other way in.
+function renderDeleteData(){
+  view('<h1>'+esc(t("delete_data_title"))+'</h1><p>'+esc(t("delete_data_body"))+'</p>'
+    +'<div class="card" style="margin-top:12px"><label for="dd-code">'+esc(t("recover_code_label"))+'</label><input id="dd-code" placeholder="'+esc(t("recover_code_ph"))+'" autocomplete="off">'
+    +'<label for="dd-type">'+esc(t("delete_type_hint"))+'</label><input id="dd-type" placeholder="DELETE" autocomplete="off">'
+    +'<div class="field-err" id="dd-err" role="alert"></div>'
+    +'<div class="btn-row"><button class="btn secondary" id="dd-cancel">'+esc(t("cancel"))+'</button><button class="btn danger" id="dd-go">'+esc(t("delete_now"))+'</button></div></div>'
+    +'<p class="small legal" style="margin-top:10px">'+esc(t("delete_data_note"))+'</p>');
+  $("#dd-cancel").onclick=function(){ go(S.user?"#/settings":"#/welcome"); };
+  $("#dd-go").onclick=async function(){
+    var code=$("#dd-code").value.trim(), conf=$("#dd-type").value.trim();
+    if(!code){ $("#dd-err").textContent=t("recover_invalid"); return; }
+    if(conf!=="DELETE"){ $("#dd-err").textContent=t("delete_type_hint"); return; }
+    var btn=$("#dd-go"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      await api("/auth/delete-by-recovery", {method:"POST", body:{code:code, confirm:"DELETE"}});
+      S.user=null; S.csrfToken=null; resetTopbar();
+      toast(t("account_deleted")); go("#/welcome");
+    }catch(e){ btn.disabled=false; btn.textContent=t("delete_now"); $("#dd-err").textContent=e.message||t("err_generic"); }
+  };
+}
+// Item 908: track a complaint by its id.
+function renderComplaintStatus(id, q){
+  view('<h1>'+esc(t("complaint_status_title"))+'</h1><p>'+esc(t("complaint_status_body"))+'</p>'
+    +'<div class="card" style="margin-top:12px"><label for="cs-id">'+esc(t("complaint_id_label"))+'</label><input id="cs-id" value="'+esc((q&&q.id)||"")+'" placeholder="'+esc(t("complaint_id_ph"))+'">'
+    +'<div class="field-err" id="cs-err" role="alert"></div>'
+    +'<button class="btn" id="cs-go" style="margin-top:8px">'+esc(t("check_status"))+'</button></div>'
+    +'<div id="cs-body" style="margin-top:12px"></div>');
+  $("#cs-go").onclick=load;
+  if(q&&q.id) load();
+  async function load(){
+    var cid=$("#cs-id").value.trim();
+    if(!cid){ $("#cs-err").textContent=t("err_required"); return; }
+    var body=$("#cs-body"); body.innerHTML=skeleton(1);
+    try{
+      var d=await api("/complaints/"+encodeURIComponent(cid)+"/status");
+      var c=d.complaint||d;
+      var events=pickList(d,["events"]);
+      body.innerHTML='<div class="card"><div class="kv"><span>'+esc(t("complaint_subject"))+'</span><b>'+esc(c.subject||"")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("receipt_status"))+'</span><b>'+esc(c.status||"")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("receipt_date"))+'</span><b>'+esc(c.createdAt?fmtDate(c.createdAt):"")+'</b></div>'
+        +(c.resolvedAt?'<div class="kv"><span>'+esc(t("complaint_resolved_at"))+'</span><b>'+esc(fmtDate(c.resolvedAt))+'</b></div>':"")
+        +'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("dispute_timeline"))+'</h2>'
+        +(events.length? events.map(function(e){
+          var label=t("activity_"+(e.action||""));
+          if(label==="activity_"+(e.action||"")) label=String(e.action||"").replace(/_/g," ");
+          return '<div class="kv"><span>'+esc(label)+'</span><b class="small">'+esc(e.createdAt?timeAgo(e.createdAt):"")+'</b></div>';
+        }).join("") : '<p class="small">'+esc(t("no_security_activity"))+'</p>')
+        +'</div>';
+    }catch(e){ body.innerHTML=errBox(e.message); }
+  }
+}
+
 /* ---------- admin ---------- */
 function adminNav(active){
-  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["users",t("users")],["verifications",t("verifications")],["reports",t("reports")],["fees",t("fees")],["audit",t("audit_log")]];
+  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["users",t("users")],["verifications",t("verifications")],["reports",t("reports")],["complaints",t("admin_complaints")],["abuse",t("admin_abuse")],["security",t("admin_security")],["fees",t("fees")],["audit",t("audit_log")]];
   return '<div class="admin-nav">'+links.map(function(l){ return '<a href="#/admin/'+l[0]+'" class="'+(active===l[0]?"on":"")+'">'+esc(l[1])+'</a>'; }).join("")+'</div>';
 }
 function adminGuard(){
@@ -2431,6 +2848,8 @@ async function renderAdminDashboard(){
       +'</div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("fee_mode"))+'</h2><p>'+esc(t("current_mode"))+': <strong>'+esc((S.config&&S.config.feeMode)||"supporter_fee")+'</strong></p><p class="small">'+esc(feeSentence())+'</p><a class="btn secondary small" href="#/admin/fees">'+esc(t("fees"))+'</a></div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("maintenance_mode"))+'</h2><p class="small">'+esc(t("maintenance_note"))+'</p><p id="mt-state" class="small">'+esc(t("loading"))+'</p><button class="btn secondary small" id="mt-toggle" disabled>'+esc(t("maintenance_toggle"))+'</button></div>'
+      // Item 883: emergency freeze — stops the feed and new gifts, admin exempt.
+      +'<div class="card" style="margin-top:12px"><h2>'+esc(t("freeze_title"))+'</h2><p class="small">'+esc(t("freeze_note"))+'</p><p id="fz-state" class="small">'+esc(t("loading"))+'</p><button class="btn secondary small" id="fz-toggle" disabled>'+esc(t("freeze_toggle"))+'</button></div>'
 
       +'<div class="btn-row"><a class="btn" href="#/admin/queue">'+esc(t("admin_queue_cta"))+'</a><a class="btn secondary" href="#/swipe">'+esc(t("back_to_app"))+'</a></div>';
     // Maintenance kill-switch toggle (item 194).
@@ -2450,6 +2869,28 @@ async function renderAdminDashboard(){
             stEl.textContent=on?t("maintenance_is_on"):t("maintenance_is_off");
             btn.textContent=on?t("maintenance_turn_off"):t("maintenance_turn_on");
             toast(on?t("maintenance_is_on"):t("maintenance_is_off"));
+          }catch(e){ toast(e.message||t("err_generic"), true); }
+          btn.disabled=false;
+        };
+      }catch(e){ stEl.textContent=t("err_generic"); }
+    })();
+    // Emergency freeze toggle (item 883).
+    (async function(){
+      var stEl=$("#fz-state"), btn=$("#fz-toggle"); if(!stEl||!btn) return;
+      try{
+        var cur=await api("/admin/freeze");
+        var on=!!(cur.frozen||cur.enabled);
+        stEl.textContent=on?t("freeze_is_on"):t("freeze_is_off");
+        btn.disabled=false;
+        btn.textContent=on?t("freeze_turn_off"):t("freeze_turn_on");
+        btn.onclick=async function(){
+          btn.disabled=true;
+          try{
+            var r=await withElevation(function(){ return api("/admin/freeze", {method:"PUT", body:{enabled:!on}}); });
+            on=!!(r.frozen||r.enabled);
+            stEl.textContent=on?t("freeze_is_on"):t("freeze_is_off");
+            btn.textContent=on?t("freeze_turn_off"):t("freeze_turn_on");
+            toast(on?t("freeze_is_on"):t("freeze_is_off"));
           }catch(e){ toast(e.message||t("err_generic"), true); }
           btn.disabled=false;
         };
@@ -2510,6 +2951,9 @@ function renderAdminQueue(){
     var memberSince=rq.memberSince||pay.memberSince||"";
     var prevPosts=(rq.approvedPosts!=null||rq.rejectedPosts!=null)?((rq.approvedPosts||0)+" "+t("approved")+" / "+(rq.rejectedPosts||0)+" "+t("rejected")):(pay.prevPosts!=null?pay.prevPosts:(pay.prev_posts!=null?pay.prev_posts:"—"));
     var prevReports=rq.reportsAgainst!=null?rq.reportsAgainst:(pay.prevReports!=null?pay.prevReports:(pay.prev_reports!=null?pay.prev_reports:"—"));
+    // Item 857: trust score (0–100) with its factors — a hint, never a decision.
+    var ts=pay.trustScore||null;
+    var tsHtml=ts?'<div class="kv"><span>'+esc(t("trust_score"))+'</span><b>'+esc(ts.score)+'/100'+(ts.factors&&ts.factors.length?' <span class="small">('+esc(ts.factors.join(", "))+')</span>':"")+'</b></div>':"";
     openSheet('<h2>'+esc(t("review_packet"))+'</h2>'
       +'<div class="kv"><span>'+esc(t("packet_poster"))+'</span><b>'+esc(posterName)+(posterUser?' (@'+esc(posterUser)+')':"")+'</b></div>'
       +'<div class="kv"><span>'+esc(t("packet_amount"))+'</span><b>'+(amt!=null?esc(money(amt, pay.currency||"NPR")):"—")+'</b></div>'
@@ -2518,6 +2962,7 @@ function renderAdminQueue(){
       +'<div class="kv"><span>'+esc(t("packet_account_age"))+'</span><b>'+esc(memberSince?timeAgo(memberSince):(pay.accountAge||pay.account_age||"—"))+'</b></div>'
       +'<div class="kv"><span>'+esc(t("packet_prev_posts"))+'</span><b>'+esc(prevPosts)+'</b></div>'
       +'<div class="kv"><span>'+esc(t("packet_prev_reports"))+'</span><b>'+esc(prevReports)+'</b></div>'
+      +tsHtml
       +(pay.story?'<h3>'+esc(t("packet_story"))+'</h3><p>'+esc(pay.story)+'</p>':"")
       +(pay.description?'<h3>'+esc(t("details"))+'</h3><p>'+esc(pay.description)+'</p>':"")
       +(pay.photoUrl?'<img class="bill-photo" src="'+esc(pay.photoUrl)+'" alt="'+esc(t("bill_photo_alt"))+'" loading="lazy">':"")
@@ -2535,7 +2980,8 @@ function renderAdminQueue(){
         if(dec!=="approve" && !reason){ $("#pk-err").textContent=t("err_required"); return; }
         btn.disabled=true;
         try{
-          await api("/admin/review/"+encodeURIComponent(pk.id), {method:"POST", body:{decision:dec, reason:reason||undefined, privateNote:$("#pk-note").value.trim()||undefined}});
+          // Item 808: review decisions need PIN elevation.
+          await withElevation(function(){ return api("/admin/review/"+encodeURIComponent(pk.id), {method:"POST", body:{decision:dec, reason:reason||undefined, privateNote:$("#pk-note").value.trim()||undefined}}); });
           closeSheets();
           toast(dec==="approve"?t("packet_approved"):dec==="reject"?t("packet_rejected"):t("packet_changes"));
           load();
@@ -2631,7 +3077,8 @@ function renderAdminReports(){
           +'<p class="small">'+esc(t("reports_target"))+': '+esc(r.target_type||"")+' '+esc(r.target_id||"")+' · '+esc(timeAgo(r.created_at||r.createdAt))+'</p>'
           +(r.note?'<p>'+esc(r.note)+'</p>':"")
           +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
-          +[["dismiss",t("dismiss")],["hide",t("hide_post")],["pause",t("pause_bill")],["remove",t("remove_bill")],["suspend",t("suspend_account")],["restore",t("restore_bill")]].map(function(a){ return '<button class="btn secondary small" data-r="'+esc(r.id)+'" data-a="'+a[0]+'">'+esc(a[1])+'</button>'; }).join("")
+          // Item 859: warn the poster (notification, report resolved).
+          +[["dismiss",t("dismiss")],["warn",t("warn_poster")],["hide",t("hide_post")],["pause",t("pause_bill")],["remove",t("remove_bill")],["suspend",t("suspend_account")],["restore",t("restore_bill")]].map(function(a){ return '<button class="btn secondary small" data-r="'+esc(r.id)+'" data-a="'+a[0]+'">'+esc(a[1])+'</button>'; }).join("")
           +'</div></div>';
       }).join("");
       $all("[data-r]", body).forEach(function(btn){
@@ -2684,7 +3131,7 @@ function renderAdminFees(){
       $("#fee-switch").onclick=function(){
         var next=mode==="zero_fee_plus_tip"?"supporter_fee":"zero_fee_plus_tip";
         confirmDialog(t("switch_mode"), t("fee_switch_warn"), t("switch_mode"), async function(){
-          try{ await api("/admin/fees", {method:"PUT", body:{feeMode:next}}); if(S.config) S.config.feeMode=next; toast(t("config_saved")); load(); }
+          try{ await withElevation(function(){ return api("/admin/fees", {method:"PUT", body:{feeMode:next}}); }); if(S.config) S.config.feeMode=next; toast(t("config_saved")); load(); }
           catch(e){ toast(e.message||t("err_generic"), true); }
         });
       };
@@ -2693,17 +3140,17 @@ function renderAdminFees(){
         try{
           var pct2=parseFloat($("#fee-pct").value);
           var nprFlat=toMinor($("#fee-npr-flat").value), inrFlat=toMinor($("#fee-inr-flat").value);
-          await api("/admin/fees", {method:"PUT", body:{feeConfig:{
+          await withElevation(function(){ return api("/admin/fees", {method:"PUT", body:{feeConfig:{
             NPR:{flatMinor:nprFlat, thresholdMinor:toMinor($("#fee-npr-thr").value), percent:pct2, minMinor:nprFlat},
             INR:{flatMinor:inrFlat, thresholdMinor:toMinor($("#fee-inr-thr").value), percent:pct2, minMinor:inrFlat}
-          }}});
+          }}}); });
           toast(t("config_saved"));
         }catch(e){ toast(e.message||t("err_generic"), true); }
         finally{ b.disabled=false; b.textContent=t("fees_save"); }
       };
       $("#tip-save").onclick=async function(){
         var b=$("#tip-save"); b.disabled=true; b.textContent=t("loading");
-        try{ await api("/admin/fees", {method:"PUT", body:{founderTipConfig:{enabled:$("#tip-enabled").checked, optionsPercent:[0].concat($("#tip-pcts").value.split(",").map(function(x){ return parseFloat(x.trim()); }).filter(function(x){ return !isNaN(x)&&x>0; })), defaultPercent:0}}}); toast(t("config_saved")); }
+        try{ await withElevation(function(){ return api("/admin/fees", {method:"PUT", body:{founderTipConfig:{enabled:$("#tip-enabled").checked, optionsPercent:[0].concat($("#tip-pcts").value.split(",").map(function(x){ return parseFloat(x.trim()); }).filter(function(x){ return !isNaN(x)&&x>0; })), defaultPercent:0}}}); }); toast(t("config_saved")); }
         catch(e){ toast(e.message||t("err_generic"), true); }
         finally{ b.disabled=false; b.textContent=t("save_config"); }
       };
@@ -2736,6 +3183,204 @@ function renderAdminFees(){
       body.innerHTML=errBox(e.message); bindErrRetry(load);
     }
   }
+}
+/* Item 909: complaints log — filter by category (882: security
+   incidents get their own category) and resolve/reopen, with the
+   complainant notified by the server. */
+function renderAdminComplaints(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_complaints"))+'</h1>'+adminNav("complaints")
+    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="cp-cat" aria-label="'+esc(t("complaint_category"))+'" style="flex:1"><option value="">'+esc(t("all"))+'</option><option value="general">general</option><option value="security">security</option><option value="legal">legal</option><option value="privacy">privacy</option><option value="press">press</option></select>'
+    +'<select id="cp-status" aria-label="'+esc(t("receipt_status"))+'" style="flex:1"><option value="">'+esc(t("all"))+'</option><option value="open">open</option><option value="resolved">resolved</option></select></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  $("#cp-cat").onchange=load; $("#cp-status").onchange=load;
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var q=new URLSearchParams();
+      var cat=$("#cp-cat").value, st=$("#cp-status").value;
+      if(cat) q.set("category", cat);
+      if(st) q.set("status", st);
+      var d=await api("/admin/complaints"+(q.toString()?"?"+q.toString():""));
+      var list=pickList(d,["complaints"]);
+      if(!list.length){ body.innerHTML=emptyState("📩", t("no_complaints"), ""); return; }
+      body.innerHTML=list.map(function(c){
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(c.subject||"")+'</strong><span class="chip">'+esc(c.status||"")+'</span></div>'
+          +'<p class="small">'+esc(c.category||"general")+' · '+esc(c.username||c.user_id||"")+' · '+esc(timeAgo(c.created_at||c.createdAt))+'</p>'
+          +'<p>'+esc(c.body||"")+'</p>'
+          +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
+          +(c.status!=="resolved"?'<button class="btn small" data-c="'+esc(c.id)+'" data-a="resolve">'+esc(t("complaint_resolve"))+'</button>':"")
+          +(c.status==="resolved"?'<button class="btn secondary small" data-c="'+esc(c.id)+'" data-a="reopen">'+esc(t("complaint_reopen"))+'</button>':"")
+          +'</div></div>';
+      }).join("");
+      $all("[data-c]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          btn.disabled=true;
+          try{ await api("/admin/complaints/"+encodeURIComponent(btn.getAttribute("data-c")), {method:"POST", body:{action:btn.getAttribute("data-a")}}); toast(t("decision_saved")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+/* Item 858: abuse-report dashboard — counts by reason/target, most
+   reported bills and users, recent open reports. */
+function renderAdminAbuse(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_abuse"))+'</h1>'+adminNav("abuse")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/abuse");
+      var byReason=d.byReason||d.by_reason||[];
+      var byTarget=d.byTarget||d.by_target||[];
+      var topBills=d.topReportedBills||d.top_reported_bills||[];
+      var topUsers=d.topReportedUsers||d.top_reported_users||[];
+      var recent=pickList(d,["recentOpen","recent_open"]);
+      body.innerHTML='<div class="grid2">'
+        +'<div class="card"><h2>'+esc(t("abuse_by_reason"))+'</h2>'+(byReason.length? byReason.map(function(r){ return '<div class="kv"><span>'+esc(r.reason||"")+'</span><b>'+esc(r.count||0)+'</b></div>'; }).join("") : '<p class="small">'+esc(t("no_reports"))+'</p>')+'</div>'
+        +'<div class="card"><h2>'+esc(t("abuse_by_target"))+'</h2>'+(byTarget.length? byTarget.map(function(r){ return '<div class="kv"><span>'+esc(r.target_type||r.targetType||"")+'</span><b>'+esc(r.count||0)+'</b></div>'; }).join("") : '<p class="small">'+esc(t("no_reports"))+'</p>')+'</div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("abuse_top_bills"))+'</h2>'+(topBills.length? topBills.map(function(r){ return '<div class="kv"><span><a href="#/bill/'+encodeURIComponent(r.id||r.target_id||"")+'">'+esc(r.title||r.id||"")+'</a></span><b>'+esc(r.count||0)+'</b></div>'; }).join("") : '<p class="small">'+esc(t("no_reports"))+'</p>')+'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("abuse_top_users"))+'</h2>'+(topUsers.length? topUsers.map(function(r){ return '<div class="kv"><span>'+esc(r.username||r.id||"")+'</span><b>'+esc(r.count||0)+'</b></div>'; }).join("") : '<p class="small">'+esc(t("no_reports"))+'</p>')+'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("abuse_recent"))+'</h2>'+(recent.length? recent.map(function(r){ return '<div class="kv"><span>'+esc(r.reason||"")+' · '+esc(r.target_type||"")+' '+esc(r.target_id||"")+'</span><b class="small">'+esc(timeAgo(r.created_at||r.createdAt))+'</b></div>'; }).join("") : '<p class="small">'+esc(t("no_reports"))+'</p>')+'</div>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+/* Items 826/827/883/886/974/976/966: security console — reveal
+   anomalies, emergency freeze, fraud banner, known scams, security
+   status, transparency reports. */
+function renderAdminSecurity(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_security"))+'</h1>'+adminNav("security")
+    +'<div id="ad-sec">'+skeleton(2)+'</div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("freeze_title"))+'</h2><p class="small">'+esc(t("freeze_note"))+'</p><p id="fz-state" class="small">'+esc(t("loading"))+'</p><button class="btn secondary small" id="fz-toggle" disabled>'+esc(t("freeze_toggle"))+'</button></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("fraud_banner_title"))+'</h2><label class="check-row"><input type="checkbox" id="fb-active"> '+esc(t("fraud_banner_active"))+'</label><label for="fb-msg">'+esc(t("fraud_banner_msg"))+'</label><textarea id="fb-msg" maxlength="300"></textarea><button class="btn" id="fb-save" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("known_scams_title"))+'</h2><p class="small">'+esc(t("known_scams_note"))+'</p><div id="ks-list"></div><label for="ks-title">'+esc(t("scam_title"))+'</label><input id="ks-title" maxlength="120"><label for="ks-body">'+esc(t("scam_body"))+'</label><textarea id="ks-body" maxlength="600"></textarea><button class="btn secondary" id="ks-add" style="margin-top:8px">'+esc(t("scam_add"))+'</button></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("security_status_title"))+'</h2><label for="ss-status">'+esc(t("security_status_label"))+'</label><select id="ss-status"><option value="normal">normal</option><option value="incident">incident</option><option value="resolved">resolved</option></select><label for="ss-msg">'+esc(t("security_status_msg"))+'</label><textarea id="ss-msg" maxlength="600"></textarea><button class="btn" id="ss-save" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("transparency_title"))+'</h2><p class="small">'+esc(t("transparency_note"))+'</p><label for="tr-month">'+esc(t("transparency_month"))+'</label><input id="tr-month" type="month"><button class="btn" id="tr-build" style="margin-top:8px">'+esc(t("transparency_build"))+'</button><div id="tr-body" style="margin-top:10px"></div></div>'
+    +adminLogoutBtn());
+  bindAdminLogout();
+  loadSecurity();
+  loadFreeze();
+  loadBanner();
+  loadScams();
+  loadStatus();
+  async function loadSecurity(){
+    var box=$("#ad-sec"); if(!box) return;
+    try{
+      var d=await api("/admin/security");
+      var over=d.accountsOverRevealThreshold||d.accounts_over_threshold||[];
+      var anom=d.anomalies||[];
+      box.innerHTML='<div class="grid2">'
+        +'<div class="card stat"><div class="n">'+esc(d.blockedReveals24h!=null?d.blockedReveals24h:(d.blocked_reveals_24h||0))+'</div><div class="l">'+esc(t("sec_blocked_reveals"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc((d.fingerprintChanges||d.fingerprint_changes||[]).length)+'</div><div class="l">'+esc(t("sec_fp_changes"))+'</div></div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("sec_over_threshold"))+'</h2>'+(over.length? over.map(function(a){ return '<div class="kv"><span>'+esc(a.username||a.user_id||a.userId||"")+'</span><b>'+esc(a.reveals||a.count||0)+' '+esc(t("sec_reveals"))+'</b></div>'; }).join("") : '<p class="small">'+esc(t("sec_none"))+'</p>')+'</div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("sec_anomalies"))+'</h2>'+(anom.length? anom.map(function(a){ return '<div class="kv"><span>'+esc(a.action||"payout_reveal_anomaly")+' · '+esc(a.username||a.user_id||"")+'</span><b class="small">'+esc(timeAgo(a.created_at||a.createdAt))+'</b></div>'; }).join("") : '<p class="small">'+esc(t("sec_none"))+'</p>')+'</div>';
+    }catch(e){ box.innerHTML=errBox(e.message); }
+  }
+  async function loadFreeze(){
+    var stEl=$("#fz-state"), btn=$("#fz-toggle"); if(!stEl||!btn) return;
+    try{
+      var cur=await api("/admin/freeze");
+      var on=!!(cur.frozen||cur.enabled);
+      stEl.textContent=on?t("freeze_is_on"):t("freeze_is_off");
+      btn.disabled=false; btn.textContent=on?t("freeze_turn_off"):t("freeze_turn_on");
+      btn.onclick=async function(){
+        btn.disabled=true;
+        try{
+          var r=await withElevation(function(){ return api("/admin/freeze", {method:"PUT", body:{enabled:!on}}); });
+          on=!!(r.frozen||r.enabled);
+          stEl.textContent=on?t("freeze_is_on"):t("freeze_is_off");
+          btn.textContent=on?t("freeze_turn_off"):t("freeze_turn_on");
+          toast(on?t("freeze_is_on"):t("freeze_is_off"));
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+        btn.disabled=false;
+      };
+    }catch(e){ stEl.textContent=t("err_generic"); }
+  }
+  async function loadBanner(){
+    try{
+      var d=await api("/admin/fraud-banner");
+      var fb=d.banner||d.fraudBanner||d||{};
+      $("#fb-active").checked=!!fb.active;
+      $("#fb-msg").value=fb.message||"";
+    }catch(e){}
+    $("#fb-save").onclick=async function(){
+      var b=$("#fb-save"); b.disabled=true; b.textContent=t("loading");
+      try{ await api("/admin/fraud-banner", {method:"PUT", body:{active:$("#fb-active").checked, message:$("#fb-msg").value.trim()}}); toast(t("saved")); }
+      catch(e){ toast(e.message||t("err_generic"), true); }
+      finally{ b.disabled=false; b.textContent=t("save"); }
+    };
+  }
+  var scams=[];
+  async function loadScams(){
+    try{
+      var d=await api("/admin/known-scams");
+      scams=pickList(d,["scams","knownScams"])||[];
+      drawScams();
+    }catch(e){}
+    $("#ks-add").onclick=async function(){
+      var title=$("#ks-title").value.trim(), body=$("#ks-body").value.trim();
+      if(!title||!body){ toast(t("err_required"), true); return; }
+      scams.push({title:title, body:body, addedAt:new Date().toISOString()});
+      try{ await api("/admin/known-scams", {method:"PUT", body:{scams:scams}}); $("#ks-title").value=""; $("#ks-body").value=""; drawScams(); toast(t("saved")); }
+      catch(e){ scams.pop(); toast(e.message||t("err_generic"), true); }
+    };
+  }
+  function drawScams(){
+    var box=$("#ks-list"); if(!box) return;
+    box.innerHTML=scams.length? scams.map(function(s,i){ return '<div class="kv"><span><strong>'+esc(s.title||"")+'</strong><br><span class="small">'+esc(s.body||"")+'</span></span><button class="btn secondary small" data-ks="'+i+'">'+esc(t("remove"))+'</button></div>'; }).join("") : '<p class="small">'+esc(t("sec_none"))+'</p>';
+    $all("[data-ks]", box).forEach(function(b){
+      b.onclick=async function(){
+        var i=parseInt(b.getAttribute("data-ks"),10);
+        var removed=scams.splice(i,1);
+        try{ await api("/admin/known-scams", {method:"PUT", body:{scams:scams}}); drawScams(); toast(t("saved")); }
+        catch(e){ scams.splice(i,0,removed[0]); toast(e.message||t("err_generic"), true); }
+      };
+    });
+  }
+  async function loadStatus(){
+    try{
+      var d=await api("/admin/security-status");
+      var ss=d.status||d.securityStatus||d||{};
+      if(ss.status) $("#ss-status").value=ss.status;
+      $("#ss-msg").value=ss.message||"";
+    }catch(e){}
+    $("#ss-save").onclick=async function(){
+      var b=$("#ss-save"); b.disabled=true; b.textContent=t("loading");
+      try{ await api("/admin/security-status", {method:"PUT", body:{status:$("#ss-status").value, message:$("#ss-msg").value.trim()}}); toast(t("saved")); }
+      catch(e){ toast(e.message||t("err_generic"), true); }
+      finally{ b.disabled=false; b.textContent=t("save"); }
+    };
+  }
+  $("#tr-build").onclick=async function(){
+    var month=$("#tr-month").value;
+    var body=$("#tr-body");
+    if(!month){ toast(t("err_required"), true); return; }
+    body.innerHTML=skeleton(1);
+    try{
+      var d=await api("/admin/transparency-report?month="+encodeURIComponent(month));
+      var rep=d.report||d;
+      body.innerHTML='<div class="card"><pre style="white-space:pre-wrap;font-size:13px">'+esc(JSON.stringify(rep,null,2))+'</pre>'
+        +'<button class="btn" id="tr-publish" style="margin-top:8px">'+esc(t("transparency_publish"))+'</button></div>';
+      $("#tr-publish").onclick=async function(){
+        var b=$("#tr-publish"); b.disabled=true; b.textContent=t("loading");
+        try{ await api("/admin/transparency-report", {method:"POST", body:{month:month}}); toast(t("transparency_published")); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ b.disabled=false; b.textContent=t("transparency_publish"); }
+      };
+    }catch(e){ body.innerHTML=errBox(e.message); }
+  };
 }
 function renderAdminAudit(){
   if(!adminGuard()) return;
@@ -2775,8 +3420,26 @@ function renderAdminAudit(){
 }
 
 /* ---------- boot ---------- */
+/* Install prompt (item 978): after 3 visits, offer the install once the
+   browser fires beforeinstallprompt. Offered at most once; the user can
+   also install any time from Settings. */
+var deferredInstallPrompt=null;
+window.addEventListener("beforeinstallprompt", function(e){ e.preventDefault(); deferredInstallPrompt=e; maybeShowInstall(); });
+function maybeShowInstall(){
+  if(!deferredInstallPrompt) return;
+  try{ if(localStorage.getItem("sp_install_offered")==="1") return; }catch(e){}
+  var visits=0; try{ visits=parseInt(localStorage.getItem("sp_visits")||"0",10)||0; }catch(e){}
+  if(visits<3) return;
+  try{ localStorage.setItem("sp_install_offered","1"); }catch(e){}
+  openSheet('<h2>'+esc(t("install_title"))+'</h2><p>'+esc(t("install_body"))+'</p>'
+    +'<div class="btn-row"><button class="btn secondary" id="in-later">'+esc(t("install_later"))+'</button><button class="btn" id="in-now">'+esc(t("install_app"))+'</button></div>');
+  $("#in-later").onclick=closeSheets;
+  $("#in-now").onclick=function(){ closeSheets(); if(deferredInstallPrompt){ deferredInstallPrompt.prompt(); deferredInstallPrompt=null; } };
+}
 async function boot(){
   if(S.booted) return; S.booted=true;
+  // Visit counter for the install prompt (item 978).
+  try{ var v=parseInt(localStorage.getItem("sp_visits")||"0",10)||0; localStorage.setItem("sp_visits", String(v+1)); }catch(e){}
   // /config, /auth/me and the admin session check are independent — fetch
   // in parallel (each is a slow serverless round trip; sequential boot
   // cost ~2s+ even warm). checkAdminSession restores the 24h sp_admin
