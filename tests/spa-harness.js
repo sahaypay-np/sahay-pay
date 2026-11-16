@@ -145,6 +145,7 @@ async function main() {
   doc.querySelector('#f-cats .chip').click();
   $('#f-amount').value = '5000';
   $('#f-story').value = 'Harness test story for the post flow, long enough to be a real story.';
+  $('#f-adult').checked = true; // phase 2 (123): 18+ confirmation is a hard gate on step 1
   $('#p-next').click();
   check('post step 2 renders (photo)', await waitFor(() => !!$('#f-photo'), 3000, 'post step 2'));
   $('#p-next').click();
@@ -158,6 +159,7 @@ async function main() {
   check('post step 5 renders (verification)', await waitFor(() => !!$('#v-bill'), 3000, 'post step 5'));
   $('#p-next').click();
   check('post step 6 renders (preview)', await waitFor(() => text().includes('Final preview'), 3000, 'post step 6'));
+  $('#f-consent').checked = true; // phase 2 (124): consent checkbox gates submission
   $('#p-next').click();
   check('post submits and shows request code', await waitFor(() => text().includes('Your request code'), 8000, 'post submitted'), text().slice(0, 200));
 
