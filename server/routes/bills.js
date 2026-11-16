@@ -21,12 +21,15 @@ const {
   cleanStr, validatePayoutMethod, methodAllowedForCountry,
 } = require('../lib/validate');
 const { parseMajorToMinor, isMinorAmount } = require('../lib/money');
-const { upload, isPrivateKind, isKnownKind, publicUrlFor, privateRefFor, encryptAccount, PUBLIC_DIR, PRIVATE_DIR, fileMatchesMime, stripImageMetadata, inspectPhotoOrigin } = require('../lib/storage');
+const { upload, isPrivateKind, isKnownKind, publicUrlFor, privateRefFor, encryptAccount, PUBLIC_DIR, PRIVATE_DIR, fileMatchesMime, pathForUploadRef, stripImageMetadata, inspectPhotoOrigin } = require('../lib/storage');
 const { createReviewPacket, billPacketPayload, createNotification } = require('../lib/notify');
 const { scanScamPhrases, findDuplicateBill } = require('../lib/abuse');
 const { findSensitiveNumbers } = require('../lib/sensitive');
 const { uaHash } = require('../lib/device');
 const { containsBlockedTerm } = require('../lib/message-blocklist');
+const { sha256File, averageHash, hammingDistance, AHASH_THRESHOLD } = require('../lib/images');
+const { flagSignal, scoreBill } = require('../lib/fraud');
+const { tierForCount } = require('../lib/achievements');
 
 const router = express.Router();
 
@@ -197,6 +200,26 @@ async function getPayoutHints(billId) {
   return rows.map((r) => ({ method: r.method, hint: r.account_hint }));
 }
 
+// Pre-publish privacy scan (item 367): patterns that look like exposed
+// personal details in free text. Warns — never blocks — and returns the
+// matched kinds so the poster can fix them before submitting.
+const PRIVACY_PATTERNS = [
+  { kind: 'phone', re: /\b(?:\+?977[- ]?)?9[678]\d{8}\b/ },
+  { kind: 'phone', re: /\b\d{10}\b/ },
+  { kind: 'email', re: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i },
+  { kind: 'account', re: /\b\d{12,20}\b/ },
+  { kind: 'account', re: /\b[A-Z]{4}0[A-Z0-9]{6}\b/ },
+];
+
+function scanPrivacy(text) {
+  const found = new Set();
+  const hay = String(text || '');
+  for (const p of PRIVACY_PATTERNS) {
+    if (p.re.test(hay)) found.add(p.kind);
+  }
+  return [...found];
+}
+
 function validateBillFields(body, categories) {
   const title = cleanStr(body.title, 60);
   if (title.length < 3) return { error: 'Please give your request a title (3–60 characters).' };
@@ -253,6 +276,25 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
     const v = validateBillFields(body, categories);
     if (v.error) return res.status(400).json({ error: { code: 'VALIDATION', message: v.error } });
 
+    // Day/week posting caps (item 333, admin-configurable). The hourly
+    // rateLimit above stays as the first line of defence.
+    const dayCap = Number(await db.getSetting('bill_day_cap')) || 5;
+    const weekCap = Number(await db.getSetting('bill_week_cap')) || 10;
+    const dayAgo = new Date(Date.now() - 24 * 3600000).toISOString();
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    const dayCount = Number((await db.get(
+      'SELECT COUNT(*) AS c FROM bills WHERE user_id = $1 AND created_at >= $2', [req.user.id, dayAgo]
+    ))?.c || 0);
+    if (dayCount >= dayCap) {
+      return res.status(429).json({ error: { code: 'RATE_LIMITED', message: `You can post ${dayCap} bills a day. Please try again tomorrow.` } });
+    }
+    const weekCount = Number((await db.get(
+      'SELECT COUNT(*) AS c FROM bills WHERE user_id = $1 AND created_at >= $2', [req.user.id, weekAgo]
+    ))?.c || 0);
+    if (weekCount >= weekCap) {
+      return res.status(429).json({ error: { code: 'RATE_LIMITED', message: `You can post ${weekCap} bills a week. Please try again next week.` } });
+    }
+
     const currency = req.user.country === 'IN' ? 'INR' : 'NPR';
     const submit = body.submit === true;
     const payDirect = body.payDirect === true;
@@ -295,6 +337,17 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
     const status = submit ? 'pending_review' : 'draft';
     const extra = cleanExtraFields(body);
     const photoUrl = body.photoUrl ? cleanStr(body.photoUrl, 500) : (extra.photos && extra.photos[0]) || null;
+    // Document hash + average hash of the bill photo (items 324/338),
+    // computed server-side from the stored file.
+    let docHash = null;
+    let ahash = null;
+    if (photoUrl) {
+      const diskPath = pathForUploadRef(photoUrl);
+      if (diskPath) {
+        try { docHash = sha256File(diskPath); } catch { /* absent */ }
+        try { ahash = averageHash(diskPath); } catch { /* PNG-only; null otherwise */ }
+      }
+    }
     await db.run(
       `INSERT INTO bills (id, user_id, request_code, title, category, company, amount_minor, currency,
         covered_minor, due_date, story, details, charity, anonymous, status, city, country, photo_url,
@@ -303,8 +356,8 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
         for_whom, relationship, for_other_consent, about_me, biller_instructions, photos_json,
         story_lang, not_paid_consequence, tried_to_pay, money_means, bill_type_other, charity_name,
         business, business_name, business_desc, dream, dream_desc,
-        payout_consent_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 0, 0, '', '', NULL, NULL, NULL, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)`,
+        payout_consent_at, doc_hash, ahash, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 0, 0, '', '', NULL, NULL, NULL, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45)`,
       [
         id, req.user.id, await uniqueRequestCode(), v.title, body.category, v.company,
         v.amountMinor, currency, body.dueDate ? cleanStr(body.dueDate, 10) : null,
@@ -323,6 +376,7 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
         extra.billTypeOther, extra.charityName,
         extra.business, extra.businessName, extra.businessDesc, extra.dream, extra.dreamDesc,
         body.payoutConsent === true ? now : null,
+        docHash, ahash,
         now, now,
       ]
     );
@@ -369,6 +423,49 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
       packet = await createReviewPacket('bill', id, payload);
       await logAudit('user', req.user.id, 'bill_submitted', 'bill', id, { requestCode: bill.request_code });
     }
+    // Duplicate-bill detector (items 336/337): same biller reference +
+    // amount, or same biller name + amount within 30 days, on another
+    // live bill. Flags for review — never blocks the submit.
+    let duplicateAlert = null;
+    if (submit && (bill.biller_ref || bill.biller_name)) {
+      const dup = await db.get(
+        `SELECT id, title FROM bills WHERE id != $1 AND status IN ('approved','pending_review')
+         AND amount_minor = $2 AND biller_name = $3 AND biller_ref = $4
+         AND created_at >= $5 LIMIT 1`,
+        [id, bill.amount_minor, bill.biller_name || '', bill.biller_ref || '', new Date(Date.now() - 30 * 86400000).toISOString()]
+      );
+      if (dup) {
+        duplicateAlert = { billId: dup.id, title: dup.title };
+        await flagSignal({
+          billId: id, userId: req.user.id, signal: 'duplicate_bill',
+          detail: `Same biller + amount as bill ${dup.id} ("${dup.title}").`, severity: 'high',
+        });
+      }
+    }
+    // Image-similarity check (item 338): compare the new photo's aHash
+    // against other live bills' photos (PNG only; exact SHA-256 matches
+    // are caught by the doc_hash comparison in the admin queue).
+    if (submit && ahash) {
+      const others = await db.query(
+        `SELECT id, title, ahash FROM bills WHERE id != $1 AND ahash IS NOT NULL
+         AND status IN ('approved','pending_review') LIMIT 500`,
+        [id]
+      );
+      for (const o of others.rows) {
+        if (hammingDistance(ahash, o.ahash) <= AHASH_THRESHOLD) {
+          await flagSignal({
+            billId: id, userId: req.user.id, signal: 'similar_image',
+            detail: `Bill photo closely matches bill ${o.id} ("${o.title}").`, severity: 'high',
+          });
+          break;
+        }
+      }
+    }
+    // Score the bill for the admin queue (item 331) — best-effort.
+    let risk = null;
+    try { risk = await scoreBill(bill); } catch { /* scoring never blocks */ }
+    // Privacy scan warnings (item 367) — informational only.
+    const privacyWarnings = scanPrivacy(`${v.title}\n${v.story}\n${v.details}`);
     res.status(201).json({
       bill: publicBill(bill, req.user),
       payoutHints: stored.hints,
@@ -376,6 +473,9 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
       // 866/867: tell the poster what was found so they can redact it.
       sensitiveWarning: sensitiveNumbers.length ? sensitiveNumbers : undefined,
       scamWarning: scamPhrases.length ? scamPhrases : undefined,
+      duplicateAlert,
+      privacyWarnings,
+      riskBand: risk ? risk.band : undefined,
     });
   } catch (err) {
     next(err);
@@ -760,6 +860,18 @@ router.post('/:id/payout', requireActive, async (req, res, next) => {
       `The payout details on "${bill.title}" were changed just now. If that was not you, change them back and contact the owner via the Help Centre.`,
       '#/mybills'
     );
+    // Rapid-edit alert (item 341): 2+ payout changes in 24h flags the bill.
+    const dayAgo = new Date(Date.now() - 24 * 3600000).toISOString();
+    const editCount = Number((await db.get(
+      `SELECT COUNT(*) AS c FROM audit_logs WHERE action = 'bill_payout_changed' AND target_id = $1 AND created_at >= $2`,
+      [bill.id, dayAgo]
+    ))?.c || 0);
+    if (editCount >= 2) {
+      await flagSignal({
+        billId: bill.id, userId: req.user.id, signal: 'rapid_payout_edits',
+        detail: `${editCount} payout-detail changes in 24 hours.`, severity: 'high',
+      });
+    }
     const updated = await db.get('SELECT * FROM bills WHERE id = $1', [bill.id]);
     res.json({ bill: publicBill(updated, req.user), payoutHints: await getPayoutHints(bill.id), backToReview, reviewPacketId: packet ? packet.id : null });
   } catch (err) {
@@ -839,6 +951,13 @@ uploadsRouter.post('/', requireActive, (req, res, next) => {
       [crypto.randomUUID(), req.user.id, req.file.filename, finalSize, kind, nowIso()]
     );
     const url = isPrivateKind(kind) ? privateRefFor(req.file.filename) : publicUrlFor(req.file.filename);
+    // Hash the stored file (items 324/338): SHA-256 for exact duplicates,
+    // aHash (PNG only) for near-duplicates. Returned so the client can
+    // show a duplicate warning early; the server re-hashes on submit.
+    let sha256 = null;
+    let ahash = null;
+    try { sha256 = sha256File(req.file.path); } catch { /* absent */ }
+    try { ahash = averageHash(req.file.path); } catch { /* PNG-only */ }
     res.status(201).json({
       ok: true,
       kind,
@@ -853,6 +972,8 @@ uploadsRouter.post('/', requireActive, (req, res, next) => {
         software: origin.software,
         hasExif: origin.hasExif,
       },
+      sha256,
+      ahash,
     });
   } catch (err) {
     next(err);
@@ -908,16 +1029,20 @@ router.get('/:id', async (req, res, next) => {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Bill not found.' } });
     }
     const poster = await db.get('SELECT * FROM users WHERE id = $1', [bill.user_id]);
-    const badges = await db.query(
-      `SELECT type FROM verifications WHERE bill_id = $1 AND status = 'approved'`,
-      [bill.id]
+    // Expired badges don't count as verified (item 306).
+    const liveBadges = await db.query(
+      `SELECT type FROM verifications
+       WHERE user_id = $1 AND status = 'approved' AND (expires_at IS NULL OR expires_at > $2)`,
+      [bill.user_id, nowIso()]
     );
-    const userBadges = await db.query(
-      `SELECT type FROM verifications WHERE user_id = $1 AND bill_id IS NULL AND status = 'approved'`,
-      [bill.user_id]
+    const liveBillBadges = await db.query(
+      `SELECT type FROM verifications
+       WHERE bill_id = $1 AND status = 'approved' AND (expires_at IS NULL OR expires_at > $2)`,
+      [bill.id, nowIso()]
     );
     const supporters = await db.query(
-      `SELECT u.display_name, u.username, g.amount_minor, g.confirmed_at, g.message, g.anonymous
+      `SELECT u.id, u.display_name, u.username, u.photo_url, g.amount_minor, g.confirmed_at, g.message, g.anonymous,
+              (SELECT COUNT(*) FROM gifts g2 WHERE g2.supporter_id = u.id AND g2.status = 'confirmed') AS gift_count
        FROM gifts g JOIN users u ON u.id = g.supporter_id
        WHERE g.bill_id = $1 AND g.status = 'confirmed' ORDER BY g.confirmed_at DESC LIMIT 50`,
       [bill.id]
@@ -932,24 +1057,116 @@ router.get('/:id', async (req, res, next) => {
       db.run('UPDATE bills SET views = views + 1 WHERE id = $1', [bill.id]).catch(() => {});
     }
     const out = publicBill(bill, poster, !isOwner && !isAdmin);
-    out.badges = [...new Set([...badges.rows.map((r) => r.type), ...userBadges.rows.map((r) => r.type)])];
-    out.supporters = supporters.rows.map((r) => ({
-      displayName: r.anonymous === 1 ? null : r.display_name,
-      username: r.anonymous === 1 ? null : r.username,
-      anonymous: r.anonymous === 1,
-      amountMinor: r.amount_minor, confirmedAt: r.confirmed_at,
-      // Gift message (item 260): shown with first name only; re-screened
-      // here as defence in depth (items 257).
-      message: r.message && !containsBlockedTerm(r.message) ? r.message : '',
-    }));
+    out.badges = [...new Set([...liveBillBadges.rows.map((r) => r.type), ...liveBadges.rows.map((r) => r.type)])];
+    // Pay-direct verified (item 304): an approved biller badge for this
+    // bill or its poster.
+    out.payDirectVerified = out.badges.includes('biller');
+    out.shareCount = Number(bill.share_count) || 0;
+    // Supporters tab data (items 472/473): tier per supporter, anonymous
+    // masking, top-supporter highlight (largest confirmed gift).
+    let topAmount = 0;
+    const supporterList = supporters.rows.map((r) => {
+      const tier = tierForCount(Number(r.gift_count || 0)).tier;
+      if (r.amount_minor > topAmount) topAmount = r.amount_minor;
+      const anonymous = r.anonymous === 1;
+      return {
+        id: anonymous ? null : r.id,
+        displayName: anonymous ? 'Anonymous' : r.display_name,
+        username: anonymous ? null : r.username,
+        photoUrl: anonymous ? null : r.photo_url,
+        amountMinor: r.amount_minor,
+        confirmedAt: r.confirmed_at,
+        // Gift message (item 260): first name only; re-screened here
+        // as defence in depth (items 257).
+        message: r.message && !containsBlockedTerm(r.message) ? r.message : '',
+        anonymous,
+        tier: tier ? { key: tier.key, name: tier.name, icon: tier.icon } : null,
+      };
+    });
+    out.supporters = supporterList.map((s) => ({ ...s, topSupporter: s.amountMinor === topAmount && topAmount > 0 }));
     out.pledgeCount = Number(pledgeRow?.c || 0);
     out.payoutHints = await getPayoutHints(bill.id);
     out.payoutHint = out.payoutHints.length ? out.payoutHints[0].hint : null;
+    // Trust summary (item 309) + response time (item 397): badges, account
+    // age, confirmed-gift count, first-bill label, median confirm latency.
+    const posterStats = await db.get(
+      `SELECT
+         (SELECT COUNT(*) FROM bills b2 WHERE b2.user_id = $1 AND b2.status = 'approved') AS approved_bills,
+         (SELECT COUNT(*) FROM gifts g JOIN bills b3 ON b3.id = g.bill_id WHERE b3.user_id = $1 AND g.status = 'confirmed') AS confirmed_received`,
+      [bill.user_id]
+    );
+    const latencies = await db.query(
+      `SELECT g.created_at, g.confirmed_at FROM gifts g JOIN bills b3 ON b3.id = g.bill_id
+       WHERE b3.user_id = $1 AND g.status = 'confirmed' AND g.confirmed_at IS NOT NULL
+       ORDER BY g.confirmed_at DESC LIMIT 50`,
+      [bill.user_id]
+    );
+    const hours = latencies.rows
+      .map((r) => (new Date(r.confirmed_at).getTime() - new Date(r.created_at).getTime()) / 3600000)
+      .filter((h) => Number.isFinite(h) && h >= 0)
+      .sort((a, b) => a - b);
+    const medianHours = hours.length ? hours[Math.floor(hours.length / 2)] : null;
+    out.trustSummary = {
+      badges: out.badges,
+      accountAgeDays: poster ? Math.max(0, Math.floor((Date.now() - new Date(poster.created_at).getTime()) / 86400000)) : 0,
+      confirmedGiftsReceived: Number(posterStats?.confirmed_received || 0),
+      approvedBills: Number(posterStats?.approved_bills || 0),
+      firstBill: Number(posterStats?.approved_bills || 0) <= 1,
+      responseTimeHours: medianHours === null ? null : Math.round(medianHours * 10) / 10,
+    };
     if (isOwner) {
       out.rejectionReason = bill.rejection_reason;
       out.changesNote = bill.changes_note;
     }
     res.json({ bill: out });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/bills/:id/share — increment the share counter (item 442).
+// Public (no auth): sharing is a public act; rate-limited by IP.
+router.post('/:id/share', rateLimit('bill-share', 30, 60 * 60 * 1000), async (req, res, next) => {
+  try {
+    const bill = await db.get('SELECT id, share_count FROM bills WHERE id = $1', [req.params.id]);
+    if (!bill) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Bill not found.' } });
+    await db.run('UPDATE bills SET share_count = share_count + 1 WHERE id = $1', [bill.id]);
+    res.json({ ok: true, shareCount: (Number(bill.share_count) || 0) + 1 });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/bills/:id/appeal — poster appeals a paused/removed/rejected
+// bill (item 351). One open appeal per bill.
+router.post('/:id/appeal', requireActive, async (req, res, next) => {
+  try {
+    const bill = await db.get('SELECT * FROM bills WHERE id = $1', [req.params.id]);
+    if (!bill || bill.user_id !== req.user.id) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Bill not found.' } });
+    }
+    if (!['removed', 'under_investigation', 'rejected'].includes(bill.status)) {
+      return res.status(409).json({ error: { code: 'INVALID_STATE', message: `A ${bill.status} bill does not need an appeal.` } });
+    }
+    const body = cleanStr(req.body?.body || '', 2000);
+    if (body.length < 10) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please explain your appeal (10+ characters).' } });
+    }
+    const existing = await db.get(
+      `SELECT id FROM appeals WHERE target_type = 'bill' AND target_id = $1 AND status = 'open'`,
+      [bill.id]
+    );
+    if (existing) {
+      return res.status(409).json({ error: { code: 'ALREADY_SUBMITTED', message: 'You already have an open appeal for this bill.' } });
+    }
+    const id = crypto.randomUUID();
+    await db.run(
+      `INSERT INTO appeals (id, user_id, target_type, target_id, body, status, reviewer_note, created_at, decided_at)
+       VALUES ($1, $2, 'bill', $3, $4, 'open', '', $5, NULL)`,
+      [id, req.user.id, bill.id, body, nowIso()]
+    );
+    await logAudit('user', req.user.id, 'appeal_filed', 'bill', bill.id, { appealId: id });
+    res.status(201).json({ ok: true, appealId: id });
   } catch (err) {
     next(err);
   }

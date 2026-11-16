@@ -2,15 +2,20 @@
 // GET/PATCH /api/profile/me, GET /api/profile/:username (public),
 // POST /api/profile/delete.
 // Photo changes go through owner review (Section 3) before becoming public.
+// Phase 2 §5: the public profile carries impact stats, tiers, achievements,
+// streaks, thank-you wall, gift history, follower counts and privacy
+// toggles (items 431/432/462/469–471/490/499).
 
 'use strict';
 
 const express = require('express');
+const crypto = require('crypto');
 const db = require('../db');
 const { logAudit, nowIso } = require('../lib/audit');
 const { requireAuth, destroyAllUserSessions } = require('../lib/auth');
 const { cleanStr } = require('../lib/validate');
 const { createReviewPacket } = require('../lib/notify');
+const { tierForCount, userGiftStats, listAchievements, maybeAwardHelperOfMonth } = require('../lib/achievements');
 
 const router = express.Router();
 
@@ -21,6 +26,10 @@ function parsePrefs(row) {
       notifyPrefs: p.notifyPrefs || { posts: true, gifts: true, brands: true },
       showTotals: p.showTotals !== false,
       anonDefault: p.anonDefault === true,
+      hideGiftHistory: p.hideGiftHistory === true,
+      hideLiveAsks: p.hideLiveAsks === true,
+      hideFollowers: p.hideFollowers === true,
+      hideFromSupporterWall: p.hideFromSupporterWall === true,
     };
   } catch {
     return { notifyPrefs: { posts: true, gifts: true, brands: true }, showTotals: true, anonDefault: false };
@@ -38,6 +47,7 @@ function publicUser(u) {
     about: u.about,
     language: u.language,
     photoUrl: u.photo_url,
+    coverUrl: u.cover_url || null,
     suspended: u.suspended === 1,
     prefs: parsePrefs(u),
     createdAt: u.created_at,
@@ -71,7 +81,8 @@ router.patch('/me', requireAuth, async (req, res, next) => {
       params.push(name); updates.push(`display_name = $${params.length}`);
     }
     if (body.about !== undefined) {
-      const about = cleanStr(body.about, 500);
+      // Bio is 300 chars (item 464).
+      const about = cleanStr(body.about, 300);
       params.push(about); updates.push(`about = $${params.length}`);
     }
     if (body.city !== undefined) {
@@ -119,6 +130,27 @@ router.patch('/me', requireAuth, async (req, res, next) => {
       });
     }
 
+    let coverPacket = null;
+    if (body.coverUrl !== undefined && body.coverUrl !== null) {
+      // Cover image (item 466): same review flow as the avatar.
+      if (body.coverUrl === '') {
+        params.push(null);
+        updates.push(`cover_url = $${params.length}`);
+      } else {
+        const coverUrl = cleanStr(body.coverUrl, 500);
+        if (!coverUrl.startsWith('/uploads/public/')) {
+          return res.status(400).json({ error: { code: 'VALIDATION', message: 'Cover image must be an uploaded image.' } });
+        }
+        coverPacket = await createReviewPacket('cover', req.user.id, {
+          kind: 'cover',
+          userId: req.user.id,
+          displayName: req.user.displayName,
+          username: req.user.username,
+          coverUrl,
+        });
+      }
+    }
+
     if (updates.length) {
       params.push(req.user.id);
       await db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = $${params.length}`, params);
@@ -126,7 +158,8 @@ router.patch('/me', requireAuth, async (req, res, next) => {
     }
 
     // Notification + privacy preferences live in prefs_json (merged, not replaced).
-    if (body.notifyPrefs !== undefined || body.showTotals !== undefined || body.anonDefault !== undefined) {
+    const prefKeys = ['notifyPrefs', 'showTotals', 'anonDefault', 'hideGiftHistory', 'hideLiveAsks', 'hideFollowers', 'hideFromSupporterWall'];
+    if (prefKeys.some((k) => body[k] !== undefined)) {
       const current = await db.get('SELECT prefs_json FROM users WHERE id = $1', [req.user.id]);
       let prefs = {};
       try { prefs = JSON.parse(current?.prefs_json || '{}'); } catch { prefs = {}; }
@@ -137,8 +170,9 @@ router.patch('/me', requireAuth, async (req, res, next) => {
           brands: body.notifyPrefs.brands !== false,
         };
       }
-      if (body.showTotals !== undefined) prefs.showTotals = body.showTotals === true;
-      if (body.anonDefault !== undefined) prefs.anonDefault = body.anonDefault === true;
+      for (const k of ['showTotals', 'anonDefault', 'hideGiftHistory', 'hideLiveAsks', 'hideFollowers', 'hideFromSupporterWall']) {
+        if (body[k] !== undefined) prefs[k] = body[k] === true;
+      }
       await db.run('UPDATE users SET prefs_json = $1 WHERE id = $2', [JSON.stringify(prefs), req.user.id]);
     }
 
@@ -147,6 +181,8 @@ router.patch('/me', requireAuth, async (req, res, next) => {
       user: publicUser(user),
       photoPendingReview: Boolean(photoPacket),
       photoPacketId: photoPacket ? photoPacket.id : null,
+      coverPendingReview: Boolean(coverPacket),
+      coverPacketId: coverPacket ? coverPacket.id : null,
     });
   } catch (err) {
     next(err);
@@ -154,7 +190,8 @@ router.patch('/me', requireAuth, async (req, res, next) => {
 });
 
 // GET /api/profile/export — download my data as JSON (items 183/273/429).
-// Profile, bills, gifts (given + received), notifications, verifications.
+// Profile, bills, gifts (given + received), notifications, verifications,
+// thank-yous, follows, achievements (item 494).
 // Payout accounts are NEVER included — only the masked hints. Must stay
 // above the /:username route or "export" would match as a username.
 router.get('/export', requireAuth, async (req, res, next) => {
@@ -201,6 +238,25 @@ router.get('/export', requireAuth, async (req, res, next) => {
        FROM verifications WHERE user_id = $1 ORDER BY created_at DESC`,
       [userId]
     );
+    const thanks = await db.query(
+      `SELECT id, gift_id, bill_id, giver_id, receiver_id, body, status, created_at
+       FROM thanks WHERE giver_id = $1 OR receiver_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    const following = await db.query(
+      `SELECT f.followee_id, u.display_name, u.username, f.created_at
+       FROM follows f JOIN users u ON u.id = f.followee_id WHERE f.follower_id = $1 ORDER BY f.created_at DESC`,
+      [userId]
+    );
+    const followers = await db.query(
+      `SELECT f.follower_id, u.display_name, u.username, f.created_at
+       FROM follows f JOIN users u ON u.id = f.follower_id WHERE f.followee_id = $1 ORDER BY f.created_at DESC`,
+      [userId]
+    );
+    const achievements = await db.query(
+      `SELECT key, awarded_at FROM achievements WHERE user_id = $1 ORDER BY awarded_at ASC`,
+      [userId]
+    );
     res.set('Content-Disposition', 'attachment; filename="sahay-pay-my-data.json"');
     res.json({
       exportedAt: nowIso(),
@@ -212,6 +268,10 @@ router.get('/export', requireAuth, async (req, res, next) => {
       giftsReceived: giftsReceived.rows,
       notifications: notifications.rows,
       verifications: verifications.rows,
+      thanks: thanks.rows,
+      following: following.rows,
+      followers: followers.rows,
+      achievements: achievements.rows,
     });
   } catch (err) {
     next(err);
@@ -223,9 +283,22 @@ router.get('/:username', async (req, res, next) => {
   try {
     const user = await db.get('SELECT * FROM users WHERE username = $1', [req.params.username]);
     if (!user) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Profile not found.' } });
+    const viewerId = req.user?.id || null;
+    const isSelf = viewerId === user.id;
+    const prefs = parsePrefs(user);
+    // Blocked either way: the profile is hidden (item 449).
+    if (viewerId && !isSelf) {
+      const blocked = await db.get(
+        `SELECT id FROM user_blocks WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)`,
+        [viewerId, user.id]
+      );
+      if (blocked) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Profile not found.' } });
+    }
+    // Live badges only (expired badges don't count, item 306).
     const badges = await db.query(
-      `SELECT type, status FROM verifications WHERE user_id = $1 AND status = 'approved'`,
-      [user.id]
+      `SELECT type FROM verifications WHERE user_id = $1 AND status = 'approved'
+       AND (expires_at IS NULL OR expires_at > $2)`,
+      [user.id, nowIso()]
     );
     const liveAsks = await db.query(
       `SELECT id, title, category, amount_minor, covered_minor, currency, photo_url, created_at
@@ -235,7 +308,52 @@ router.get('/:username', async (req, res, next) => {
     const totals = await db.get(
       `SELECT
          (SELECT COALESCE(SUM(amount_minor), 0) FROM gifts g WHERE g.supporter_id = $1 AND g.status = 'confirmed') AS given,
-         (SELECT COALESCE(SUM(g.amount_minor), 0) FROM gifts g JOIN bills b ON b.id = g.bill_id WHERE b.user_id = $2 AND g.status = 'confirmed') AS received`,
+         (SELECT COALESCE(SUM(g.amount_minor), 0) FROM gifts g JOIN bills b ON b.id = g.bill_id WHERE b.user_id = $2 AND g.status = 'confirmed') AS received,
+         (SELECT COUNT(*) FROM bills WHERE user_id = $3 AND status IN ('approved','completed')) AS bills_posted,
+         (SELECT COUNT(*) FROM bills WHERE user_id = $4 AND status = 'completed') AS bills_completed,
+         (SELECT COUNT(DISTINCT bill_id) FROM gifts WHERE supporter_id = $5 AND status = 'confirmed') AS bills_helped,
+         (SELECT COUNT(DISTINCT b.user_id) FROM gifts g JOIN bills b ON b.id = g.bill_id WHERE g.supporter_id = $6 AND g.status = 'confirmed') AS people_helped`,
+      [user.id, user.id, user.id, user.id, user.id, user.id]
+    );
+    const stats = await userGiftStats(user.id);
+    const tier = tierForCount(stats.gifts);
+    const achievements = await listAchievements(user.id);
+    // Helper-of-the-month badge (item 500): awarded lazily on read.
+    try { await maybeAwardHelperOfMonth(user.id); } catch { /* best-effort */ }
+    // Gift history (item 469): confirmed gifts, date + category + amount
+    // band — never exact recipient details. Hidden when the pref is set.
+    let giftHistory = [];
+    if (!prefs.hideGiftHistory || isSelf) {
+      const hist = await db.query(
+        `SELECT g.confirmed_at, g.amount_minor, g.currency, b.category
+         FROM gifts g JOIN bills b ON b.id = g.bill_id
+         WHERE g.supporter_id = $1 AND g.status = 'confirmed'
+         ORDER BY g.confirmed_at DESC LIMIT 50`,
+        [user.id]
+      );
+      giftHistory = hist.rows.map((r) => ({
+        confirmedAt: r.confirmed_at,
+        category: r.category,
+        currency: r.currency,
+        // Amount band, not the exact amount.
+        amountBand: r.amount_minor <= 500000 ? 'small' : r.amount_minor <= 2500000 ? 'medium' : 'large',
+      }));
+    }
+    // Thank-you wall (item 423): approved thank-yous received.
+    const wall = await db.query(
+      `SELECT t.id, t.body, t.video_url, t.created_at, b.title AS bill_title,
+              u.display_name AS receiver_name, u.username AS receiver_username,
+              (SELECT COUNT(*) FROM thank_reactions r WHERE r.thank_id = t.id) AS reactions
+       FROM thanks t JOIN bills b ON b.id = t.bill_id JOIN users u ON u.id = t.receiver_id
+       WHERE t.giver_id = $1 AND t.status = 'approved' ORDER BY t.created_at DESC LIMIT 20`,
+      [user.id]
+    );
+    // Thank-you rate (item 490): share of confirmed gifts received that
+    // the receiver thanked.
+    const thankRate = await db.get(
+      `SELECT
+         (SELECT COUNT(*) FROM gifts g JOIN bills b ON b.id = g.bill_id WHERE b.user_id = $1 AND g.status = 'confirmed') AS received_gifts,
+         (SELECT COUNT(*) FROM thanks t WHERE t.receiver_id = $2 AND t.status = 'approved') AS thanked`,
       [user.id, user.id]
     );
     const completedAsks = await db.get(
@@ -281,7 +399,37 @@ router.get('/:username', async (req, res, next) => {
         cursor = new Date(new Date(`${cursor}T00:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10);
       }
     }
-    const prefs = parsePrefs(user);
+    const receivedGifts = Number(thankRate?.received_gifts || 0);
+    const thanked = Number(thankRate?.thanked || 0);
+    // Follower counts + viewer follow state (items 443/444/448).
+    const followCounts = await db.get(
+      `SELECT
+         (SELECT COUNT(*) FROM follows WHERE followee_id = $1) AS followers,
+         (SELECT COUNT(*) FROM follows WHERE follower_id = $2) AS following`,
+      [user.id, user.id]
+    );
+    let following = false;
+    let blockedByViewer = false;
+    if (viewerId && !isSelf) {
+      following = Boolean(await db.get(
+        'SELECT id FROM follows WHERE follower_id = $1 AND followee_id = $2', [viewerId, user.id]
+      ));
+      blockedByViewer = Boolean(await db.get(
+        'SELECT id FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewerId, user.id]
+      ));
+    }
+    // Response time (item 397): median confirm latency on received gifts.
+    const latencies = await db.query(
+      `SELECT g.created_at, g.confirmed_at FROM gifts g JOIN bills b ON b.id = g.bill_id
+       WHERE b.user_id = $1 AND g.status = 'confirmed' AND g.confirmed_at IS NOT NULL
+       ORDER BY g.confirmed_at DESC LIMIT 50`,
+      [user.id]
+    );
+    const hours = latencies.rows
+      .map((r) => (new Date(r.confirmed_at).getTime() - new Date(r.created_at).getTime()) / 3600000)
+      .filter((h) => Number.isFinite(h) && h >= 0)
+      .sort((a, b) => a - b);
+    const responseTimeHours = hours.length ? Math.round(hours[Math.floor(hours.length / 2)] * 10) / 10 : null;
     res.json({
       user: {
         displayName: user.display_name,
@@ -290,16 +438,24 @@ router.get('/:username', async (req, res, next) => {
         city: user.city,
         about: user.about,
         photoUrl: user.photo_url,
+        coverUrl: user.cover_url || null,
         memberSince: user.created_at,
+        // Verified-helper indicator (item 394): confirmed-gift history.
+        verifiedHelper: stats.gifts > 0,
       },
       badges: badges.rows.map((r) => r.type),
-      liveAsks: liveAsks.rows.map((r) => ({
+      liveAsks: (prefs.hideLiveAsks && !isSelf) ? [] : liveAsks.rows.map((r) => ({
         id: r.id, title: r.title, category: r.category, amountMinor: r.amount_minor,
         coveredMinor: r.covered_minor, currency: r.currency, photoUrl: r.photo_url, createdAt: r.created_at,
       })),
-      totals: { givenMinor: Number(totals?.given || 0), receivedMinor: Number(totals?.received || 0) },
+      totals: {
+        givenMinor: Number(totals?.given || 0), receivedMinor: Number(totals?.received || 0),
+        billsPosted: Number(totals?.bills_posted || 0),
+        billsCompleted: Number(totals?.bills_completed || 0),
+        billsHelped: Number(totals?.bills_helped || 0),
+        peopleHelped: Number(totals?.people_helped || 0),
+      },
       completedAsks: Number(completedAsks?.c || 0),
-      showTotals: prefs.showTotals,
       impact: {
         confirmedGifts: impactRows.rows.length,
         billsHelped: billsHelped.size,
@@ -307,6 +463,26 @@ router.get('/:username', async (req, res, next) => {
         currentStreakDays: currentStreak,
         longestStreakDays: longestStreak,
       },
+      tier: { ...tier, gifts: stats.gifts },
+      streak: { weeks: stats.streakWeeks, freezeUsed: stats.freezeUsed },
+      achievements,
+      giftHistory,
+      thankYouWall: wall.rows.map((r) => ({
+        id: r.id, body: r.body, videoUrl: r.video_url, createdAt: r.created_at,
+        billTitle: r.bill_title, receiverName: r.receiver_name, receiverUsername: r.receiver_username,
+        reactions: Number(r.reactions || 0),
+      })),
+      thankYouRate: receivedGifts > 0 ? Math.round((thanked / receivedGifts) * 100) : null,
+      bestWeekMinor: stats.bestWeekMinor,
+      bestWeek: stats.bestWeek || null,
+      responseTimeHours,
+      followers: prefs.hideFollowers && !isSelf ? null : Number(followCounts?.followers || 0),
+      followingCount: prefs.hideFollowers && !isSelf ? null : Number(followCounts?.following || 0),
+      isFollowing: following,
+      isBlockedByViewer: blockedByViewer,
+      showTotals: prefs.showTotals,
+      hideGiftHistory: prefs.hideGiftHistory,
+      hideLiveAsks: prefs.hideLiveAsks,
     });
   } catch (err) {
     next(err);
@@ -314,14 +490,28 @@ router.get('/:username', async (req, res, next) => {
 });
 
 // Delete account: revokes all sessions and deletes the user row (cascades to
-// their bills, gifts, notifications, sessions). Anonymous bill statistics
-// are NOT kept in this build — deletion is full deletion.
+// their bills, gifts, notifications, sessions). Anonymised gift counts are
+// kept for the leaderboards (item 495) — totals only, no identity.
 router.post('/delete', requireAuth, async (req, res, next) => {
   try {
     const userId = req.user.id;
+    // Keep anonymised counts (item 495) before the cascade deletes gifts.
+    const anon = await db.query(
+      `SELECT currency, COALESCE(SUM(amount_minor), 0) AS total, COUNT(*) AS gifts,
+              COUNT(DISTINCT bill_id) AS bills_helped
+       FROM gifts WHERE supporter_id = $1 AND status = 'confirmed' GROUP BY currency`,
+      [userId]
+    );
+    for (const r of anon.rows) {
+      await db.run(
+        `INSERT INTO anon_stats (id, currency, total_minor, gifts, bills_helped, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [crypto.randomUUID(), r.currency, Number(r.total), Number(r.gifts), Number(r.bills_helped), nowIso()]
+      );
+    }
     await destroyAllUserSessions(userId);
     await db.run('DELETE FROM users WHERE id = $1', [userId]);
-    await logAudit('user', userId, 'user_deleted', 'user', userId, {});
+    await logAudit('user', userId, 'user_deleted', 'user', userId, { anonKept: anon.rows.length });
     res.clearCookie('sp_session', { path: '/' });
     res.json({ ok: true, message: 'Your account and its data have been deleted.' });
   } catch (err) {

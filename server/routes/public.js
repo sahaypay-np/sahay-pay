@@ -14,6 +14,7 @@ const { feeModelSentence } = require('../lib/fees');
 const { TERMS_VERSION, PRIVACY_VERSION, POLICY_EFFECTIVE_DATE } = require('../lib/policy');
 const { CITIES, findCity, haversineKm } = require('../lib/cities');
 const { askTypeOf, expiryOf, isExpired } = require('./bills');
+const { tierForCount, computeStreak, listAchievements, weekKeyOf } = require('../lib/achievements');
 
 const router = express.Router();
 
@@ -465,9 +466,10 @@ router.get('/feed', async (req, res, next) => {
       const userIds = [...new Set(pageIds.map((id) => userByBill.get(id)).filter(Boolean))];
       const badgeRows = await db.query(
         `SELECT bill_id, user_id, type FROM verifications
-         WHERE status = 'approved' AND (bill_id IN (${ph})
+         WHERE status = 'approved' AND (expires_at IS NULL OR expires_at > $${pageIds.length + userIds.length + 1})
+           AND (bill_id IN (${ph})
            OR (bill_id IS NULL AND user_id IN (${userIds.map((_, i) => `$${pageIds.length + i + 1}`).join(',')})))`,
-        [...pageIds, ...userIds]
+        [...pageIds, ...userIds, new Date().toISOString()]
       );
       const hintRows = await db.query(
         `SELECT bill_id, method, account_hint FROM payout_methods WHERE bill_id IN (${ph})`,
@@ -490,6 +492,8 @@ router.get('/feed', async (req, res, next) => {
       }
       for (const b of page) {
         b.badges = [...(badgesByBill.get(b.id) || [])];
+        // Pay-direct verified (item 304): an approved biller badge.
+        b.payDirectVerified = b.badges.includes('biller');
         b.payoutHints = hintsByBill.get(b.id) || [];
         b.payoutHint = b.payoutHints.length ? b.payoutHints[0].hint : null;
       }
@@ -603,49 +607,121 @@ router.get('/feed/suggest', async (req, res, next) => {
 
 router.get('/leaders', async (req, res, next) => {
   try {
-    // Canonical vocab: top_supporters | most_received | top_bills | fully_paid | brands.
+    // Canonical vocab: top_supporters | most_received | top_bills | fully_paid | brands | streak | most_thanked.
     // Short aliases (supporters, received, bills, paid) are accepted too.
     const TAB_ALIASES = {
       supporters: 'top_supporters', received: 'most_received',
-      bills: 'top_bills', paid: 'fully_paid',
+      bills: 'top_bills', paid: 'fully_paid', thanked: 'most_thanked',
     };
     const tabRaw = TAB_ALIASES[req.query.tab] || req.query.tab;
-    const tab = ['top_supporters', 'most_received', 'top_bills', 'fully_paid', 'brands'].includes(tabRaw)
+    const tab = ['top_supporters', 'most_received', 'top_bills', 'fully_paid', 'brands', 'streak', 'most_thanked'].includes(tabRaw)
       ? tabRaw
       : 'top_supporters';
     const periodRaw = req.query.period === '7' ? '7d' : req.query.period === '30' ? '30d' : req.query.period;
     const period = ['7d', '30d', 'all'].includes(periodRaw) ? periodRaw : '7d';
     const scope = ['NP', 'IN', 'all'].includes(req.query.scope) ? req.query.scope : 'all';
-    // Item 289: separate NPR / INR leaderboards — totals are never mixed
-    // across currencies. Default 'all' keeps the combined view.
     const currency = ['NPR', 'INR'].includes(req.query.currency) ? req.query.currency : null;
-    const since = period === 'all'
-      ? null
-      : new Date(Date.now() - (period === '7d' ? 7 : 30) * 24 * 3600000).toISOString();
+    // Weekly archive (item 496): ?week=YYYY-Www freezes one past ISO week.
+    // Bounds: Monday 00:00 UTC of that week to the next Monday.
+    function weekBounds(key) {
+      const m = /^(\d{4})-W(\d{2})$/.exec(key || '');
+      if (!m) return null;
+      const year = Number(m[1]), week = Number(m[2]);
+      if (week < 1 || week > 53) return null;
+      const jan4 = new Date(Date.UTC(year, 0, 4));
+      const monday1 = new Date(jan4.getTime() - ((jan4.getUTCDay() + 6) % 7) * 86400000);
+      const start = new Date(monday1.getTime() + (week - 1) * 7 * 86400000);
+      const end = new Date(start.getTime() + 7 * 86400000);
+      if (start.getTime() > Date.now()) return null; // no future weeks
+      return { start: start.toISOString(), end: end.toISOString() };
+    }
+    const archiveWeek = weekBounds(req.query.week) ? req.query.week : null;
+    const archiveBounds = archiveWeek ? weekBounds(archiveWeek) : null;
+    // Last 4 completed ISO weeks (excluding the current week), newest first.
+    const archiveWeeks = [];
+    {
+      let cursor = new Date(Date.now() - 7 * 86400000);
+      while (archiveWeeks.length < 4) {
+        const k = weekKeyOf(cursor);
+        if (!archiveWeeks.includes(k)) archiveWeeks.push(k);
+        cursor = new Date(cursor.getTime() - 7 * 86400000);
+      }
+    }
+    const since = archiveBounds
+      ? archiveBounds.start
+      : period === 'all'
+        ? null
+        : new Date(Date.now() - (period === '7d' ? 7 : 30) * 24 * 3600000).toISOString();
+    const until = archiveBounds ? archiveBounds.end : null;
 
     const params = [];
-    let where = `g.status = 'confirmed'`;
+    // Gifts on removed bills never count (item 406).
+    let where = `g.status = 'confirmed' AND b.status != 'removed'`;
     if (since) { params.push(since); where += ` AND g.confirmed_at >= $${params.length}`; }
+    if (until) { params.push(until); where += ` AND g.confirmed_at < $${params.length}`; }
     if (scope !== 'all') { params.push(scope); where += ` AND b.country = $${params.length}`; }
     if (currency) { params.push(currency); where += ` AND g.currency = $${params.length}`; }
+
+    // Rank change (item 475): ranks in the previous equal-length period.
+    // Archive weeks are frozen snapshots — no rank change.
+    async function previousRanks() {
+      if (period === 'all' || archiveBounds) return new Map();
+      const spanMs = (period === '7d' ? 7 : 30) * 24 * 3600000;
+      const prevEnd = new Date(Date.now() - spanMs).toISOString();
+      const prevStart = new Date(Date.now() - 2 * spanMs).toISOString();
+      const p = [];
+      let w = `g.status = 'confirmed' AND b.status != 'removed' AND g.confirmed_at >= $1 AND g.confirmed_at < $2`;
+      p.push(prevStart, prevEnd);
+      if (scope !== 'all') { p.push(scope); w += ` AND b.country = $${p.length}`; }
+      const { rows } = await db.query(
+        `SELECT g.supporter_id AS id, SUM(g.amount_minor) AS total_minor
+         FROM gifts g JOIN bills b ON b.id = g.bill_id
+         WHERE ${w} GROUP BY g.supporter_id ORDER BY total_minor DESC LIMIT 50`,
+        p
+      );
+      return new Map(rows.map((r, i) => [r.id, i + 1]));
+    }
 
     if (tab === 'top_supporters') {
       const { rows } = await db.query(
         `SELECT g.supporter_id AS id, u.display_name AS display_name, u.username, u.photo_url, u.country,
                 SUM(g.amount_minor) AS total_minor, g.currency AS currency, COUNT(*) AS gifts,
-                COUNT(DISTINCT g.bill_id) AS bills_helped
+                COUNT(DISTINCT g.bill_id) AS bills_helped,
+                MIN(g.anonymous) AS all_anonymous,
+                (SELECT COUNT(*) FROM gifts g2 WHERE g2.supporter_id = g.supporter_id AND g2.status = 'confirmed') AS lifetime_gifts
          FROM gifts g JOIN bills b ON b.id = g.bill_id JOIN users u ON u.id = g.supporter_id
          WHERE ${where}
          GROUP BY g.supporter_id, u.display_name, u.username, u.photo_url, u.country, g.currency
          ORDER BY total_minor DESC LIMIT 50`,
         params
       );
+      const prev = await previousRanks();
+      const anonTotals = await db.query(
+        `SELECT currency, COALESCE(SUM(total_minor), 0) AS total, COALESCE(SUM(gifts), 0) AS gifts,
+                COALESCE(SUM(bills_helped), 0) AS bills_helped FROM anon_stats GROUP BY currency`
+      );
       return res.json({
-        tab, period, scope, currency: currency || 'all',
-        leaders: rows.map((r, i) => ({
-          rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
-          photoUrl: r.photo_url, country: r.country, totalMinor: Number(r.total_minor),
-          currency: r.currency, gifts: Number(r.gifts), billsHelped: Number(r.bills_helped),
+        tab, period, scope, currency: currency || 'all', archiveWeek, archiveWeeks,
+        leaders: rows.map((r, i) => {
+          const anonymous = Number(r.all_anonymous) === 1;
+          const tier = tierForCount(Number(r.lifetime_gifts || 0)).tier;
+          const prevRank = prev.get(r.id);
+          return {
+            rank: i + 1,
+            rankChange: prevRank == null ? 'new' : prevRank - (i + 1),
+            id: anonymous ? null : r.id,
+            displayName: anonymous ? 'Anonymous' : r.display_name,
+            username: anonymous ? null : r.username,
+            photoUrl: anonymous ? null : r.photo_url,
+            country: r.country, totalMinor: Number(r.total_minor),
+            currency: r.currency, gifts: Number(r.gifts), billsHelped: Number(r.bills_helped),
+            anonymous,
+            tier: tier ? { key: tier.key, name: tier.name, icon: tier.icon } : null,
+          };
+        }),
+        // Anonymised counts kept when accounts are deleted (item 495).
+        anonymousTotals: anonTotals.rows.map((r) => ({
+          currency: r.currency, totalMinor: Number(r.total), gifts: Number(r.gifts), billsHelped: Number(r.bills_helped),
         })),
         emptyMessage: rows.length === 0 ? 'No confirmed help yet — be the first legend.' : undefined,
       });
@@ -662,7 +738,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope, currency: currency || 'all',
+        tab, period, scope, currency: currency || 'all', archiveWeek, archiveWeeks,
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
           photoUrl: r.photo_url, country: r.country, totalMinor: Number(r.total_minor),
@@ -684,7 +760,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope, currency: currency || 'all',
+        tab, period, scope, currency: currency || 'all', archiveWeek, archiveWeeks,
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, title: r.title, amountMinor: r.amount_minor,
           coveredMinor: r.covered_minor, currency: r.currency, country: r.country,
@@ -706,7 +782,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope, currency: currency || 'all',
+        tab, period, scope, currency: currency || 'all', archiveWeek, archiveWeeks,
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
           photoUrl: r.photo_url, country: r.country, billsPaid: Number(r.bills_paid),
@@ -715,25 +791,368 @@ router.get('/leaders', async (req, res, next) => {
       });
     }
 
-    // brands tab: most responded / most asked (honest zeroes when empty)
+    if (tab === 'streak') {
+      // Streak leaderboard (item 422): consecutive weeks with ≥1
+      // confirmed gift, computed per giver from real data.
+      const { rows } = await db.query(
+        `SELECT DISTINCT g.supporter_id AS id, u.display_name AS display_name, u.username, u.photo_url, u.country
+         FROM gifts g JOIN bills b ON b.id = g.bill_id JOIN users u ON u.id = g.supporter_id
+         WHERE ${where}`,
+        params
+      );
+      const streaks = [];
+      for (const r of rows) {
+        const s = await computeStreak(r.id);
+        if (s.weeks > 0) streaks.push({ ...r, weeks: s.weeks });
+      }
+      streaks.sort((a, b) => b.weeks - a.weeks);
+      return res.json({
+        tab, period, scope, archiveWeek, archiveWeeks,
+        leaders: streaks.slice(0, 50).map((r, i) => ({
+          rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
+          photoUrl: r.photo_url, country: r.country, streakWeeks: r.weeks,
+        })),
+        emptyMessage: streaks.length === 0 ? 'No helping streaks yet — help two weeks in a row to start one.' : undefined,
+      });
+    }
+
+    if (tab === 'most_thanked') {
+      // Most-thanked givers (item 498): approved thank-yous received.
+      const tParams = [];
+      let tWhere = `t.status = 'approved'`;
+      if (since) { tParams.push(since); tWhere += ` AND t.created_at >= $${tParams.length}`; }
+      if (until) { tParams.push(until); tWhere += ` AND t.created_at < $${tParams.length}`; }
+      if (scope !== 'all') { tParams.push(scope); tWhere += ` AND b.country = $${tParams.length}`; }
+      const { rows } = await db.query(
+        `SELECT t.giver_id AS id, u.display_name AS display_name, u.username, u.photo_url, u.country,
+                COUNT(*) AS thanks
+         FROM thanks t JOIN users u ON u.id = t.giver_id JOIN bills b ON b.id = t.bill_id
+         WHERE ${tWhere}
+         GROUP BY t.giver_id, u.display_name, u.username, u.photo_url, u.country
+         ORDER BY thanks DESC LIMIT 50`,
+        tParams
+      );
+      return res.json({
+        tab, period, scope, archiveWeek, archiveWeeks,
+        leaders: rows.map((r, i) => ({
+          rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
+          photoUrl: r.photo_url, country: r.country, thanks: Number(r.thanks),
+        })),
+        emptyMessage: rows.length === 0 ? 'No public thank-yous yet.' : undefined,
+      });
+    }
+
+    // brands tab: most responded / most asked (honest zeroes when empty).
+    // The period filter applies (item 600).
+    const respParams = [];
+    let respondedWhere = `bc.status = 'connected'`;
+    if (since) { respParams.push(since); respondedWhere += ` AND bc.created_at >= $${respParams.length}`; }
+    if (until) { respParams.push(until); respondedWhere += ` AND bc.created_at < $${respParams.length}`; }
     const responded = await db.query(
       `SELECT bc.brand_name AS name, COUNT(*) AS responses, COUNT(DISTINCT br.country) AS countries
        FROM brand_connects bc JOIN brands br ON br.id = bc.brand_id
-       WHERE bc.status = 'connected'
-       GROUP BY bc.brand_name ORDER BY responses DESC LIMIT 50`
+       WHERE ${respondedWhere}
+       GROUP BY bc.brand_name ORDER BY responses DESC LIMIT 50`,
+      respParams
     );
+    const askedParams = [];
+    let askedWhere = `status = 'approved'`;
+    if (since) { askedParams.push(since); askedWhere += ` AND created_at >= $${askedParams.length}`; }
+    if (until) { askedParams.push(until); askedWhere += ` AND created_at < $${askedParams.length}`; }
     const asked = await db.query(
-      `SELECT name, COUNT(*) AS asks FROM brands WHERE status = 'approved'
-       GROUP BY name ORDER BY asks DESC LIMIT 50`
+      `SELECT name, COUNT(*) AS asks FROM brands WHERE ${askedWhere}
+       GROUP BY name ORDER BY asks DESC LIMIT 50`,
+      askedParams
     );
     return res.json({
-      tab, period, scope, currency: currency || 'all',
+      tab, period, scope, currency: currency || 'all', archiveWeek, archiveWeeks,
       mostResponded: responded.rows.map((r, i) => ({ rank: i + 1, name: r.name, responses: Number(r.responses), countries: Number(r.countries) })),
       mostAsked: asked.rows.map((r, i) => ({ rank: i + 1, name: r.name, asks: Number(r.asks) })),
       emptyMessage: responded.rows.length === 0 && asked.rows.length === 0
         ? 'No brand responses yet — honest zeroes.'
         : undefined,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Hall of Fame (items 407–409) ---
+// All-time top supporters with lifetime totals + first-helped date, and
+// the most fully-paid bills with links. Monthly snapshots (?month=YYYY-MM)
+// are computed lazily from confirmed_at — no scheduler (P1-254).
+// Anonymous givers are excluded (item 454).
+
+router.get('/hall-of-fame', async (req, res, next) => {
+  try {
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : null;
+    let params = [];
+    let where = `g.status = 'confirmed' AND b.status != 'removed' AND g.anonymous = 0`;
+    if (month) {
+      const [y, m] = month.split('-').map(Number);
+      params.push(new Date(Date.UTC(y, m - 1, 1)).toISOString());
+      params.push(new Date(Date.UTC(y, m, 1)).toISOString());
+      where += ` AND g.confirmed_at >= $${params.length - 1} AND g.confirmed_at < $${params.length}`;
+    }
+    const { rows } = await db.query(
+      `SELECT g.supporter_id AS id, u.display_name AS display_name, u.username, u.photo_url, u.country,
+              SUM(g.amount_minor) AS total_minor, g.currency AS currency, COUNT(*) AS gifts,
+              COUNT(DISTINCT g.bill_id) AS bills_helped,
+              MIN(g.confirmed_at) AS first_helped,
+              (SELECT COUNT(*) FROM gifts g3 WHERE g3.supporter_id = g.supporter_id AND g3.status = 'confirmed') AS lifetime_gifts,
+              (SELECT COUNT(DISTINCT g2.bill_id) FROM gifts g2 JOIN bills b2 ON b2.id = g2.bill_id
+               WHERE g2.supporter_id = g.supporter_id AND g2.status = 'confirmed' AND b2.status = 'completed') AS bills_paid
+       FROM gifts g JOIN bills b ON b.id = g.bill_id JOIN users u ON u.id = g.supporter_id
+       WHERE ${where}
+       GROUP BY g.supporter_id, u.display_name, u.username, u.photo_url, u.country, g.currency
+       ORDER BY total_minor DESC LIMIT 50`,
+      params
+    );
+    // Most fully-paid bills (item 408): completed bills with helper counts.
+    const paidParams = month ? params : [];
+    const paidWhere = month
+      ? `b.status = 'completed' AND b.completed_at >= $1 AND b.completed_at < $2`
+      : `b.status = 'completed'`;
+    const paid = await db.query(
+      `SELECT b.id, b.title, b.category, b.amount_minor, b.currency, b.completed_at,
+              (SELECT COUNT(DISTINCT supporter_id) FROM gifts WHERE bill_id = b.id AND status = 'confirmed') AS helpers
+       FROM bills b WHERE ${paidWhere} ORDER BY b.completed_at DESC LIMIT 20`,
+      paidParams
+    );
+    // Past months with activity (for the snapshot browser).
+    const months = await db.query(
+      `SELECT DISTINCT substr(confirmed_at, 1, 7) AS month FROM gifts
+       WHERE status = 'confirmed' AND confirmed_at IS NOT NULL ORDER BY month DESC LIMIT 24`
+    );
+    res.json({
+      month: month || 'all',
+      entries: rows.map((r, i) => ({
+        rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
+        photoUrl: r.photo_url, country: r.country, totalMinor: Number(r.total_minor),
+        currency: r.currency, gifts: Number(r.gifts), billsHelped: Number(r.bills_helped),
+        billsPaid: Number(r.bills_paid), firstHelped: r.first_helped,
+        tier: tierForCount(Number(r.lifetime_gifts || 0)).tier,
+      })),
+      fullyPaid: paid.rows.map((r) => ({
+        id: r.id, title: r.title, category: r.category, amountMinor: r.amount_minor,
+        currency: r.currency, completedAt: r.completed_at, helpers: Number(r.helpers),
+      })),
+      months: months.rows.map((r) => r.month),
+      emptyMessage: rows.length === 0 ? 'No Hall of Fame entries yet — the first legends are still being written.' : undefined,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Community page (items 458–461, 481, 484, 544/546, 549) ---
+
+router.get('/community', async (req, res, next) => {
+  try {
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    const newestBills = await db.query(
+      `SELECT b.id, b.title, b.category, b.amount_minor, b.covered_minor, b.currency,
+              b.photo_url, b.created_at, u.display_name AS poster_name, u.username AS poster_username
+       FROM bills b JOIN users u ON u.id = b.user_id
+       WHERE b.status = 'approved' ORDER BY b.created_at DESC LIMIT 6`
+    );
+    const thanks = await db.query(
+      `SELECT t.id, t.body, t.video_url, t.created_at, b.title AS bill_title,
+              u.display_name AS giver_name, u.username AS giver_username,
+              r.display_name AS receiver_name
+       FROM thanks t JOIN bills b ON b.id = t.bill_id
+       JOIN users u ON u.id = t.giver_id JOIN users r ON r.id = t.receiver_id
+       WHERE t.status = 'approved' ORDER BY t.created_at DESC LIMIT 6`
+    );
+    const top3 = await db.query(
+      `SELECT g.supporter_id AS id, u.display_name AS display_name, u.username, u.photo_url, u.country,
+              SUM(g.amount_minor) AS total_minor, g.currency AS currency, COUNT(*) AS gifts
+       FROM gifts g JOIN bills b ON b.id = g.bill_id JOIN users u ON u.id = g.supporter_id
+       WHERE g.status = 'confirmed' AND b.status != 'removed' AND g.confirmed_at >= $1
+       GROUP BY g.supporter_id, u.display_name, u.username, u.photo_url, u.country, g.currency
+       ORDER BY total_minor DESC LIMIT 3`,
+      [weekAgo]
+    );
+    // Weekly digest (item 460): real counts only.
+    const digest = await db.get(
+      `SELECT
+         (SELECT COUNT(*) FROM gifts WHERE status = 'confirmed' AND confirmed_at >= $1) AS gifts_week,
+         (SELECT COUNT(*) FROM bills WHERE status = 'completed' AND completed_at >= $2) AS paid_week,
+         (SELECT COUNT(*) FROM gifts WHERE status = 'confirmed') AS gifts_all,
+         (SELECT COUNT(*) FROM bills WHERE status = 'completed') AS paid_all`,
+      [weekAgo, weekAgo]
+    );
+    // Newest helpers (item 461): most recent first-time givers.
+    const newestHelpers = await db.query(
+      `SELECT u.id, u.display_name, u.username, u.photo_url, MIN(g.confirmed_at) AS first_helped
+       FROM gifts g JOIN users u ON u.id = g.supporter_id
+       WHERE g.status = 'confirmed' AND g.anonymous = 0
+       GROUP BY u.id, u.display_name, u.username, u.photo_url
+       ORDER BY first_helped DESC LIMIT 6`
+    );
+    // Giver of the week (item 481) = top3[0].
+    // Receiver stories feed (item 484).
+    const stories = await db.query(
+      `SELECT s.id, s.body, s.created_at, b.id AS bill_id, b.title AS bill_title,
+              u.display_name AS author_name, u.username AS author_username
+       FROM receiver_stories s JOIN bills b ON b.id = s.bill_id JOIN users u ON u.id = s.user_id
+       WHERE s.status = 'approved' ORDER BY s.created_at DESC LIMIT 6`
+    );
+    // CSR stories feed (item 549).
+    const csr = await db.query(
+      `SELECT c.id, c.title, c.body, c.image_url, c.created_at,
+              bp.name AS brand_name, bp.id AS brand_profile_id
+       FROM csr_updates c JOIN brand_profiles bp ON bp.id = c.brand_profile_id
+       WHERE c.status = 'approved' ORDER BY c.created_at DESC LIMIT 6`
+    );
+    // Featured brand of the week (items 544/546/547): the configured
+    // brand, only while its week is current.
+    const featuredId = await db.getSetting('featured_brand_id');
+    const featuredWeek = await db.getSetting('featured_brand_week');
+    let featured = null;
+    if (featuredId && featuredWeek) {
+      const now = new Date();
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      const day = (d.getUTCDay() + 6) % 7;
+      d.setUTCDate(d.getUTCDate() - day + 3);
+      const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+      const week = 1 + Math.round(((d - yearStart) / 86400000 - 3 + ((yearStart.getUTCDay() + 6) % 7)) / 7);
+      const weekKey = `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+      if (weekKey === featuredWeek) {
+        const bp = await db.get('SELECT * FROM brand_profiles WHERE id = $1 AND status = $2', [featuredId, 'approved']);
+        if (bp) {
+          featured = {
+            id: bp.id, name: bp.name, industry: bp.industry, country: bp.country,
+            city: bp.city, description: bp.description, logoUrl: bp.logo_url, verified: bp.verified === 1,
+          };
+        }
+      }
+    }
+    res.json({
+      newestBills: newestBills.rows.map((r) => ({
+        id: r.id, title: r.title, category: r.category, amountMinor: r.amount_minor,
+        coveredMinor: r.covered_minor, currency: r.currency, photoUrl: r.photo_url,
+        createdAt: r.created_at, posterName: r.poster_name, posterUsername: r.poster_username,
+      })),
+      thanks: thanks.rows.map((r) => ({
+        id: r.id, body: r.body, videoUrl: r.video_url, createdAt: r.created_at,
+        billTitle: r.bill_title, giverName: r.giver_name, giverUsername: r.giver_username,
+        receiverName: r.receiver_name,
+      })),
+      topSupporters: top3.rows.map((r, i) => ({
+        rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
+        photoUrl: r.photo_url, country: r.country, totalMinor: Number(r.total_minor),
+        currency: r.currency, gifts: Number(r.gifts),
+      })),
+      giverOfWeek: top3.rows[0] ? {
+        id: top3.rows[0].id, displayName: top3.rows[0].display_name, username: top3.rows[0].username,
+        photoUrl: top3.rows[0].photo_url, totalMinor: Number(top3.rows[0].total_minor),
+        currency: top3.rows[0].currency, gifts: Number(top3.rows[0].gifts),
+      } : null,
+      digest: {
+        giftsWeek: Number(digest?.gifts_week || 0), paidWeek: Number(digest?.paid_week || 0),
+        giftsAll: Number(digest?.gifts_all || 0), paidAll: Number(digest?.paid_all || 0),
+      },
+      newestHelpers: newestHelpers.rows.map((r) => ({
+        id: r.id, displayName: r.display_name, username: r.username,
+        photoUrl: r.photo_url, firstHelped: r.first_helped,
+      })),
+      stories: stories.rows.map((r) => ({
+        id: r.id, body: r.body, createdAt: r.created_at, billId: r.bill_id,
+        billTitle: r.bill_title, authorName: r.author_name, authorUsername: r.author_username,
+      })),
+      csrStories: csr.rows.map((r) => ({
+        id: r.id, title: r.title, body: r.body, imageUrl: r.image_url, createdAt: r.created_at,
+        brandName: r.brand_name, brandProfileId: r.brand_profile_id,
+      })),
+      featured,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Platform milestones (items 478/479) ---
+// Real aggregate totals + the dates thresholds were reached (the date of
+// the Nth confirmed gift / Nth completed bill).
+
+const MILESTONE_THRESHOLDS = [10, 50, 100, 500, 1000, 5000];
+
+router.get('/milestones', async (req, res, next) => {
+  try {
+    const totals = await db.get(
+      `SELECT
+         (SELECT COUNT(*) FROM gifts WHERE status = 'confirmed') AS gifts,
+         (SELECT COUNT(*) FROM bills WHERE status = 'completed') AS paid,
+         (SELECT COUNT(DISTINCT supporter_id) FROM gifts WHERE status = 'confirmed') AS helpers,
+         (SELECT COALESCE(SUM(amount_minor), 0) FROM gifts WHERE status = 'confirmed' AND currency = 'NPR') AS npr_minor,
+         (SELECT COALESCE(SUM(amount_minor), 0) FROM gifts WHERE status = 'confirmed' AND currency = 'INR') AS inr_minor`
+    );
+    const giftDates = await db.query(
+      `SELECT confirmed_at FROM gifts WHERE status = 'confirmed' ORDER BY confirmed_at ASC`
+    );
+    const paidDates = await db.query(
+      `SELECT completed_at FROM bills WHERE status = 'completed' AND completed_at IS NOT NULL ORDER BY completed_at ASC`
+    );
+    const milestones = [];
+    for (const n of MILESTONE_THRESHOLDS) {
+      if (giftDates.rows.length >= n) {
+        milestones.push({ kind: 'gifts', threshold: n, reachedAt: giftDates.rows[n - 1].confirmed_at });
+      }
+      if (paidDates.rows.length >= n) {
+        milestones.push({ kind: 'bills_paid', threshold: n, reachedAt: paidDates.rows[n - 1].completed_at });
+      }
+    }
+    milestones.sort((a, b) => new Date(b.reachedAt) - new Date(a.reachedAt));
+    res.json({
+      totals: {
+        gifts: Number(totals?.gifts || 0), billsPaid: Number(totals?.paid || 0),
+        helpers: Number(totals?.helpers || 0),
+        totalNprMinor: Number(totals?.npr_minor || 0), totalInrMinor: Number(totals?.inr_minor || 0),
+      },
+      milestones,
+      nextGiftMilestone: MILESTONE_THRESHOLDS.find((n) => n > Number(totals?.gifts || 0)) || null,
+      nextPaidMilestone: MILESTONE_THRESHOLDS.find((n) => n > Number(totals?.paid || 0)) || null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Founder supporter wall (item 565) ---
+// Usernames of people who tipped (confirmed gifts with tip_minor > 0),
+// honouring the hideFromSupporterWall preference.
+
+router.get('/supporters-wall', async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT DISTINCT u.display_name, u.username, u.photo_url,
+              (SELECT COALESCE(SUM(tip_minor), 0) FROM gifts g2 WHERE g2.supporter_id = u.id AND g2.status = 'confirmed') AS tips_minor
+       FROM gifts g JOIN users u ON u.id = g.supporter_id
+       WHERE g.status = 'confirmed' AND g.tip_minor > 0
+       ORDER BY tips_minor DESC LIMIT 100`
+    );
+    const wall = [];
+    for (const r of rows) {
+      const prefs = await db.get('SELECT prefs_json FROM users WHERE username = $1', [r.username]);
+      let hidden = false;
+      try { hidden = JSON.parse(prefs?.prefs_json || '{}').hideFromSupporterWall === true; } catch { /* show */ }
+      if (!hidden) {
+        wall.push({ displayName: r.display_name, username: r.username, photoUrl: r.photo_url, tipsMinor: Number(r.tips_minor) });
+      }
+    }
+    res.json({ supporters: wall });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Public scam notices (item 365) ---
+
+router.get('/scam-notices', async (req, res, next) => {
+  try {
+    const { rows } = await db.query('SELECT id, title, body, created_at FROM scam_notices ORDER BY created_at DESC LIMIT 10');
+    res.json({ notices: rows.map((r) => ({ id: r.id, title: r.title, body: r.body, createdAt: r.created_at })) });
   } catch (err) {
     next(err);
   }

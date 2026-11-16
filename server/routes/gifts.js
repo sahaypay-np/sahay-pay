@@ -36,6 +36,7 @@ const {
   detectRevealAnomaly,
 } = require('../lib/security');
 const { runGiftMaintenanceSafe } = require('../lib/gift-maintenance');
+const { awardAchievements } = require('../lib/achievements');
 
 const router = express.Router();
 
@@ -164,7 +165,9 @@ router.post('/quote', requireAuth, async (req, res, next) => {
 // POST /api/gifts — start a gift (Amount step). Fee is computed server-side.
 router.post('/', requireActive, rateLimit('gift-create', 20, 60 * 60 * 1000), async (req, res, next) => {
   try {
-    const { billId, amountMinor, tipMinor, message, anonymous, directPay, billerRef } = req.body || {};
+    const { billId, amountMinor, tipMinor, message, directPay, billerRef } = req.body || {};
+    // NOTE: `anonymous` is computed below (0/1 with the anonDefault
+    // preference fallback, items 374/452) — not destructured here.
     if (!isMinorAmount(amountMinor)) {
       return res.status(400).json({ error: { code: 'VALIDATION', message: 'Amount must be a positive number of minor units.' } });
     }
@@ -200,20 +203,49 @@ router.post('/', requireActive, rateLimit('gift-create', 20, 60 * 60 * 1000), as
     }
     const exempt = isFeeExempt(bill.charity === 1, bill.category, charityFreeCategories);
     const q = quote(amountMinor, bill.currency, bill.charity === 1, feeMode, feeConfig, exempt);
+    // Per-helper hourly gift cap (item 334, admin-configurable) with a
+    // friendly cooldown message. The IP-based rateLimit above stays.
+    const giftHourCap = Number(await db.getSetting('gift_hour_cap')) || 10;
+    const hourAgo = new Date(Date.now() - 3600000).toISOString();
+    const hourCount = Number((await db.get(
+      'SELECT COUNT(*) AS c FROM gifts WHERE supporter_id = $1 AND created_at >= $2',
+      [req.user.id, hourAgo]
+    ))?.c || 0);
+    if (hourCount >= giftHourCap) {
+      return res.status(429).json({
+        error: {
+          code: 'RATE_LIMITED',
+          message: `You have started ${giftHourCap} gifts in the last hour. Take a short break — you can help again soon.`,
+        },
+      });
+    }
     const id = crypto.randomUUID();
+    // Anonymous gift (items 374/452): explicit per-gift toggle, falling
+    // back to the user's anonDefault preference.
+    const anonymous = req.body?.anonymous === true
+      ? 1
+      : req.body?.anonymous === false
+        ? 0
+        : (req.user.prefs?.anonDefault ? 1 : 0);
     await db.run(
       `INSERT INTO gifts (id, bill_id, supporter_id, amount_minor, currency, fee_minor, tip_minor,
         status, reference, dispute_note, message, anonymous, direct_pay, biller_name, biller_ref,
         created_at, confirmed_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'initiated', '', '', $8, $9, $10, $11, $12, $13, NULL)`,
       [id, bill.id, req.user.id, amountMinor, bill.currency, q.feeMinor, tip, msg,
-        anonymous === true ? 1 : 0, isDirect ? 1 : 0,
+        anonymous, isDirect ? 1 : 0,
         isDirect ? (bill.biller_name || '') : '', isDirect ? cleanStr(billerRef || bill.biller_ref || '', 120) : '',
         nowIso()]
     );
     const gift = await db.get('SELECT * FROM gifts WHERE id = $1', [id]);
     await logAudit('user', req.user.id, 'gift_created', 'gift', id, { billId: bill.id, amountMinor, directPay: isDirect });
-    res.status(201).json({ gift: publicGift(gift), feeMode: q.feeMode, demoMode: true });
+    // First-gift celebration (item 480): the client celebrates when this
+    // is the supporter's first-ever gift.
+    const priorGifts = Number((await db.get(
+      'SELECT COUNT(*) AS c FROM gifts WHERE supporter_id = $1 AND id != $2',
+      [req.user.id, id]
+    ))?.c || 0);
+    res.status(201).json({ gift: publicGift(gift), feeMode: q.feeMode, demoMode: true, firstGift: priorGifts === 0 });
   } catch (err) {
     next(err);
   }
@@ -318,6 +350,22 @@ router.post('/:id/reveal', requireActive, async (req, res, next) => {
     if (!bill || bill.status !== 'approved') {
       await logAudit('user', req.user.id, 'payout_reveal_blocked', 'gift', gift.id, { reason: 'bill_not_approved' });
       return res.status(409).json({ error: { code: 'INVALID_STATE', message: 'This bill is not open for help right now.' } });
+    }
+    // Per-helper daily payout-reveal cap (item 335, admin-configurable).
+    const revealDayCap = Number(await db.getSetting('reveal_day_cap')) || 20;
+    const dayAgo = new Date(Date.now() - 24 * 3600000).toISOString();
+    const revealCount = Number((await db.get(
+      `SELECT COUNT(*) AS c FROM audit_logs
+       WHERE action = 'payout_revealed' AND actor_id = $1 AND created_at >= $2`,
+      [req.user.id, dayAgo]
+    ))?.c || 0);
+    if (revealCount >= revealDayCap) {
+      return res.status(429).json({
+        error: {
+          code: 'RATE_LIMITED',
+          message: `You have viewed payout details ${revealDayCap} times today. Please come back tomorrow.`,
+        },
+      });
     }
     const { rows } = await db.query('SELECT * FROM payout_methods WHERE bill_id = $1', [bill.id]);
     const methods = rows.map((r) => {
@@ -454,6 +502,11 @@ router.post('/:id/confirm', requireActive, rateLimitAccount('gift-confirm', 20, 
     }
     const now = nowIso();
     const credit = Math.min(gift.amount_minor, Math.max(0, bill.amount_minor - bill.covered_minor));
+    // First confirmed gift? (item 480 — first-gift celebration.)
+    const priorConfirmed = Number((await db.get(
+      `SELECT COUNT(*) AS c FROM gifts WHERE supporter_id = $1 AND status = 'confirmed'`,
+      [gift.supporter_id]
+    ))?.c || 0);
     const receiptNumber = gift.receipt_number || (await generateReceiptNumber());
     await db.run(
       `UPDATE gifts SET status = 'confirmed', confirmed_at = $1, receipt_number = $2 WHERE id = $3`,
@@ -482,8 +535,17 @@ router.post('/:id/confirm', requireActive, rateLimitAccount('gift-confirm', 20, 
         confirmsLastHour: Number(recentConfirms.c),
       });
     }
+    // Tiers + achievements (items 411/415): award lazily on confirm.
+    // Best-effort — a failure here must never fail the confirmation.
+    let newAchievements = [];
+    try { newAchievements = await awardAchievements(gift.supporter_id); } catch { /* best-effort */ }
     const updated = await db.get('SELECT * FROM gifts WHERE id = $1', [gift.id]);
-    res.json({ gift: publicGift(updated), creditedMinor: credit, billCoveredMinor: updatedBill.covered_minor });
+    res.json({
+      gift: publicGift(updated), creditedMinor: credit, billCoveredMinor: updatedBill.covered_minor,
+      firstGift: priorConfirmed === 0,
+      billCompleted: updatedBill.covered_minor >= updatedBill.amount_minor,
+      newAchievements,
+    });
   } catch (err) {
     next(err);
   }

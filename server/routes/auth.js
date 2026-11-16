@@ -19,8 +19,46 @@ const {
 const { uaHash } = require('../lib/device');
 const { TERMS_VERSION, PRIVACY_VERSION, consentIsCurrent } = require('../lib/policy');
 const { validateOnboarding, cleanStr } = require('../lib/validate');
+const { flagSignal } = require('../lib/fraud');
 
 const router = express.Router();
+
+// Small edit-distance helper (item 339): compares display names against
+// suspended accounts. Same algorithm family as the feed's typo tolerance.
+function normName(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+}
+
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  const prev = [];
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let up = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = prev[j];
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, up + (a[i - 1] === b[j - 1] ? 0 : 1));
+      up = tmp;
+    }
+  }
+  return prev[b.length];
+}
+
+async function recordSignin(userId, userAgent) {
+  // Sign-in history (item 386): timestamp + device only. No IP is stored
+  // — location from IP would need a Privacy Policy change and is not
+  // collected by design.
+  try {
+    await db.run(
+      `INSERT INTO signin_history (id, user_id, user_agent, created_at) VALUES ($1, $2, $3, $4)`,
+      [crypto.randomUUID(), userId, String(userAgent || '').slice(0, 500), nowIso()]
+    );
+  } catch { /* history is advisory */ }
+}
 
 function slugifyName(name) {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20) || 'user';
@@ -139,6 +177,46 @@ router.post('/onboard', rateLimit('onboard', 10, 60 * 60 * 1000), async (req, re
     await logAudit('user', id, 'user_onboarded', 'user', id, { country: req.body.country });
     // Item 923: the 18+ age-gate pass is an audit-logged event (timestamped).
     await logAudit('user', id, 'age_gate_passed', 'user', id, { age });
+    await recordSignin(id, req.headers['user-agent']);
+    // Name-similarity check (item 339): flag (never block) when the new
+    // display name closely matches a suspended account.
+    try {
+      const suspended = await db.query(
+        `SELECT display_name FROM users WHERE suspended = 1 AND id != $1 LIMIT 200`,
+        [id]
+      );
+      const mine = normName(displayName);
+      for (const s of suspended.rows) {
+        if (mine.length >= 4 && editDistance(mine, normName(s.display_name)) <= 2) {
+          await flagSignal({
+            userId: id, signal: 'name_similar_suspended',
+            detail: `Display name closely matches a suspended account.`, severity: 'medium',
+          });
+          break;
+        }
+      }
+    } catch { /* best-effort */ }
+    // One-account signals (item 383): same user-agent + created within
+    // 10 minutes of another account. No fingerprinting (P1-269) — only
+    // the user-agent string the browser already sends, plus timing.
+    // Flags for manual review; never blocks onboarding.
+    try {
+      const ua = String(req.headers['user-agent'] || '').slice(0, 500);
+      if (ua) {
+        const twin = await db.get(
+          `SELECT u.id FROM users u JOIN sessions s ON s.user_id = u.id
+           WHERE u.id != $1 AND s.user_agent = $2 AND u.created_at >= $3 LIMIT 1`,
+          [id, ua, new Date(Date.now() - 10 * 60 * 1000).toISOString()]
+        );
+        if (twin) {
+          await flagSignal({
+            userId: id, signal: 'one_account_signals',
+            detail: 'Created within 10 minutes of another account from the same device pattern.',
+            severity: 'low',
+          });
+        }
+      }
+    } catch { /* best-effort */ }
     res.status(201).json({
       user: publicUser(user),
       sessionExpiresAt: session.expiresAt,
@@ -186,13 +264,29 @@ router.post('/recover', rateLimit('recover', 5, 15 * 60 * 1000), async (req, res
       });
     }
     if (user.suspended === 1) {
-      return res.status(403).json({
-        error: { code: 'ACCOUNT_SUSPENDED', message: 'This account is suspended. Contact support via the Help Centre.' },
-      });
+      // Lazy expiry: a timed suspension ends on its own (item 384).
+      if (user.suspended_until && new Date(user.suspended_until).getTime() <= Date.now()) {
+        await db.run(
+          `UPDATE users SET suspended = 0, suspended_reason = '', suspended_until = NULL, suspended_at = NULL WHERE id = $1`,
+          [user.id]
+        );
+      } else {
+        // Suspension notice (item 385): reason + how to appeal.
+        return res.status(403).json({
+          error: {
+            code: 'ACCOUNT_SUSPENDED',
+            message: 'This account is suspended. Contact support via the Help Centre.',
+            suspendedReason: user.suspended_reason || '',
+            suspendedUntil: user.suspended_until || null,
+            canAppeal: true,
+          },
+        });
+      }
     }
     const session = await createSession(user.id, req.headers['user-agent']);
     res.cookie('sp_session', session.token, sessionCookieOptions(SESSION_DAYS * 24 * 60 * 60 * 1000, req));
     await logAudit('user', user.id, 'user_recovered', 'user', user.id, {});
+    await recordSignin(user.id, req.headers['user-agent']);
     res.json({
       user: publicUser(user),
       sessionExpiresAt: session.expiresAt,
@@ -223,6 +317,64 @@ router.post('/re-consent', requireAuth, async (req, res, next) => {
     });
     const user = await db.get('SELECT * FROM users WHERE id = $1', [req.user.id]);
     res.json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/auth/signin-history — own sign-in history (item 386).
+router.get('/signin-history', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT id, user_agent, created_at FROM signin_history
+       WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+      [req.user.id]
+    );
+    res.json({
+      history: rows.map((r) => ({ id: r.id, userAgent: r.user_agent, createdAt: r.created_at })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/appeal — appeal a suspension (item 384).
+// A suspended user who logged out cannot recover (recover rejects
+// suspended accounts), so the appeal accepts either a live session OR
+// the recovery code as proof of identity.
+router.post('/appeal', rateLimit('appeal', 5, 60 * 60 * 1000), async (req, res, next) => {
+  try {
+    let user = null;
+    if (req.user) {
+      user = await db.get('SELECT * FROM users WHERE id = $1', [req.user.id]);
+    } else if (req.body?.code) {
+      user = await findUserByRecoveryCode(req.body.code);
+    }
+    if (!user) {
+      return res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'Please sign in or enter your recovery code to appeal.' } });
+    }
+    if (user.suspended !== 1) {
+      return res.status(409).json({ error: { code: 'INVALID_STATE', message: 'Your account is not suspended.' } });
+    }
+    const body = cleanStr(req.body?.body || '', 2000);
+    if (body.length < 10) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please explain your appeal (10+ characters).' } });
+    }
+    const existing = await db.get(
+      `SELECT id FROM appeals WHERE target_type = 'user' AND target_id = $1 AND status = 'open'`,
+      [user.id]
+    );
+    if (existing) {
+      return res.status(409).json({ error: { code: 'ALREADY_SUBMITTED', message: 'You already have an open appeal.' } });
+    }
+    const id = crypto.randomUUID();
+    await db.run(
+      `INSERT INTO appeals (id, user_id, target_type, target_id, body, status, reviewer_note, created_at, decided_at)
+       VALUES ($1, $2, 'user', $3, $4, 'open', '', $5, NULL)`,
+      [id, user.id, user.id, body, nowIso()]
+    );
+    await logAudit('user', user.id, 'appeal_filed', 'user', user.id, { appealId: id });
+    res.status(201).json({ ok: true, appealId: id });
   } catch (err) {
     next(err);
   }

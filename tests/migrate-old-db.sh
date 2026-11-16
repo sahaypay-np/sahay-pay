@@ -32,17 +32,17 @@ const db = new DatabaseSync('data/sahay-pay.db');
 db.exec(fs.readFileSync('/tmp/old-schema.sql', 'utf8'));
 db.close();
 " || { echo "FAIL: could not build old-schema DB"; exit 1; }
-# Sanity: the old DB really lacks the newest columns (phase-2 §9 session
-# + section 3 gift columns — the migration under test). Any pre-change
-# base lacks them.
+# Sanity: the old DB really lacks the newest columns (phase-2 sections 4–6
+# bill columns — the migration under test). Any pre-change base lacks them,
+# including 9ce8380 (which already has the §9/§3 columns, so those are NOT
+# part of this premise — they are covered by the post-migrate checks).
 OLD_COLS=$(node -e "
 const { DatabaseSync } = require('node:sqlite');
 const db = new DatabaseSync('data/sahay-pay.db');
-const sessCols = db.prepare(\"PRAGMA table_info(sessions)\").all().map(r => r.name);
-const giftCols = db.prepare(\"PRAGMA table_info(gifts)\").all().map(r => r.name);
-console.log((!sessCols.includes('ua_family_hash') && !giftCols.includes('receipt_number')) ? 'LACKS' : 'HAS');
+const billCols = db.prepare(\"PRAGMA table_info(bills)\").all().map(r => r.name);
+console.log(billCols.includes('share_count') ? 'HAS' : 'LACKS');
 db.close();")
-t "old DB lacks newest columns (ua_family_hash + receipt_number)" "LACKS" "$OLD_COLS"
+t "old DB lacks newest columns (share_count)" "LACKS" "$OLD_COLS"
 
 # 2. Start the CURRENT server against the old DB.
 PORT=$PORT SESSION_SECRET=$(openssl rand -base64 48) PAYOUT_ENCRYPTION_KEY=$(openssl rand -base64 32) \
@@ -85,6 +85,19 @@ const giftCols = db.prepare(\"PRAGMA table_info(gifts)\").all().map(r => r.name)
 const newGiftCols = ['message','anonymous','receipt_number','details_shown_at','reported_sent_at','disputed_at','direct_pay','biller_name','biller_ref','fee_review_status','fee_review_case','fee_review_at','reminded_24h','reminded_72h'];
 const hasTbl = (n) => db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name=?\").all(n).length > 0;
 const hasIdx = (n) => db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name=?\").all(n).length > 0;
+// Phase 2 sections 4–6: new tables + new columns on existing tables.
+const newTables = ['follows','user_blocks','achievements','thanks','thank_reactions','receiver_stories','brand_profiles','brand_responses','message_threads','messages','partnerships','drops','drop_entries','csr_updates','appeals','signin_history','fraud_flags','auction_watchlist','scam_notices','anon_stats'];
+const haveTables = new Set(db.prepare(\"SELECT name FROM sqlite_master WHERE type='table'\").all().map(r => r.name));
+const tableCols = (t) => db.prepare(\"PRAGMA table_info(\" + t + \")\").all().map(r => r.name);
+const newColsOk =
+  billCols.includes('share_count') && billCols.includes('fraud_band') &&
+  tableCols('gifts').includes('anonymous') &&
+  tableCols('verifications').includes('expires_at') &&
+  cols.includes('cover_url') && cols.includes('suspended_reason') &&
+  tableCols('brands').includes('visual_url') &&
+  tableCols('auctions').includes('buyer_settled') &&
+  tableCols('reports').includes('decision') &&
+  tableCols('complaints').includes('category');
 console.log([
   cols.includes('recovery_code_lookup') ? 'COL_OK' : 'COL_MISSING',
   cols.includes('terms_accepted_version') ? 'CONSENT_OK' : 'CONSENT_MISSING',
@@ -109,9 +122,11 @@ console.log([
   hasTbl('gift_messages') ? 'GIFTMSG_OK' : 'GIFTMSG_MISSING',
   hasTbl('billers') ? 'BILLERS_OK' : 'BILLERS_MISSING',
   hasIdx('idx_gifts_receipt') ? 'GIFTRECEIPTIDX_OK' : 'GIFTRECEIPTIDX_MISSING',
+  newTables.every(t => haveTables.has(t)) ? 'S46TABLES_OK' : 'S46TABLES_MISSING',
+  newColsOk ? 'S46COLS_OK' : 'S46COLS_MISSING',
 ].join(' '));
 db.close();")
-for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK SESS9_OK UAHASH_OK BILLS9_OK GIFTS9_OK COMPLAINTS9_OK ADMINSESS9_OK UPLOADS_OK UPLOADS_IDX_OK GIFTCOLS_OK BASKET_OK PLEDGES_OK GIFTMSG_OK BILLERS_OK GIFTRECEIPTIDX_OK; do
+for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK SESS9_OK UAHASH_OK BILLS9_OK GIFTS9_OK COMPLAINTS9_OK ADMINSESS9_OK UPLOADS_OK UPLOADS_IDX_OK GIFTCOLS_OK BASKET_OK PLEDGES_OK GIFTMSG_OK BILLERS_OK GIFTRECEIPTIDX_OK S46TABLES_OK S46COLS_OK; do
   if echo "$CHECKS" | grep -q "$want"; then echo "PASS: $want"; pass=$((pass+1)); else echo "FAIL: $want — checks: $CHECKS"; fail=$((fail+1)); fi
 done
 

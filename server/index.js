@@ -68,6 +68,9 @@ app.use('/api', require('./routes/gifting')); // /api/basket, /api/pledges, /api
 app.use('/api/verification', require('./routes/verification'));
 app.use('/api/brands', require('./routes/brands'));
 app.use('/api/auctions', require('./routes/auctions'));
+app.use('/api/social', require('./routes/social'));
+app.use('/api/brand-directory', require('./routes/brand-directory'));
+app.use('/share', require('./routes/share'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api', require('./routes/reports')); // /api/reports, /api/complaints
 app.use('/api/admin', require('./routes/admin'));

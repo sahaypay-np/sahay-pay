@@ -180,7 +180,7 @@ async function main() {
 
   // 5d. Footer links (549): all seven present; Terms/Privacy land on full text.
   const footerLinks = [...doc.querySelectorAll('#site-footer a')].map((a) => a.getAttribute('href'));
-  check('footer has 7 links (help/terms/privacy/refunds/about/scam-warning/how-to-complain)', footerLinks.length === 7, footerLinks.join(','));
+  check('footer has 10 links (help/community/brand-directory/founder/terms/privacy/refunds/about/scam-warning/how-to-complain)', footerLinks.length === 10 && footerLinks.includes('#/help') && footerLinks.includes('#/community') && footerLinks.includes('#/brand-directory') && footerLinks.includes('#/founder') && footerLinks.includes('#/help?topic=terms') && footerLinks.includes('#/help?topic=privacy') && footerLinks.includes('#/help?topic=refunds') && footerLinks.includes('#/help?topic=about') && footerLinks.includes('#/help?topic=scam-warning') && footerLinks.includes('#/help?topic=how-to-complain'), footerLinks.join(','));
   check('footer copyright present', text().includes('© 2026') || doc.getElementById('site-footer').textContent.includes('© 2026'));
   window.location.hash = '#/swipe';
   await waitFor(() => !!$('#deck-wrap'), 5000, 'swipe again');

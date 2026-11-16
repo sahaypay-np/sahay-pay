@@ -34,8 +34,8 @@ router.post('/reports', requireActive, rateLimit('report', 20, 60 * 60 * 1000), 
     const targetId = cleanStr(body.targetId, 64);
     const reason = cleanStr(body.reason, 32);
     const note = cleanStr(body.note || '', 600);
-    if (!['bill', 'brand', 'auction', 'user'].includes(targetType)) {
-      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Target type must be bill, brand, auction or user.' } });
+    if (!['bill', 'brand', 'auction', 'user', 'message'].includes(targetType)) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Target type must be bill, brand, auction, user or message.' } });
     }
     if (!targetId) return res.status(400).json({ error: { code: 'VALIDATION', message: 'A target is required.' } });
     if (!REASONS.includes(reason)) {
@@ -93,13 +93,15 @@ router.post('/complaints', requireActive, rateLimit('complaint', 10, 60 * 60 * 1
     }
     const subject = cleanStr(req.body?.subject, 200);
     const body = cleanStr(req.body?.body, 2000);
-    if (subject.length < 3) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please give your complaint a subject.' } });
-    if (body.length < 10) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please describe what happened (10+ characters).' } });
-    // Item 882: "security incident" category on the complaint form — the
-    // admin complaints log flags these for priority review.
-    const category = ['general', 'security', 'legal', 'privacy', 'press'].includes(req.body?.category)
+    // Category (items 363/593 + 882): 'scam' (report a scam seen
+    // elsewhere), 'brand' (brand feedback), 'security' (security incident —
+    // flagged for priority review), 'legal', 'privacy', 'press',
+    // 'general' (default).
+    const category = ['scam', 'brand', 'general', 'security', 'legal', 'privacy', 'press'].includes(req.body?.category)
       ? req.body.category
       : 'general';
+    if (subject.length < 3) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please give your complaint a subject.' } });
+    if (body.length < 10) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please describe what happened (10+ characters).' } });
     const id = crypto.randomUUID();
     await db.run(
       `INSERT INTO complaints (id, user_id, subject, body, status, category, created_at) VALUES ($1, $2, $3, $4, 'open', $5, $6)`,

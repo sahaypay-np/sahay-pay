@@ -171,7 +171,12 @@ async function applyReviewDecision(packetId, decision, reason, actorType, actorI
     const brand = await db.get('SELECT * FROM brands WHERE id = $1', [packet.target_id]);
     if (!brand) return { ok: false, status: 404, error: 'Brand ask not found.' };
     const status = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'changes_requested';
-    await db.run('UPDATE brands SET status = $1 WHERE id = $2', [status, brand.id]);
+    // Ask expiry (item 598): an approved ask closes after 60 days without
+    // a response (lazy — evaluated on read).
+    const expiresAt = decision === 'approve'
+      ? new Date(Date.now() + 60 * 86400000).toISOString()
+      : brand.expires_at;
+    await db.run('UPDATE brands SET status = $1, expires_at = $2 WHERE id = $3', [status, expiresAt, brand.id]);
     await createNotification(
       brand.user_id,
       decision === 'approve' ? 'post_approved' : decision === 'reject' ? 'post_rejected' : 'changes_requested',
@@ -203,6 +208,80 @@ async function applyReviewDecision(packetId, decision, reason, actorType, actorI
         reason || 'Please choose a different photo.', '#/settings'
       );
     }
+  } else if (packet.target_type === 'cover') {
+    // Cover-image change (item 466): payload carries { userId, coverUrl }.
+    const userId = payload.userId;
+    if (decision === 'approve' && userId && payload.coverUrl) {
+      await db.run('UPDATE users SET cover_url = $1 WHERE id = $2', [payload.coverUrl, userId]);
+      await createNotification(userId, 'post_approved', 'Your cover image is live', 'Your new cover image was approved.', '#/settings');
+    } else if (userId) {
+      await createNotification(
+        userId, 'post_rejected', 'Your cover image was not approved',
+        reason || 'Please choose a different image.', '#/settings'
+      );
+    }
+  } else if (packet.target_type === 'thank') {
+    // Thank-you moderation (item 427): nothing public until approved.
+    const thank = await db.get('SELECT * FROM thanks WHERE id = $1', [packet.target_id]);
+    if (!thank) return { ok: false, status: 404, error: 'Thank-you not found.' };
+    const status = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'changes_requested';
+    await db.run('UPDATE thanks SET status = $1 WHERE id = $2', [status, thank.id]);
+    if (decision === 'approve') {
+      // Giver notification (item 428).
+      await createNotification(
+        thank.giver_id, 'thank_you', 'Someone thanked you',
+        'A person you helped sent you a thank-you.', `#/bill/${thank.bill_id}`
+      );
+    } else {
+      await createNotification(
+        thank.receiver_id, 'thank_you_decided',
+        decision === 'reject' ? 'Your thank-you was not approved' : 'Changes requested on your thank-you',
+        reason || '', `#/bill/${thank.bill_id}`
+      );
+    }
+  } else if (packet.target_type === 'story') {
+    // Receiver-story moderation (item 483).
+    const story = await db.get('SELECT * FROM receiver_stories WHERE id = $1', [packet.target_id]);
+    if (!story) return { ok: false, status: 404, error: 'Story not found.' };
+    const status = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'changes_requested';
+    await db.run('UPDATE receiver_stories SET status = $1 WHERE id = $2', [status, story.id]);
+    if (decision !== 'approve') {
+      await createNotification(
+        story.user_id, 'story_decided',
+        decision === 'reject' ? 'Your story was not approved' : 'Changes requested on your story',
+        reason || '', `#/bill/${story.bill_id}`
+      );
+    }
+  } else if (packet.target_type === 'csr') {
+    // CSR-update moderation (item 551).
+    const csr = await db.get('SELECT * FROM csr_updates WHERE id = $1', [packet.target_id]);
+    if (!csr) return { ok: false, status: 404, error: 'CSR update not found.' };
+    const status = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'changes_requested';
+    await db.run('UPDATE csr_updates SET status = $1 WHERE id = $2', [status, csr.id]);
+    const bp = await db.get('SELECT owner_id FROM brand_profiles WHERE id = $1', [csr.brand_profile_id]);
+    if (bp && decision !== 'approve') {
+      await createNotification(
+        bp.owner_id, 'csr_decided',
+        decision === 'reject' ? 'Your CSR update was not approved' : 'Changes requested on your CSR update',
+        reason || '', '#/brand-directory'
+      );
+    }
+  } else if (packet.target_type === 'brand_profile') {
+    // Registered-brand application (items 501/509/510).
+    const bp = await db.get('SELECT * FROM brand_profiles WHERE id = $1', [packet.target_id]);
+    if (!bp) return { ok: false, status: 404, error: 'Brand profile not found.' };
+    const status = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'changes_requested';
+    await db.run(
+      'UPDATE brand_profiles SET status = $1, rejection_reason = $2, updated_at = $3 WHERE id = $4',
+      [status, decision === 'reject' ? (reason || 'Not approved.') : '', now, bp.id]
+    );
+    await createNotification(
+      bp.owner_id,
+      decision === 'approve' ? 'brand_approved' : 'brand_decided',
+      decision === 'approve' ? 'Your brand is listed' : decision === 'reject' ? 'Your brand application was not approved' : 'Changes requested on your brand application',
+      reason || '',
+      '#/brand-directory'
+    );
   } else {
     return { ok: false, status: 400, error: `Unknown packet target type: ${packet.target_type}.` };
   }

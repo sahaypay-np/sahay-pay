@@ -119,7 +119,7 @@ function setFieldErr(inputId, errId, msg){
 }
 function badgeHtml(b){
   if(!b) return "";
-  var map={bill:t("verified_bill"),id:t("verified_id"),name:t("verified_name")};
+  var map={bill:t("verified_bill"),id:t("verified_id"),name:t("verified_name"),biller:t("verified_biller")};
   var label=map[b]||b;
   return '<button type="button" class="chip good badge-btn" data-badge="'+esc(b)+'">✓ '+esc(label)+'</button>';
 }
@@ -410,6 +410,36 @@ async function uploadFile(file, kind){
   if(!res.ok){ var e2=new Error((data&&data.error&&data.error.message)||t("upload_failed")); e2.code=(data&&data.error&&data.error.code)||"UPLOAD"; e2.status=res.status; throw e2; }
   return data;
 }
+// Shared image-quality check (item 322, verify flow): dark / blurry /
+// low-resolution analysis of an image File. Non-images resolve {notImage:true}.
+function checkImageQuality(file){
+  return new Promise(function(resolve){
+    if(!file||!file.type||file.type.indexOf("image/")!==0){ resolve({notImage:true}); return; }
+    var url=URL.createObjectURL(file);
+    var img=new Image();
+    img.onload=function(){
+      try{
+        var lowRes=Math.max(img.naturalWidth, img.naturalHeight)<600;
+        var w=120, h=Math.max(1, Math.round(120*img.naturalHeight/img.naturalWidth));
+        var c=document.createElement("canvas"); c.width=w; c.height=h;
+        var ctx=c.getContext("2d"); ctx.drawImage(img,0,0,w,h);
+        var d=ctx.getImageData(0,0,w,h).data;
+        var sum=0, n=w*h;
+        for(var i=0;i<n;i++) sum+=0.299*d[i*4]+0.587*d[i*4+1]+0.114*d[i*4+2];
+        var mean=sum/n;
+        var edge=0, m=0;
+        for(var y=1;y<h-1;y++) for(var x=1;x<w-1;x++){
+          var idx=(y*w+x)*4;
+          edge+=Math.abs(d[idx]-d[idx+4])+Math.abs(d[idx]-d[idx-4]); m++;
+        }
+        URL.revokeObjectURL(url);
+        resolve({dark:mean<42, blurry:(edge/Math.max(1,m))<6, lowRes:lowRes});
+      }catch(e){ URL.revokeObjectURL(url); resolve({dark:false, blurry:false, lowRes:false}); }
+    };
+    img.onerror=function(){ URL.revokeObjectURL(url); resolve({dark:false, blurry:false, lowRes:false}); };
+    img.src=url;
+  });
+}
 function pickList(data, keys){
   if(Array.isArray(data)) return data;
   if(!data) return [];
@@ -696,7 +726,24 @@ var ROUTES = [
   {re:/^#\/auctions$/, fn:renderAuctions, chrome:true, tab:"brands"},
   {re:/^#\/auction\/([^\/\?]+)$/, fn:renderAuction, chrome:true, tab:"brands"},
   {re:/^#\/mybills$/, fn:renderMyBills, chrome:true, tab:"mybills"},
+  {re:/^#\/profile\/([^\/\?]+)\/(followers|following)$/, fn:function(a,b){ renderFollowList(a,b); }, chrome:true},
   {re:/^#\/profile\/([^\/\?]+)$/, fn:renderProfile, chrome:true},
+  {re:/^#\/hall-of-fame$/, fn:renderHallOfFame, chrome:true},
+  {re:/^#\/community$/, fn:renderCommunity, chrome:true},
+  {re:/^#\/milestones$/, fn:renderMilestones, chrome:true},
+  {re:/^#\/activity$/, fn:renderActivity, chrome:true},
+  {re:/^#\/thanks$/, fn:renderThanksFeed, chrome:true},
+  {re:/^#\/achievements$/, fn:renderAchievements, chrome:true},
+  {re:/^#\/changelog$/, fn:renderChangelog, chrome:true},
+  {re:/^#\/brand-directory$/, fn:renderBrandDirectory, chrome:true, tab:"brands"},
+  {re:/^#\/brand-directory\/new$/, fn:renderBrandApply, chrome:true, tab:"brands"},
+  {re:/^#\/brand-directory\/([^\/\?]+)$/, fn:renderBrandProfile, chrome:true, tab:"brands"},
+  {re:/^#\/brand-messages$/, fn:renderBrandMessages, chrome:true, tab:"brands"},
+  {re:/^#\/brand-messages\/([^\/\?]+)$/, fn:renderBrandThread, chrome:true, tab:"brands"},
+  {re:/^#\/drops$/, fn:renderDrops, chrome:true, tab:"brands"},
+  {re:/^#\/partnerships$/, fn:renderPartnerships, chrome:true},
+  {re:/^#\/founder$/, fn:renderFounderPage, chrome:true},
+  {re:/^#\/supporters-wall$/, fn:renderSupportersWall, chrome:true},
   {re:/^#\/settings$/, fn:renderSettings, chrome:true},
   {re:/^#\/help$/, fn:renderHelp, chrome:true},
   {re:/^#\/notifications$/, fn:renderNotifications, chrome:true},
@@ -714,12 +761,19 @@ var ROUTES = [
   {re:/^#\/admin$/, fn:renderAdminLogin, chrome:true},
   {re:/^#\/admin\/dashboard$/, fn:renderAdminDashboard, chrome:true},
   {re:/^#\/admin\/queue$/, fn:renderAdminQueue, chrome:true},
+  {re:/^#\/admin\/fraud$/, fn:renderAdminFraud, chrome:true},
   {re:/^#\/admin\/users$/, fn:renderAdminUsers, chrome:true},
   {re:/^#\/admin\/verifications$/, fn:renderAdminVerifications, chrome:true},
   {re:/^#\/admin\/reports$/, fn:renderAdminReports, chrome:true},
   {re:/^#\/admin\/complaints$/, fn:renderAdminComplaints, chrome:true},
   {re:/^#\/admin\/abuse$/, fn:renderAdminAbuse, chrome:true},
   {re:/^#\/admin\/security$/, fn:renderAdminSecurity, chrome:true},
+  {re:/^#\/admin\/appeals$/, fn:renderAdminAppeals, chrome:true},
+  {re:/^#\/admin\/brands$/, fn:renderAdminBrands, chrome:true},
+  {re:/^#\/admin\/scam-notices$/, fn:renderAdminScamNotices, chrome:true},
+  {re:/^#\/admin\/velocity$/, fn:renderAdminVelocity, chrome:true},
+  {re:/^#\/admin\/trust-report$/, fn:renderAdminTrustReport, chrome:true},
+  {re:/^#\/admin\/drops$/, fn:renderAdminDrops, chrome:true},
   {re:/^#\/admin\/fees$/, fn:renderAdminFees, chrome:true},
   {re:/^#\/admin\/disputes$/, fn:renderAdminDisputes, chrome:true},
   {re:/^#\/admin\/billers$/, fn:renderAdminBillers, chrome:true},
@@ -819,6 +873,8 @@ function renderOnboarding(){
   var lang=I.getLang();
   view('<div style="max-width:520px;margin:0 auto"><h1>'+esc(t("onboarding_title"))+'</h1><p>'+esc(t("onboarding_sub"))+'</p>'
     +'<div class="notice info">'+esc(t("consent_notice"))+'</div>'
+    // MPIN warning (item 358): shown before account creation.
+    +'<div class="notice warn" style="margin-top:10px">⚠️ '+esc(t("mpin_warning"))+'</div>'
     +'<p class="small">'+esc(t("required_note"))+'</p>'
     +'<form id="ob-form" class="card" style="margin-top:12px">'
     +'<label for="ob-name">'+esc(t("q_name"))+' '+reqStar()+'</label><input id="ob-name" maxlength="60" placeholder="'+esc(t("name_ph"))+'" autocomplete="name" aria-required="true" aria-describedby="e-name"><div class="field-err" id="e-name" role="alert"></div>'
@@ -927,6 +983,28 @@ function renderRecover(){
       go("#/swipe");
     }catch(err){
       btn.disabled=false; btn.textContent=t("recover_btn");
+      // Suspension notice + appeal (items 384/385): the recover error
+      // carries the reason, the end date (if timed) and canAppeal.
+      var einfo=(err.data&&err.data.error)||{};
+      if(err.code==="ACCOUNT_SUSPENDED"&&einfo.canAppeal){
+        view('<div style="max-width:480px;margin:0 auto"><h1>'+esc(t("account_suspended"))+'</h1>'
+          +'<div class="card"><p>'+esc(einfo.suspendedReason||t("suspended_no_reason"))+'</p>'
+          +(einfo.suspendedUntil?'<p class="small">'+esc(t("suspended_until"))+' '+esc(fmtDate(einfo.suspendedUntil))+'</p>':"")
+          +'<p class="small">'+esc(t("appeal_intro"))+'</p>'
+          +'<label for="rc-appeal">'+esc(t("your_appeal"))+'</label><textarea id="rc-appeal" maxlength="2000" rows="4"></textarea>'
+          +'<div class="btn-row"><button class="btn" id="rc-appeal-send">'+esc(t("submit_appeal"))+'</button></div>'
+          +'<p class="small" style="text-align:center;margin-top:10px"><a href="#/help?topic=appeals">'+esc(t("appeals_help"))+'</a></p></div></div>');
+        $("#rc-appeal-send").onclick=async function(){
+          var body=$("#rc-appeal").value.trim();
+          if(body.length<10){ toast(t("appeal_too_short"), true); return; }
+          var b2=$("#rc-appeal-send"); b2.disabled=true; b2.textContent=t("loading");
+          try{
+            await api("/auth/appeal", {method:"POST", body:{code:code, body:body}});
+            toast(t("appeal_submitted")); go("#/welcome");
+          }catch(e2){ b2.disabled=false; b2.textContent=t("submit_appeal"); toast(e2.message||t("err_generic"), true); }
+        };
+        return;
+      }
       $("#rc-err").textContent=err.message||t("err_generic");
     }
   });
@@ -1110,8 +1188,18 @@ function pushRecentSearch(q){
 function renderSwipe(){
   var streak=recordFeedVisit();
   var demoDismissed=false; try{ demoDismissed=localStorage.getItem("sp_demo_dismissed")==="1"; }catch(e){}
+  // First-week scam card (item 359): new accounts see a safety card on
+  // the feed for their first 7 days.
+  var firstWeekCard="";
+  if(S.user&&S.user.created_at){
+    var ageDays=(Date.now()-new Date(S.user.created_at).getTime())/86400000;
+    if(ageDays<7){
+      firstWeekCard='<div class="card" style="border-left:4px solid var(--warn);margin-bottom:12px"><strong>⚠️ '+esc(t("first_week_scam_title"))+'</strong><p class="small">'+esc(t("first_week_scam_body"))+'</p><p><a href="#/help?topic=scams">'+esc(t("learn_scams"))+' →</a></p></div>';
+    }
+  }
   view('<h1>'+esc(t("feed_title"))+'</h1><p>'+esc(t("feed_sub"))+'</p>'
     +fraudBannerHtml()+freezeBannerHtml()
+    +firstWeekCard
     +(demoDismissed?"":'<div class="notice info" id="demo-feed-card" style="margin-bottom:10px"><strong>ℹ️ '+esc(t("demo_feed_title"))+'</strong><br>'+esc(t("demo_feed_body"))+'<div style="margin-top:6px"><button class="btn secondary small" id="demo-feed-dismiss">'+esc(t("demo_feed_dismiss"))+'</button></div></div>')
     +'<div id="feed-meta" class="small muted" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"></div>'
     +'<div style="position:relative;margin-bottom:10px"><label class="sr-only" for="feed-search">'+esc(t("search"))+'</label><input id="feed-search" type="search" value="'+esc(S.searchQ)+'" placeholder="'+esc(t("search_ph"))+'" autocomplete="off"><div id="feed-suggest"></div></div>'
@@ -1545,7 +1633,7 @@ function renderBill(id){
       +'<div class="card" style="margin-top:8px">'
       +(photo?'<a href="#/photo/'+encodeURIComponent(bill.id)+'"><img class="bill-photo" src="'+esc(photo)+'" alt="'+esc(t("bill_photo_alt"))+'"></a>':"")
       +'<h1>'+esc(bill.title||"")+'</h1>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">'+badgesHtml(bill)+askTypeBadge(bill)+'<span class="chip">'+categoryIcon(bill.category)+' '+esc(bill.category||"")+'</span>'+statusChip(bill.status)+((bill.expiresAt||bill.expires_at)?'<span class="chip">⏳ '+esc(expiryLabel(bill))+'</span>':"")+'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">'+badgesHtml(bill)+askTypeBadge(bill)+'<span class="chip">'+categoryIcon(bill.category)+' '+esc(bill.category||"")+'</span>'+statusChip(bill.status)+((bill.expiresAt||bill.expires_at)?'<span class="chip">⏳ '+esc(expiryLabel(bill))+'</span>':"")+((bill.trustSummary&&bill.trustSummary.firstBill)?'<span class="chip">🌱 '+esc(t("first_bill_label"))+'</span>':"")+'</div>'
       +'<p><span class="money" style="font-size:24px;font-weight:800">'+esc(money(bill.amount_minor||bill.amountMinor||0,cur))+'</span></p>'
       + progressHtml(bill)
       +'<div class="kv"><span>'+esc(t("biller"))+'</span><b>'+esc(bill.company||"—")+'</b></div>'
@@ -1564,23 +1652,27 @@ function renderBill(id){
       +(bill.triedToPay?'<p><strong>'+esc(t("tried_pay_label"))+'</strong><br>'+esc(bill.triedToPay)+'</p>':"")
       +(bill.moneyMeans?'<p><strong>'+esc(t("money_means_label"))+'</strong><br>'+esc(bill.moneyMeans)+'</p>':"")
       +'<div class="row-card card" id="poster-row" tabindex="0" role="button" aria-label="'+esc(name)+'" style="margin-top:12px"><div class="avatar">'+(user.photo_url||user.photoUrl?'<img src="'+esc(user.photo_url||user.photoUrl)+'" alt="">':esc(initials(name)))+'</div><div class="grow"><div class="t">'+esc(name)+'</div><div class="s">@'+esc(uname)+' · '+esc(t("member_since"))+' '+esc((user.memberSince||user.created_at)?fmtDate(user.memberSince||user.created_at):"")+'</div></div><span>›</span></div>'
+      // Trust summary (item 309) + response time (item 397).
+      +(bill.trustSummary?'<div class="card" style="margin-top:12px"><h2>'+esc(t("trust_summary"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("account_age"))+'</span><b>'+esc(bill.trustSummary.accountAgeDays||0)+' '+esc(t("days"))+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("gifts_received"))+'</span><b>'+esc(bill.trustSummary.confirmedGiftsReceived||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("bills_posted"))+'</span><b>'+esc(bill.trustSummary.approvedBills||0)+'</b></div>'
+        +(bill.trustSummary.responseTimeHours!=null?'<div class="kv"><span>'+esc(t("response_time"))+'</span><b>'+esc(bill.trustSummary.responseTimeHours)+'h</b></div>':"")
+        +'<p class="small">'+esc(t("trust_summary_note"))+'</p></div>':"")
       +'<div class="btn-row"><a class="btn" href="#/gift/'+encodeURIComponent(bill.id)+'">💙 '+esc(t("help_this_bill"))+'</a></div>'
       +((bill.pay_direct||bill.payDirect)?'<div class="btn-row"><button class="btn secondary" id="pay-direct-btn">'+esc(t("pay_direct"))+'</button></div>':"")
-      +'<div class="btn-row"><button class="btn secondary small" id="share-btn">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="save-btn">🔖 '+(isSaved(bill.id)?esc(t("saved_bill")):esc(t("save_bill")))+'</button><button class="btn secondary small" id="basket-btn">🧺 '+esc(t("add_basket"))+'</button><button class="btn secondary small" id="report-btn">🚩 '+esc(t("report"))+'</button></div>'
-      +'<div class="btn-row"><button class="btn secondary small" id="share-btn">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="basket-btn">🧺 '+esc(t("add_basket"))+'</button><button class="btn secondary small" id="report-btn">🚩 '+esc(t("report"))+'</button></div>'
-      // Items 851/910/975/926: report the poster (not just the bill),
-      // how to complain, report-a-scam, and the Demo label.
+      +'<div class="btn-row"><button class="btn secondary small" id="share-btn">🔗 '+esc(t("share"))+(bill.shareCount?' · '+esc(bill.shareCount):"")+'</button><button class="btn secondary small" id="save-btn">🔖 '+(isSaved(bill.id)?esc(t("saved_bill")):esc(t("save_bill")))+'</button><button class="btn secondary small" id="basket-btn">🧺 '+esc(t("add_basket"))+'</button><button class="btn secondary small" id="report-btn">🚩 '+esc(t("report"))+'</button></div>'
       +'<div class="btn-row">'+(!isOwner?'<button class="btn secondary small" id="report-user-btn">🚩 '+esc(t("report_user"))+'</button>':"")
       +'<a class="btn secondary small" href="#/help?topic=how-to-complain">'+esc(t("how_to_complain_link"))+'</a>'
       +'<a class="btn secondary small" href="#/help?topic=scam-warning">⚠️ '+esc(t("report_scam_link"))+'</a></div>'
       +demoHtml()
-      +(isOwner?'<div class="btn-row"><a class="btn secondary small" href="#/mybills">'+esc(t("my_bills"))+'</a></div>':"")
+      +(isOwner?'<div class="btn-row"><a class="btn secondary small" href="#/mybills">'+esc(t("my_bills"))+'</a>'+(bill.status==="completed"?'<button class="btn secondary small" id="story-btn">📖 '+esc(t("share_story"))+'</button>':"")+'</div>':"")
       +'</div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("supporters_title"))+' ('+supporters.length+')</h2>'
       +(supporters.length? supporters.map(function(s){
-          var sName=s.anonymous?t("anonymous"):(s.display_name||s.displayName||s.username||t("anonymous"));
+          var sName=s.anonymous?t("anonymous"):(s.displayName||s.display_name||s.username||t("anonymous"));
           var firstName=String(sName).split(" ")[0];
-          return '<div class="kv"><span>'+esc(sName)+'</span><b>'+esc(money(s.amount_minor||s.amountMinor||0,cur))+'</b></div>'
+          return '<div class="kv"><span>'+(s.topSupporter?"👑 ":"")+esc(sName)+(s.tier?" "+esc(s.tier.icon)+" "+esc(s.tier.name):"")+'</span><b>'+esc(money(s.amountMinor||s.amount_minor||0,cur))+'</b></div>'
             +(s.message?'<p class="small">💬 “'+esc(s.message)+'” — '+esc(firstName)+'</p>':"");
         }).join("") : '<p>'+esc(t("no_supporters"))+'</p>')
       +((bill.pledgeCount||0)>0?'<p class="small" style="margin-top:8px">🤝 '+esc(t("pledge_supporters",{n:bill.pledgeCount}))+'</p>':"")
@@ -1590,7 +1682,9 @@ function renderBill(id){
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("how_helping"))+'</h2><p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'</div>');
     $("#poster-row").onclick=function(){ if(uname) go("#/profile/"+encodeURIComponent(uname)); };
     $("#poster-row").addEventListener("keydown", function(e){ if((e.key==="Enter"||e.key===" ")&&uname){ e.preventDefault(); go("#/profile/"+encodeURIComponent(uname)); } });
-    $("#share-btn").onclick=function(){ copyText(location.origin+location.pathname+"#/bill/"+bill.id, t("copied_link")); };
+    // Share via the clean /share URL (item 438) + share counter (item 442).
+    $("#share-btn").onclick=function(){ api("/bills/"+encodeURIComponent(bill.id)+"/share", {method:"POST"}).catch(function(){}); copyText(location.origin+"/share/bill/"+bill.id, t("copied_link")); };
+    var storyBtn=$("#story-btn"); if(storyBtn) storyBtn.onclick=function(){ openStoryComposer(bill.id, bill.title); };
     $("#save-btn").onclick=function(){ var s=toggleSaved(bill); $("#save-btn").innerHTML="🔖 "+esc(s?t("saved_bill"):t("save_bill")); toast(s?t("saved_bill"):t("saved_unsaved")); };
     $("#basket-btn").onclick=function(){ addToBasket(bill.id); };
     $("#report-btn").onclick=function(){ openReportSheet("bill", bill.id); };
@@ -1797,8 +1891,14 @@ function openReportSheet(targetType, targetId, preselect){
     try{
       var res=await api("/reports", {method:"POST", body:{targetType:targetType, targetId:targetId, reason:reasonMap[chosen]||chosen, note:$("#rep-note").value.trim()}});
       closeSheets();
-      toast(res&&res.paused? t("report_paused") : t("report_sent"));
-      if(res&&res.paused) route();
+      // Report confirmation screen (item 355): reference + review time.
+      openSheet('<div style="text-align:center"><div class="slide-ic">✅</div><h2>'+esc(t("report_received"))+'</h2>'
+        +'<p>'+esc(t("report_received_body"))+'</p>'
+        +'<p><strong>'+esc(t("reference"))+':</strong> '+(res&&res.reportId?esc(res.reportId.slice(0,8).toUpperCase()):"—")+'</p>'
+        +'<p class="small">'+esc(t("report_review_time"))+'</p>'
+        +(res&&res.paused?'<p class="small">'+esc(t("report_paused"))+'</p>':"")
+        +'<button class="btn" id="rep-done">'+esc(t("done"))+'</button></div>');
+      $("#rep-done").onclick=function(){ closeSheets(); if(res&&res.paused) route(); };
     }catch(e){ btn.disabled=false; btn.textContent=t("send_report"); toast(e.message||t("err_generic"), true); }
   };
 }
@@ -2044,7 +2144,7 @@ function renderGift(billId, q){
     var _gu=bill.user||bill.poster||{};
     var name=bill.anonymous? t("anonymous") : (_gu.display_name||_gu.displayName||bill.display_name||bill.displayName||(bill.user||{}).display_name||"");
     var g={bill:bill, step:1, amountMinor:0, tipMinor:0, tipChoice:"none", giftId:null, quote:null, payout:null, human:false, reference:"", direct:direct,
-      message:"", anonymous:false, directPay:false, billerRef:"", fromBasket:!!(q&&q.basket==="1")};
+      message:"", anonymous:!!(S.user&&S.user.prefs&&S.user.prefs.anonDefault), directPay:false, billerRef:"", fromBasket:!!(q&&q.basket==="1")};
     if(q&&q.amount){ var preAmt=parseInt(q.amount,10); if(preAmt>0) g.amountMinor=preAmt; }
     S.gift=g;
     // Gift-flow funnel event (item 297): sheet opened. Fire-and-forget.
@@ -2205,6 +2305,7 @@ function renderGift(billId, q){
         try{
           var created=await api("/gifts", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor, tipMinor:g.tipMinor||0,
             message:g.message||undefined, anonymous:g.anonymous||undefined, directPay:g.directPay||undefined, billerRef:g.billerRef||undefined}});
+          g.firstGift=created.firstGift===true;
           g.giftId=created.id||created.giftId||(created.gift&&created.gift.id);
           if(g.directPay){
             // Item 274: direct-pay gifts skip reveal — the biller details
@@ -2335,8 +2436,11 @@ function renderGift(billId, q){
         +'<option value="">—</option>'
         +[["esewa","eSewa"],["khalti","Khalti"],["connectips","connectIPS"],["bank","Bank transfer"],["upi","UPI"],["cash","Cash"],["other",t("payment_method_other")]].map(function(o){ return '<option value="'+o[0]+'">'+esc(o[1])+'</option>'; }).join("")
         +'</select>'
+        +'<p class="small" style="margin-top:10px">⚠️ '+esc(t("off_platform_warning"))+'</p>'
         +'<div class="btn-row"><button class="btn" id="g-sent">'+esc(t("i_sent_it"))+'</button></div>'
         +'<button class="btn ghost" id="g-cancel">'+esc(t("couldnt_send"))+'</button>'
+        +'<p style="text-align:center;margin-top:10px"><button class="btn ghost small" id="g-report">🚩 '+esc(t("report_bill_concern"))+'</button></p>'
+
         // Item 937: report a failed payment (goes to the complaint form,
         // prefilled so the owner can trace it by gift id).
         +'<p class="small" style="text-align:center;margin-top:8px"><a href="#/help?topic=complaints&subject='+encodeURIComponent(t("failed_payment_subject",{id:g.giftId||""}))+'&body='+encodeURIComponent(t("failed_payment_body",{id:g.giftId||""}))+'">'+esc(t("report_failed_payment"))+'</a></p></div>');
@@ -2397,6 +2501,7 @@ function renderGift(billId, q){
       $("#g-cancel").onclick=function(){
         confirmDialog(t("couldnt_send"), t("send_failed_note"), t("yes"), function(){ go("#/bill/"+encodeURIComponent(bill.id)); });
       };
+      $("#g-report").onclick=function(){ openReportSheet("bill", bill.id); };
     }
     function drawConfirmed(){
       // Basket gifts leave the basket once reported sent (item 254).
@@ -2410,19 +2515,26 @@ function renderGift(billId, q){
       } else if(g.fromBasket){
         nextBtn='<p class="small">✅ '+esc(t("basket_done"))+'</p>';
       }
+      // First-gift celebration (item 480) + share prompt (item 493) +
+      // help-again shortcut (item 485).
+      // Rotating scam tip (item 364): one of five tips, rotated by day.
+      var scamTips=[t("scam_tip_1"),t("scam_tip_2"),t("scam_tip_3"),t("scam_tip_4"),t("scam_tip_5")];
+      var tipOfDay=scamTips[Math.floor(Date.now()/86400000)%scamTips.length];
       view(stepHead()+'<div class="center-page"><div class="slide-ic">💙</div><h1>'+esc(t("thanks_helping",{name:name}))+'</h1>'
+        +(g.firstGift?'<div class="card" style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#fff"><h2 style="color:#fff;margin-top:0">🎉 '+esc(t("first_gift_title"))+'</h2><p>'+esc(t("first_gift_body"))+'</p></div>':"")
         +'<p>'+esc(t("recipient_confirm_pending"))+'</p><p class="small">'+esc(t("waiting_confirm"))+'</p>'
-        // Item 930: Sahay Pay cannot verify the payment itself.
         +'<div class="notice info" style="width:100%;max-width:420px">'+esc(t("payment_not_verified"))+'</div>'
         // Item 940: what happens next.
         +'<div class="card" style="width:100%;max-width:420px;text-align:left;margin-top:12px"><h2>'+esc(t("what_next_title"))+'</h2><ul>'
         +'<li>'+esc(t("what_next_1"))+'</li><li>'+esc(t("what_next_2"))+'</li><li>'+esc(t("what_next_3"))+'</li></ul></div>'
+        +'<div class="card" style="width:100%;max-width:360px;border-left:4px solid var(--warn)"><p class="small">⚠️ '+esc(tipOfDay)+' <a href="#/help?topic=scams">'+esc(t("learn_scams"))+'</a></p></div>'
+        +'<div class="card" style="width:100%;max-width:360px"><h2>'+esc(t("share_prompt_title"))+'</h2><p class="small">'+esc(t("share_prompt_body"))+'</p><button class="btn secondary" id="g-share-bill">🔗 '+esc(t("share_bill"))+'</button></div>'
         +'<div style="width:100%;max-width:360px;display:grid;gap:10px;margin-top:12px">'
         +nextBtn
-        // Item 936: receipt page (overlap §3.261).
         +'<a class="btn" href="#/receipt/'+encodeURIComponent(g.giftId||"")+'">🧾 '+esc(t("view_receipt"))+'</a>'
         +'<a class="btn secondary" href="#/dispute/'+encodeURIComponent(g.giftId||"")+'">'+esc(t("dispute_status_link"))+'</a>'
         +'<a class="btn secondary" href="#/founder-tip?gift='+encodeURIComponent(g.giftId||"")+'&amount='+g.amountMinor+'&currency='+cur+'">'+esc(t("founder_tip_title"))+'</a>'
+        +'<a class="btn secondary" href="#/category/'+encodeURIComponent(bill.category||"")+'">'+esc(t("help_similar"))+'</a>'
         +'<a class="btn secondary" href="#/swipe">'+esc(t("continue_helping"))+'</a>'
         +'<a class="btn secondary" href="#/mybills">'+esc(t("my_bills"))+'</a></div></div>');
       var nb=$("#g-next-basket");
@@ -2430,6 +2542,7 @@ function renderGift(billId, q){
         var item=S.basketQueue.shift();
         if(item) go("#/gift/"+encodeURIComponent(item.billId)+"?basket=1&amount="+encodeURIComponent(item.amountMinor||""));
       };
+      $("#g-share-bill").onclick=function(){ api("/bills/"+encodeURIComponent(bill.id)+"/share", {method:"POST"}).catch(function(){}); copyText(location.origin+"/share/bill/"+bill.id, t("copied_link")); };
     }
   }).catch(function(e){
     if(tok!==NAV) return;
@@ -2574,11 +2687,14 @@ function renderPost(arg, q){
       +'<div id="forwhom-wrap" '+(p.forWhom==="myself"?"hidden":"")+'><label for="f-rel">'+esc(t("relationship_label"))+'</label><input id="f-rel" maxlength="80" value="'+esc(p.relationship)+'" placeholder="'+esc(t("relationship_ph"))+'">'
       +'<label class="check-row" id="for-consent-row" '+(p.forWhom==="other"?"":"hidden")+'><input type="checkbox" id="f-for-consent" '+(p.forOtherConsent?"checked":"")+'> '+esc(t("for_other_consent"))+'</label></div>'
       +'<label for="f-story">'+esc(t("short_story"))+' '+reqStar()+' <span class="small muted">(<span id="story-n">'+p.story.length+'</span>/280)</span></label><textarea id="f-story" maxlength="280" spellcheck="true" placeholder="'+esc(t("story_hint"))+'" aria-required="true" aria-describedby="e-story">'+esc(p.story)+'</textarea><div class="field-err" id="e-story" role="alert"></div>'
+      +'<div id="privacy-warn" class="small" style="color:var(--warn)"></div>'
       +'<p class="small muted">'+esc(t("friend_hint"))+' '+esc(t("spellcheck_hint"))+'</p>'
       +'<p class="small" id="story-enc" style="color:var(--warn)">'+(p.story.length>0&&p.story.length<40?esc(t("story_short_encourage")):"")+'</p>'
       +'<p class="small">💡 <span id="story-prompt">'+esc(t("story_prompt_"+((new Date().getDate()%4)+1)))+'</span> <button type="button" class="btn ghost small" id="prompt-cycle">↻</button></p>'
       +'<button type="button" class="btn secondary small" id="story-template">'+esc(t("story_template_btn"))+'</button>'
       +'<details style="margin:8px 0"><summary><strong>'+esc(t("tone_guide_title"))+'</strong></summary><p class="small">'+esc(t("tone_guide_body"))+'</p></details>'
+      // "Who can see this?" (item 372) + will/won't-see list (item 369).
+      +'<details style="margin:8px 0"><summary><strong>'+esc(t("who_sees_title"))+'</strong></summary><p class="small">'+esc(t("who_sees_1"))+'</p><p class="small">'+esc(t("who_sees_2"))+'</p><p class="small">'+esc(t("who_sees_3"))+'</p><p class="small"><a href="#/help?topic=who-sees">'+esc(t("learn_more"))+'</a></p></details>'
       +'<label>'+esc(t("story_lang_label"))+'</label><div class="seg" id="f-storylang"><button type="button" data-v="en" class="'+(p.storyLang==="en"?"on":"")+'">English</button><button type="button" data-v="ne" class="'+(p.storyLang==="ne"?"on":"")+'">नेपाली</button><button type="button" data-v="hi" class="'+(p.storyLang==="hi"?"on":"")+'">हिन्दी</button></div>'
       +'<label for="f-details">'+esc(t("long_story"))+'</label><textarea id="f-details" maxlength="1500">'+esc(p.details)+'</textarea>'
       +'<label for="f-notpaid">'+esc(t("not_paid_label"))+'</label><input id="f-notpaid" maxlength="300" value="'+esc(p.notPaidConsequence)+'">'
@@ -2679,11 +2795,26 @@ function renderPost(arg, q){
       $all("#f-storylang button").forEach(function(x){ x.classList.toggle("on", x===b); });
       saveDraft(p);
     }; });
+    // Pre-publish privacy scan (item 367): same patterns as the server
+    // scan — phone, email, account numbers. Warns, never blocks.
+    function privacyScan(){
+      var hay=($("#f-story").value||"")+"\n"+($("#f-details").value||"")+"\n"+($("#f-title").value||"");
+      var kinds=[];
+      if(/\b(?:\+?977[- ]?)?9[678]\d{8}\b/.test(hay)||/\b\d{10}\b/.test(hay)) kinds.push(t("privacy_phone"));
+      if(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(hay)) kinds.push(t("privacy_email"));
+      if(/\b\d{12,20}\b/.test(hay)||/\b[A-Z]{4}0[A-Z0-9]{6}\b/.test(hay)) kinds.push(t("privacy_account"));
+      var box=$("#privacy-warn");
+      if(box) box.innerHTML=kinds.length? "⚠️ "+esc(t("privacy_warn"))+" "+esc(kinds.join(", ")) : "";
+    }
     $("#f-story").addEventListener("input", function(){
       var n=$("#f-story").value.length;
       $("#story-n").textContent=String(n);
       $("#story-enc").textContent=(n>0&&n<40)?t("story_short_encourage"):"";
+      privacyScan();
     });
+    $("#f-details").addEventListener("input", privacyScan);
+    $("#f-title").addEventListener("input", privacyScan);
+    privacyScan();
     var promptIdx=(new Date().getDate()%4)+1;
     $("#prompt-cycle").onclick=function(){ promptIdx=promptIdx%4+1; $("#story-prompt").textContent=t("story_prompt_"+promptIdx); };
     $("#story-template").onclick=function(){
@@ -2799,13 +2930,14 @@ function renderPost(arg, q){
         img.src=url;
       });
     }
-    // Photo-quality check (item 139): dark or blurry warnings from canvas
-    // luminance + edge-variance analysis.
+    // Photo-quality check (items 139/322): dark, blurry or low-resolution
+    // warnings from canvas luminance + edge-variance analysis.
     function qualityCheck(dataUrl){
       return new Promise(function(resolve){
         var img=new Image();
         img.onload=function(){
           try{
+            var lowRes=Math.max(img.naturalWidth, img.naturalHeight)<600;
             var w=120, h=Math.max(1, Math.round(120*img.naturalHeight/img.naturalWidth));
             var c=document.createElement("canvas"); c.width=w; c.height=h;
             var ctx=c.getContext("2d"); ctx.drawImage(img,0,0,w,h);
@@ -2819,7 +2951,7 @@ function renderPost(arg, q){
               var gx=Math.abs(d[idx]-d[idx+4])+Math.abs(d[idx]-d[idx-4]);
               edge+=gx; m++;
             }
-            resolve({dark:mean<42, blurry:(edge/Math.max(1,m))<6});
+            resolve({dark:mean<42, blurry:(edge/Math.max(1,m))<6, lowRes:lowRes});
           }catch(e){ resolve({dark:false, blurry:false}); }
         };
         img.onerror=function(){ resolve({dark:false, blurry:false}); };
@@ -2841,7 +2973,7 @@ function renderPost(arg, q){
             p.activePhoto=p.photos.length-1;
             var q=await qualityCheck(r.result);
             var qw=$("#photo-quality");
-            if(qw) qw.innerHTML=(q.dark?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_dark"))+'</p>':"")+(q.blurry?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_blurry"))+'</p>':"");
+            if(qw) qw.innerHTML=(q.dark?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_dark"))+'</p>':"")+(q.blurry?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_blurry"))+'</p>':"")+(q.lowRes?'<p class="small" style="color:var(--warn)">'+esc(t("photo_quality_lowres"))+'</p>':"");
             syncPhotoAliases(); drawThumbs(); showEditor(); saveDraft(p);
             res();
           };
@@ -3287,19 +3419,34 @@ function renderPost(arg, q){
 }
 
 /* ---------- leaders ---------- */
-function renderLeaders(){
+function renderLeaders(arg, q){
+  // URL persistence (item 402): tab/period/scope/week live in the hash query.
+  var tab=(q&&q.tab)||S.leadersTab||"top_supporters";
+  var period=(q&&q.period)||S.leadersPeriod||"30d";
+  var scope=(q&&q.scope)||S.leadersScope||"all";
+  var week=(q&&q.week)||S.leadersWeek||"";
+  S.leadersTab=tab; S.leadersPeriod=period; S.leadersScope=scope; S.leadersWeek=week;
   view('<h1>'+esc(t("leaders_title"))+'</h1><p class="small">'+esc(t("leaders_scope_note"))+'</p>'+demoHtml()
     +'<div class="tabs" id="ld-tabs">'
-    +[["top_supporters",t("top_supporters")],["most_received",t("most_received")],["top_bills",t("top_bills")],["fully_paid",t("fully_paid")],["brands",t("leaders_brands")]].map(function(x){ return '<button class="tab-btn'+(S.leadersTab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")
+    +[["top_supporters",t("top_supporters")],["most_received",t("most_received")],["top_bills",t("top_bills")],["fully_paid",t("fully_paid")],["streak",t("tab_streak")],["most_thanked",t("tab_most_thanked")],["brands",t("leaders_brands")]].map(function(x){ return '<button class="tab-btn'+(tab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")
     +'</div>'
-    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="ld-period" aria-label="'+esc(t("posted"))+'" style="flex:1"><option value="7d" '+(S.leadersPeriod==="7d"?"selected":"")+'>'+esc(t("last_7"))+'</option><option value="30d" '+(S.leadersPeriod==="30d"?"selected":"")+'>'+esc(t("last_30"))+'</option><option value="all" '+(S.leadersPeriod==="all"?"selected":"")+'>'+esc(t("all_time"))+'</option></select>'
-    +'<select id="ld-scope" aria-label="'+esc(t("filter_country"))+'" style="flex:1"><option value="all" '+(S.leadersScope==="all"?"selected":"")+'>'+esc(t("scope_all"))+'</option><option value="NP" '+(S.leadersScope==="NP"?"selected":"")+'>🇳🇵 '+esc(t("nepal"))+'</option><option value="IN" '+(S.leadersScope==="IN"?"selected":"")+'>🇮🇳 '+esc(t("india"))+'</option></select></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="ld-period" aria-label="'+esc(t("posted"))+'" style="flex:1"><option value="7d" '+(period==="7d"?"selected":"")+'>'+esc(t("last_7"))+'</option><option value="30d" '+(period==="30d"?"selected":"")+'>'+esc(t("last_30"))+'</option><option value="all" '+(period==="all"?"selected":"")+'>'+esc(t("all_time"))+'</option></select>'
+    +'<select id="ld-scope" aria-label="'+esc(t("filter_country"))+'" style="flex:1"><option value="all" '+(scope==="all"?"selected":"")+'>'+esc(t("scope_all"))+'</option><option value="NP" '+(scope==="NP"?"selected":"")+'>🇳🇵 '+esc(t("nepal"))+'</option><option value="IN" '+(scope==="IN"?"selected":"")+'>🇮🇳 '+esc(t("india"))+'</option></select></div>'
     +'<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center"><span class="small">'+esc(t("leaders_currency"))+':</span><div class="seg" id="ld-currency"><button type="button" data-c="all" class="'+((S.leadersCurrency||"all")==="all"?"on":"")+'">'+esc(t("leaders_all_cur"))+'</button><button type="button" data-c="NPR" class="'+(S.leadersCurrency==="NPR"?"on":"")+'">रू NPR</button><button type="button" data-c="INR" class="'+(S.leadersCurrency==="INR"?"on":"")+'">₹ INR</button></div></div>'
-    +'<div id="ld-body">'+skeleton(2)+'</div>');
-  $all("#ld-tabs .tab-btn").forEach(function(b){ b.onclick=function(){ S.leadersTab=b.getAttribute("data-t"); renderLeaders(); }; });
-  $("#ld-period").onchange=function(){ S.leadersPeriod=$("#ld-period").value; load(); };
-  $("#ld-scope").onchange=function(){ S.leadersScope=$("#ld-scope").value; load(); };
+    +'<input id="ld-search" placeholder="'+esc(t("search_leaders"))+'" style="margin-bottom:10px">'
+    +'<div id="ld-archive" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px"></div>'
+    +'<div id="ld-body">'+skeleton(2)+'</div>'
+    +'<p class="small" style="margin-top:12px">'+esc(t("leaders_fairness"))+' <a href="#/help?topic=leaderboard">'+esc(t("how_leaderboard_works"))+'</a></p>');
+  function syncUrl(){
+    var h="#/leaders?tab="+encodeURIComponent(S.leadersTab)+"&period="+encodeURIComponent(S.leadersPeriod)+"&scope="+encodeURIComponent(S.leadersScope)+(S.leadersWeek?"&week="+encodeURIComponent(S.leadersWeek):"");
+    if(location.hash!==h) history.replaceState(null, "", h);
+  }
+  $all("#ld-tabs .tab-btn").forEach(function(b){ b.onclick=function(){ S.leadersTab=b.getAttribute("data-t"); syncUrl(); renderLeaders(); }; });
+  $("#ld-period").onchange=function(){ S.leadersPeriod=$("#ld-period").value; syncUrl(); load(); };
+  $("#ld-scope").onchange=function(){ S.leadersScope=$("#ld-scope").value; syncUrl(); load(); };
   $all("#ld-currency button").forEach(function(b){ b.onclick=function(){ S.leadersCurrency=b.getAttribute("data-c"); $all("#ld-currency button").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  var searchTimer=null;
+  $("#ld-search").addEventListener("input", function(){ clearTimeout(searchTimer); searchTimer=setTimeout(load, 300); });
   load();
   async function load(){
     var body=$("#ld-body"); if(!body) return;
@@ -3307,7 +3454,22 @@ function renderLeaders(){
     try{
       var q=new URLSearchParams({tab:S.leadersTab, period:S.leadersPeriod, scope:S.leadersScope});
       if(S.leadersCurrency&&S.leadersCurrency!=="all") q.set("currency", S.leadersCurrency);
+      if(S.leadersWeek) q.set("week", S.leadersWeek);
       var d=await api("/leaders?"+q.toString());
+      // Archive chips (item 496).
+      var arch=$("#ld-archive");
+      if(arch){
+        var weeks=d.archiveWeeks||[];
+        arch.innerHTML='<span class="small">'+esc(t("leaders_archive"))+':</span>'
+          +'<button class="chip'+(S.leadersWeek?"":" on")+'" data-w="">'+esc(t("current"))+'</button>'
+          +weeks.map(function(w){ return '<button class="chip'+(S.leadersWeek===w?" on":"")+'" data-w="'+esc(w)+'">'+esc(w)+'</button>'; }).join("")
+          +(S.leadersWeek?'<span class="small">'+esc(t("archive_week_label"))+' '+esc(S.leadersWeek)+' · <a href="#" id="ld-back-current">'+esc(t("back_to_current"))+'</a></span>':"");
+        $all("#ld-archive [data-w]").forEach(function(b){
+          b.onclick=function(){ S.leadersWeek=b.getAttribute("data-w"); syncUrl(); load(); };
+        });
+        var bc=$("#ld-back-current");
+        if(bc) bc.onclick=function(e){ e.preventDefault(); S.leadersWeek=""; syncUrl(); load(); };
+      }
       // Brands tab returns two lists (mostResponded / mostAsked), not leaders.
       if(S.leadersTab==="brands"){
         var resp=pickList(d,["mostResponded"]), asked=pickList(d,["mostAsked"]);
@@ -3319,6 +3481,9 @@ function renderLeaders(){
         return;
       }
       var rows=pickList(d,["leaders","entries","rows"]);
+      // Search (item 477): client-side filter on the fetched page.
+      var s=($("#ld-search")||{value:""}).value.trim().toLowerCase();
+      if(s) rows=rows.filter(function(r){ return ((r.display_name||r.displayName||r.name||r.title||"")+" "+(r.username||"")).toLowerCase().indexOf(s)>=0; });
       if(!rows.length){ body.innerHTML=emptyState("🏆", t("empty_leaders"), t("leaders_scope_note")); return; }
       var top=rows.slice(0,3), rest=rows.slice(3);
       function amtOf(r){
@@ -3326,17 +3491,30 @@ function renderLeaders(){
         return minor!=null?money(minor, r.currency||"NPR"):"";
       }
       function helpedOf(r){
+        if(r.streakWeeks!=null) return r.streakWeeks+" "+t("week_streak");
+        if(r.thanksReceived!=null) return r.thanksReceived+" "+t("thanks_received");
         if(r.billsHelped!=null) return r.billsHelped;
         if(r.billsPaid!=null) return r.billsPaid;
         if(r.supporters!=null) return r.supporters;
         if(r.gifts!=null) return r.gifts;
         return r.helped;
       }
+      // Rank change vs previous equal period (item 475).
+      function rankChange(r){
+        if(r.rankChange==="new") return '<span class="chip">🆕</span>';
+        if(typeof r.rankChange==="number"&&r.rankChange!==0) return '<span class="chip">'+(r.rankChange>0?"▲ +"+r.rankChange:"▼ "+r.rankChange)+'</span>';
+        return "";
+      }
+      function isYou(r){ return S.user&&(r.username===S.user.username||r.userId===S.user.id); }
+      function followBtn(r){
+        if(r.anonymous||!r.username||isYou(r)||!S.user) return "";
+        return '<button class="btn secondary small" data-follow="'+esc(r.username)+'">'+esc(t("follow"))+'</button>';
+      }
       function pod(r, rank){
         var nm=r.anonymous? t("anonymous") : (r.display_name||r.displayName||r.name||r.title||"");
         var amt=amtOf(r);
         var helped=helpedOf(r);
-        return '<div class="pod card '+(rank===1?"first":rank===2?"second":"third")+'"><div class="rank">'+(rank===1?"🥇":rank===2?"🥈":"🥉")+'</div><div class="avatar" style="margin:6px auto">'+esc(initials(nm))+'</div><strong>'+esc(nm)+'</strong><div class="small">'+esc(amt)+'</div><div class="small muted">'+esc(helped!=null? helped+" "+t("leaders_helped") : "")+'</div></div>';
+        return '<div class="pod card '+(rank===1?"first":rank===2?"second":"third")+(isYou(r)?" you":"")+'"><div class="rank">'+(rank===1?"🥇":rank===2?"🥈":"🥉")+'</div><div class="avatar" style="margin:6px auto">'+esc(initials(nm))+'</div><strong>'+esc(nm)+(isYou(r)?" ("+esc(t("you"))+")":"")+'</strong><div class="small">'+esc(amt)+'</div><div class="small muted">'+esc(helped!=null? helped+(typeof helped==="number"?" "+t("leaders_helped"):"") : "")+'</div>'+rankChange(r)+'</div>';
       }
       var h='<div class="podium">'+(top[1]?pod(top[1],2):"")+(top[0]?pod(top[0],1):"")+(top[2]?pod(top[2],3):"")+'</div>';
       h+=rest.map(function(r,i){
@@ -3345,9 +3523,17 @@ function renderLeaders(){
         var helped=helpedOf(r);
         var link=!r.anonymous&&r.username? 'href="#/profile/'+encodeURIComponent(r.username)+'"' : "";
         var tag=link?"a":"div";
-        return '<'+tag+' class="card leader-row" '+link+'><span class="rank">'+(i+4)+'</span><div class="avatar">'+esc(initials(nm))+'</div><div class="grow" style="flex:1;min-width:0"><strong>'+esc(nm)+'</strong><div class="small">'+flag(r.country)+' '+esc(r.city||"")+(helped!=null?" · "+helped+" "+t("leaders_helped"):"")+'</div></div><strong class="money">'+esc(amt)+'</strong></'+tag+'>';
+        return '<'+tag+' class="card leader-row'+(isYou(r)?" you":"")+'" '+link+'><span class="rank">'+(i+4)+'</span><div class="avatar">'+esc(initials(nm))+'</div><div class="grow" style="flex:1;min-width:0"><strong>'+esc(nm)+(isYou(r)?" ("+esc(t("you"))+")":"")+'</strong><div class="small">'+flag(r.country)+' '+esc(r.city||"")+(helped!=null?" · "+helped+(typeof helped==="number"?" "+t("leaders_helped"):""):"")+'</div></div><strong class="money">'+esc(amt)+'</strong>'+rankChange(r)+'</'+tag+'>'
+          +followBtn(r);
       }).join("");
       body.innerHTML=h;
+      $all("[data-follow]", body).forEach(function(btn){
+        btn.onclick=async function(e){
+          e.preventDefault();
+          try{ await api("/social/follow/"+encodeURIComponent(btn.getAttribute("data-follow")), {method:"POST"}); btn.textContent=t("following"); btn.disabled=true; }
+          catch(err){ toast(err.message||t("err_generic"), true); }
+        };
+      });
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
   }
 }
@@ -3355,22 +3541,46 @@ function renderLeaders(){
 /* ---------- brands ---------- */
 function renderBrands(){
   view('<h1>'+esc(t("brands_title"))+'</h1>'
-    +'<div class="btn-row" style="margin-bottom:12px"><a class="btn" href="#/brand-new">＋ '+esc(t("brand_new"))+'</a><a class="btn secondary" href="#/auctions">🔨 '+esc(t("auctions"))+'</a></div>'
+    +'<div class="btn-row" style="margin-bottom:12px"><a class="btn" href="#/brand-new">＋ '+esc(t("brand_new"))+'</a><a class="btn secondary" href="#/brand-directory">🏢 '+esc(t("brand_directory"))+'</a><a class="btn secondary" href="#/drops">🎁 '+esc(t("drops"))+'</a><a class="btn secondary" href="#/auctions">🔨 '+esc(t("auctions"))+'</a></div>'
+    +'<div class="btn-row" style="margin-bottom:12px"><a class="btn secondary small" href="#/brands?mine=1">'+esc(t("my_asks"))+'</a><a class="btn secondary small" href="#/brand-messages">'+esc(t("brand_messages"))+'</a></div>'
     +'<label class="sr-only" for="br-search">'+esc(t("search_brands"))+'</label><input id="br-search" placeholder="'+esc(t("search_brands"))+'" style="margin-bottom:10px">'
+    // Tag filter (item 594) + group-by-brand toggle (item 519).
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="br-tags">'
+    +[["",t("all")],["product",t("tag_product")],["collaboration",t("tag_collaboration")],["sponsorship",t("tag_sponsorship")],["help",t("tag_help")]].map(function(x){ return '<button class="chip'+(x[0]===""?" on":"")+'" data-tag="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")
+    +'<button class="chip" id="br-group">'+esc(t("group_by_brand"))+'</button></div>'
+    +'<div id="br-new"></div>'
     +'<div id="br-body">'+skeleton(2)+'</div>');
-  var timer=null;
+  var timer=null, tag="", grouped=false, mine=location.hash.indexOf("mine=1")>=0;
   $("#br-search").addEventListener("input", function(){ clearTimeout(timer); timer=setTimeout(load, 300); });
+  $all("#br-tags [data-tag]").forEach(function(b){ b.onclick=function(){ tag=b.getAttribute("data-tag"); $all("#br-tags [data-tag]").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  $("#br-group").onclick=function(){ grouped=!grouped; $("#br-group").classList.toggle("on", grouped); load(); };
   load();
   async function load(){
     var body=$("#br-body"); if(!body) return;
     try{
       var q=new URLSearchParams(); var s=$("#br-search").value.trim(); if(s) q.set("brand", s);
-      var d=await api("/brands"+(q.toString()?"?"+q.toString():""));
+      if(tag) q.set("tag", tag);
+      var d=await api((mine?"/brands/mine":"/brands")+(q.toString()?"?"+q.toString():""));
       var list=pickList(d,["brands"]);
+      // New-this-week strip (item 596).
+      var weekAgo=Date.now()-7*86400000;
+      var fresh=list.filter(function(b){ return new Date(b.createdAt||b.created_at).getTime()>=weekAgo; });
+      var nb=$("#br-new");
+      if(nb) nb.innerHTML=fresh.length? '<h2>'+esc(t("new_this_week"))+'</h2><div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap">'+fresh.slice(0,6).map(function(b){ return '<a class="chip" href="#/brand/'+encodeURIComponent(b.id)+'">'+esc(b.name||"")+'</a>'; }).join("")+'</div></div>' : "";
       if(!list.length){ body.innerHTML=emptyState("🏷️", t("empty_brands"), "", '<a class="btn small" href="#/brand-new">'+esc(t("create_first_brand"))+'</a>'); return; }
-      body.innerHTML=list.map(function(b){
-        return '<a class="card row-card" href="#/brand/'+encodeURIComponent(b.id)+'"><div class="avatar">🏷️</div><div class="grow"><div class="t">'+esc(b.display_name||b.displayName||b.name||"")+'</div><div class="s">'+flag(b.country)+' '+esc(b.city||"")+' · '+esc((b.story||"").slice(0,80))+'</div></div><span>›</span></a>';
-      }).join("");
+      function card(b){
+        return '<a class="card row-card" href="#/brand/'+encodeURIComponent(b.id)+'">'+(b.visualUrl?'<img src="'+esc(b.visualUrl)+'" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px">':'<div class="avatar">🏷️</div>')+'<div class="grow"><div class="t">'+esc(b.displayName||b.display_name||b.name||"")+'</div><div class="s">'+flag(b.country)+' '+esc(b.city||"")+' · '+esc((b.story||"").slice(0,80))+'</div>'+((b.tags||[]).length?'<div style="margin-top:4px">'+b.tags.map(function(tg){ return '<span class="chip">'+esc(tg)+'</span>'; }).join(" ")+'</div>':"")+(b.status&&b.status!=="approved"?'<div style="margin-top:4px"><span class="chip">'+esc(b.status)+'</span></div>':"")+'</div><span>›</span></a>';
+      }
+      if(grouped){
+        // Grouped by brand name (item 519).
+        var groups={};
+        list.forEach(function(b){ (groups[b.name||"?"]=groups[b.name||"?"]||[]).push(b); });
+        body.innerHTML=Object.keys(groups).sort().map(function(name){
+          return '<h2>'+esc(name)+'</h2>'+groups[name].map(card).join("");
+        }).join("");
+      } else {
+        body.innerHTML=list.map(card).join("");
+      }
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
   }
 }
@@ -3379,17 +3589,59 @@ function renderBrand(id){
   api("/brands/"+encodeURIComponent(id)).then(function(d){
     if(tok!==NAV) return;
     var b=d.brand||d;
+    var isOwner=S.user&&b.poster&&(b.poster.username===S.user.username);
+    var responses=b.responses||[];
     view('<a href="#/brands" class="small">← '+esc(t("back"))+'</a><div class="card" style="margin-top:8px">'
-      +'<h1>'+esc(b.display_name||b.displayName||b.name||"")+'</h1>'
-      +'<p class="small">'+flag(b.country)+' '+esc(b.city||"")+' · '+esc(timeAgo(b.created_at||b.createdAt))+'</p>'
+      +(b.visualUrl?'<img class="bill-photo" src="'+esc(b.visualUrl)+'" alt="" loading="lazy">':"")
+      +'<h1>'+esc(b.displayName||b.display_name||b.name||"")+'</h1>'
+      +'<p class="small">'+flag(b.country)+' '+esc(b.city||"")+' · '+esc(timeAgo(b.createdAt||b.created_at))+'</p>'
+      +((b.tags||[]).length?'<p>'+b.tags.map(function(tg){ return '<span class="chip">'+esc(tg)+'</span>'; }).join(" ")+'</p>':"")
       +'<p>'+esc(b.story||"")+'</p>'
-      +(b.content_no_fee?'<p><span class="chip good">'+esc(t("content_ok"))+'</span></p>':"")
+      +(b.contentNoFee?'<p><span class="chip good">'+esc(t("content_ok"))+'</span></p>':"")
+      // Status tracker (item 529): status + expiry + responses.
+      +'<div class="card" style="margin-top:10px"><h2>'+esc(t("ask_status"))+'</h2>'
+      +'<div class="kv"><span>'+esc(t("status"))+'</span><b>'+esc(b.status||"")+'</b></div>'
+      +(b.expiresAt?'<div class="kv"><span>'+esc(t("expires"))+'</span><b>'+esc(fmtDate(b.expiresAt))+'</b></div>':"")
+      +'<div class="kv"><span>'+esc(t("responses"))+'</span><b>'+esc(responses.length)+'</b></div>'
+      +(b.closedAt?'<div class="kv"><span>'+esc(t("closed"))+'</span><b>'+esc(fmtDate(b.closedAt))+'</b></div>':"")
+      +(b.thankYouNote?'<p>'+esc(b.thankYouNote)+'</p>':"")
+      +'</div>'
       +'<p class="small muted">'+esc(t("brand_ask_footer"))+'</p>'
       +'<div class="btn-row"><button class="btn" id="br-connect">'+esc(t("connect"))+' →</button></div>'
-      +'<div class="btn-row"><button class="btn secondary small" id="br-share">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="br-report">🚩 '+esc(t("report"))+'</button></div></div>');
-    $("#br-share").onclick=function(){ copyText(location.origin+location.pathname+"#/brand/"+b.id, t("copied_link")); };
+      +'<div class="btn-row"><button class="btn secondary small" id="br-share">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="br-report">🚩 '+esc(t("report"))+'</button></div>'
+      +(isOwner&&b.status==="approved"?'<div class="btn-row"><button class="btn secondary small" id="br-close">'+esc(t("close_ask"))+'</button></div>':"")
+      +(isOwner&&b.status==="expired"?'<div class="btn-row"><button class="btn" id="br-renew">'+esc(t("renew_ask"))+'</button></div>':"")
+      +'</div>'
+      // Public brand responses (item 520).
+      +'<h2 style="margin-top:14px">'+esc(t("brand_responses"))+'</h2>'
+      +(responses.length? responses.map(function(r){
+        return '<div class="card"><p>'+esc(r.body||"")+'</p><p class="small">'+esc(r.brandName||"")+(r.verified?" ✅":"")+' · '+esc(fmtDate(r.createdAt))+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_responses_yet"))+'</p>'));
+    $("#br-share").onclick=function(){ copyText(location.origin+"/share/brand-ask/"+b.id, t("copied_link")); };
     $("#br-report").onclick=function(){ openReportSheet("brand", b.id); };
     $("#br-connect").onclick=function(){ openBrandConnect(b); };
+    var closeBtn=$("#br-close");
+    if(closeBtn){
+      closeBtn.onclick=function(){
+        openSheet('<h2>'+esc(t("close_ask"))+'</h2><p class="small">'+esc(t("close_ask_body"))+'</p>'
+          +'<label for="cl-note">'+esc(t("thank_you_note"))+'</label><textarea id="cl-note" maxlength="1000"></textarea>'
+          +'<div class="btn-row"><button class="btn secondary" id="cl-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="cl-go">'+esc(t("close_ask"))+'</button></div>');
+        $("#cl-cancel").onclick=closeSheets;
+        $("#cl-go").onclick=async function(){
+          try{ await api("/brands/"+encodeURIComponent(b.id)+"/close", {method:"POST", body:{thankYouNote:$("#cl-note").value.trim()}}); closeSheets(); toast(t("ask_closed")); route(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        };
+      };
+    }
+    var renewBtn=$("#br-renew");
+    if(renewBtn){
+      renewBtn.onclick=function(){
+        confirmDialog(t("renew_ask"), t("renew_ask_body"), t("renew_ask"), async function(){
+          try{ await api("/brands/"+encodeURIComponent(b.id)+"/renew", {method:"POST"}); toast(t("ask_renewed")); route(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        });
+      };
+    }
   }).catch(function(e){ if(tok!==NAV) return; view(emptyState("🏷️", t("brand_not_found"), e.message||"", "", "h1")); });
 }
 function openBrandConnect(brand){
@@ -3403,6 +3655,8 @@ function openBrandConnect(brand){
     +'<label for="bc-brand">'+esc(t("brand_name"))+'</label><input id="bc-brand">'
     +'<label for="bc-name">'+esc(t("display_name"))+'</label><input id="bc-name" autocomplete="name">'
     +'<label for="bc-phone">'+esc(t("contact_phone"))+'</label><input id="bc-phone" type="tel" inputmode="tel" autocomplete="tel">'
+    +'<label for="bc-industry">'+esc(t("industry"))+'</label><input id="bc-industry" maxlength="120">'
+    +'<label for="bc-offer">'+esc(t("offer_label"))+'</label><textarea id="bc-offer" maxlength="500" placeholder="'+esc(t("offer_ph"))+'"></textarea>'
     +'<label for="bc-note">'+esc(t("brand_story_label"))+' / '+esc(t("details"))+'</label><textarea id="bc-note" maxlength="500"></textarea>'
     +'<label>'+esc(t("brand_connect_price"))+'</label><div class="seg" id="bc-plans">'+pkgs.map(function(p,i){ return '<button type="button" data-p="'+esc(p.id||p.name||("p"+i))+'" class="'+(i===0?"on":"")+'">'+esc(p.label||p.name||"")+(p.priceMinor?' — '+money(p.priceMinor,p.currency||"NPR"):"")+'</button>'; }).join("")+'</div>'
     +'<div id="bc-email-wrap" hidden><label for="bc-email">'+esc(t("company_email"))+'</label><input id="bc-email" type="email" autocomplete="email" placeholder="name@company.com"><p class="small">'+esc(t("brand_plan_note"))+'</p></div>'
@@ -3426,7 +3680,7 @@ function openBrandConnect(brand){
     }
     var btn=$("#bc-send"); btn.disabled=true; btn.textContent=t("loading");
     try{
-      await api("/brands/"+encodeURIComponent(brand.id)+"/connect", {method:"POST", body:{brandName:brandName, contactName:name, phone:phone, note:$("#bc-note").value.trim(), plan:plan, workEmail:email||undefined}});
+      await api("/brands/"+encodeURIComponent(brand.id)+"/connect", {method:"POST", body:{brandName:brandName, contactName:name, phone:phone, note:$("#bc-note").value.trim(), plan:plan, workEmail:email||undefined, industry:$("#bc-industry").value.trim()||undefined, offer:$("#bc-offer").value.trim()||undefined}});
       closeSheets(); toast(t("brand_connected"));
     }catch(e){ btn.disabled=false; btn.textContent=t("connect"); toast(e.message||t("err_generic"), true); }
   };
@@ -3441,6 +3695,9 @@ function renderBrandNew(){
     +'<label for="bn-city">'+esc(t("city"))+' '+esc(t("q_about_opt"))+'</label><input id="bn-city" value="'+esc(S.user.city||"")+'" autocomplete="address-level2">'
     +'<label for="bn-phone">'+esc(t("contact_phone"))+' '+reqStar()+'</label><input id="bn-phone" type="tel" inputmode="tel" autocomplete="tel" aria-required="true" aria-describedby="e-bn-phone"><div class="field-err" id="e-bn-phone" role="alert"></div>'
     +'<label for="bn-file">'+esc(t("visual_plan"))+'</label><input type="file" id="bn-file" accept="image/jpeg,image/png,image/webp">'
+    +'<label>'+esc(t("ask_tags"))+'</label><div style="display:flex;gap:6px;flex-wrap:wrap">'
+    +[["product",t("tag_product")],["collaboration",t("tag_collaboration")],["sponsorship",t("tag_sponsorship")],["help",t("tag_help")]].map(function(x){ return '<label class="check-row"><input type="checkbox" class="bn-tag" value="'+x[0]+'"> '+esc(x[1])+'</label>'; }).join("")
+    +'</div>'
     +'<label class="check-row"><input type="checkbox" id="bn-content"> '+esc(t("content_no_fee"))+'</label>'
     +'<p class="small">⚠️ '+esc(t("no_contact_in_text"))+'</p>'
     +'<button class="btn" type="submit" id="bn-submit">'+esc(t("submit"))+'</button></form>');
@@ -3462,29 +3719,330 @@ function renderBrandNew(){
       var visualUrl=null;
       var f=$("#bn-file").files[0];
       if(f){ var up=await uploadFile(f,"support"); visualUrl=up.url||up.fileUrl||up.path; }
-      await api("/brands", {method:"POST", body:{name:brand, displayName:$("#bn-display").value.trim()||undefined, story:story, country:cc, city:$("#bn-city").value.trim()||undefined, contactPhone:phone, contentNoFee:!!$("#bn-content").checked, visualUrl:visualUrl||undefined}});
+      var tags=$all(".bn-tag").filter(function(c){ return c.checked; }).map(function(c){ return c.value; });
+      await api("/brands", {method:"POST", body:{name:brand, displayName:$("#bn-display").value.trim()||undefined, story:story, country:cc, city:$("#bn-city").value.trim()||undefined, contactPhone:phone, contentNoFee:!!$("#bn-content").checked, visualUrl:visualUrl||undefined, tags:tags}});
       if(op!==NAV) return;
       toast(t("brand_ask_sent")); go("#/brands");
     }catch(err){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("submit"); toast(err.message||t("err_generic"), true); }
   });
 }
 
+/* ---------- brand directory (items 501–512, 523, 590–591, 597) ---------- */
+function renderBrandDirectory(){
+  view('<h1>'+esc(t("brand_directory"))+'</h1><p class="small">'+esc(t("brand_directory_intro"))+'</p>'
+    +'<div class="btn-row" style="margin-bottom:12px"><a class="btn" href="#/brand-directory/new">＋ '+esc(t("register_brand"))+'</a><a class="btn secondary" href="#/brands">'+esc(t("brands_title"))+'</a><a class="btn secondary" href="#/partnerships">'+esc(t("partnerships"))+'</a></div>'
+    +'<label class="sr-only" for="bd-search">'+esc(t("search_brands"))+'</label><input id="bd-search" placeholder="'+esc(t("search_brands"))+'" style="margin-bottom:10px">'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="bd-country" style="flex:1"><option value="">'+esc(t("all"))+'</option><option value="NP">🇳🇵 '+esc(t("nepal"))+'</option><option value="IN">🇮🇳 '+esc(t("india"))+'</option></select><select id="bd-industry" style="flex:1"><option value="">'+esc(t("all_industries"))+'</option></select></div>'
+    +'<div id="bd-new"></div><div id="bd-body">'+skeleton(2)+'</div>');
+  var timer=null;
+  $("#bd-search").addEventListener("input", function(){ clearTimeout(timer); timer=setTimeout(load, 300); });
+  $("#bd-country").addEventListener("change", load);
+  $("#bd-industry").addEventListener("change", load);
+  load();
+  async function load(){
+    var body=$("#bd-body"); if(!body) return;
+    try{
+      var q=new URLSearchParams();
+      var s=$("#bd-search").value.trim(); if(s) q.set("q", s);
+      var c=$("#bd-country").value; if(c) q.set("country", c);
+      var ind=$("#bd-industry").value; if(ind) q.set("industry", ind);
+      var d=await api("/brand-directory/directory"+(q.toString()?"?"+q.toString():""));
+      var sel=$("#bd-industry");
+      if(sel&&sel.options.length<=1){
+        (d.industries||[]).forEach(function(i){ var o=document.createElement("option"); o.value=i; o.textContent=i; sel.appendChild(o); });
+      }
+      var list=d.brands||[];
+      var nb=$("#bd-new");
+      if(nb&&d.newThisWeek&&d.newThisWeek.length){
+        nb.innerHTML='<h2>'+esc(t("new_this_week"))+'</h2><div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap">'+list.filter(function(b){ return d.newThisWeek.indexOf(b.id)>=0; }).map(function(b){ return '<a class="chip" href="#/brand-directory/'+encodeURIComponent(b.id)+'">'+esc(b.name)+'</a>'; }).join("")+'</div></div>';
+      }
+      if(!list.length){ body.innerHTML=emptyState("🏢", t("empty_directory"), "", '<a class="btn small" href="#/brand-directory/new">'+esc(t("register_brand"))+'</a>'); return; }
+      body.innerHTML=list.map(function(b){
+        return '<a class="card row-card" href="#/brand-directory/'+encodeURIComponent(b.id)+'">'+(b.logoUrl?'<img src="'+esc(b.logoUrl)+'" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px">':'<div class="avatar">🏢</div>')+'<div class="grow"><div class="t">'+esc(b.name)+(b.verified?" ✅":"")+'</div><div class="s">'+esc(b.industry||"")+' · '+flag(b.country)+' '+esc(b.city||"")+'</div><p class="small">'+esc((b.description||"").slice(0,120))+'</p></div><span>›</span></a>';
+      }).join("");
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
+  }
+}
+
+function renderBrandApply(){
+  if(!S.user){ view(emptyState("🏢", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<h1>'+esc(t("register_brand"))+'</h1><p class="small">'+esc(t("brand_apply_intro"))+'</p>'
+    +'<div id="ba-mine"></div>'
+    +'<form id="ba-form" class="card"><label for="ba-name">'+esc(t("brand_name"))+' '+reqStar()+'</label><input id="ba-name" maxlength="120">'
+    +'<label for="ba-industry">'+esc(t("industry"))+' '+reqStar()+'</label><select id="ba-industry"></select>'
+    +'<label>'+esc(t("country"))+'</label><div class="seg" id="ba-country"><button type="button" data-c="NP" class="'+(countryCode(S.user.country)==="NP"?"on":"")+'">🇳🇵 '+esc(t("nepal"))+'</button><button type="button" data-c="IN" class="'+(countryCode(S.user.country)==="IN"?"on":"")+'">🇮🇳 '+esc(t("india"))+'</button></div>'
+    +'<label for="ba-city">'+esc(t("city"))+'</label><input id="ba-city" maxlength="120" value="'+esc(S.user.city||"")+'">'
+    +'<label for="ba-website">'+esc(t("website"))+'</label><input id="ba-website" maxlength="300" placeholder="https://…">'
+    +'<label for="ba-email">'+esc(t("company_email"))+' '+reqStar()+'</label><input id="ba-email" type="email" maxlength="200" placeholder="name@company.com"><p class="small">'+esc(t("company_email_note"))+'</p>'
+    +'<label for="ba-desc">'+esc(t("brand_description"))+' '+reqStar()+'</label><textarea id="ba-desc" maxlength="1500"></textarea>'
+    +'<label for="ba-logo">'+esc(t("brand_logo"))+'</label><input type="file" id="ba-logo" accept="image/jpeg,image/png,image/webp">'
+    +'<div class="field-err" id="ba-err" role="alert"></div>'
+    +'<button class="btn" type="submit" id="ba-submit">'+esc(t("submit_application"))+'</button></form>');
+  var cc=countryCode(S.user.country);
+  $all("#ba-country button").forEach(function(b){ b.onclick=function(){ cc=b.getAttribute("data-c"); $all("#ba-country button").forEach(function(x){ x.classList.toggle("on", x===b); }); }; });
+  api("/brand-directory/directory").then(function(d){
+    var sel=$("#ba-industry"); if(!sel) return;
+    sel.innerHTML=(d.industries||[]).map(function(i){ return '<option>'+esc(i)+'</option>'; }).join("");
+  }).catch(function(){});
+  // Application status tracking (items 509/510).
+  api("/brand-directory/mine").then(function(d){
+    var box=$("#ba-mine"); if(!box) return;
+    var list=d.brands||[];
+    if(list.length){
+      box.innerHTML='<h2>'+esc(t("my_applications"))+'</h2>'+list.map(function(b){
+        return '<div class="card row-card"><div class="grow"><div class="t">'+esc(b.name)+'</div><div class="s">'+esc(b.status)+(b.rejectionReason?' — '+esc(b.rejectionReason):"")+'</div></div>'+(b.status==="approved"?'<a class="btn secondary small" href="#/brand-directory/'+encodeURIComponent(b.id)+'">'+esc(t("view"))+'</a>':"")+'</div>';
+      }).join("");
+    }
+  }).catch(function(){});
+  $("#ba-form").addEventListener("submit", async function(e){
+    e.preventDefault();
+    var name=$("#ba-name").value.trim(), desc=$("#ba-desc").value.trim(), email=$("#ba-email").value.trim();
+    if(name.length<2||desc.length<20||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ $("#ba-err").textContent=t("err_brand_fields"); return; }
+    var btn=$("#ba-submit"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      var logoUrl=null; var f=$("#ba-logo").files[0];
+      if(f){ var up=await uploadFile(f,"support"); logoUrl=up.url||up.fileUrl||up.path; }
+      await api("/brand-directory/apply", {method:"POST", body:{name:name, industry:$("#ba-industry").value, country:cc, city:$("#ba-city").value.trim(), website:$("#ba-website").value.trim(), email:email, description:desc, logoUrl:logoUrl||undefined}});
+      toast(t("brand_applied")); go("#/brand-directory");
+    }catch(err){ btn.disabled=false; btn.textContent=t("submit_application"); toast(err.message||t("err_generic"), true); }
+  });
+}
+
+function renderBrandProfile(id){
+  var tok=view(skeleton(2));
+  api("/brand-directory/"+encodeURIComponent(id)).then(function(d){
+    if(tok!==NAV) return;
+    var b=d.brand||d;
+    var isOwner=S.user&&String(b.ownerId)===String(S.user.id);
+    var imp=b.impact||{};
+    view('<a href="#/brand-directory" class="small">← '+esc(t("back"))+'</a><div class="card" style="margin-top:8px">'
+      +(b.logoUrl?'<img src="'+esc(b.logoUrl)+'" alt="" style="width:96px;height:96px;object-fit:cover;border-radius:12px">':"")
+      +'<h1>'+esc(b.name||"")+(b.verified?' ✅':"")+'</h1>'
+      +'<p class="small">'+esc(b.industry||"")+' · '+flag(b.country)+' '+esc(b.city||"")+(b.website?' · <a href="'+esc(b.website)+'" target="_blank" rel="noopener">'+esc(t("website"))+'</a>':"")+'</p>'
+      +(b.verified?'<p><span class="chip good">✓ '+esc(t("verified_brand"))+'</span></p>':'<p class="small"><a href="#/help?topic=brand-connect">'+esc(t("verify_brand_info"))+'</a></p>')
+      +'<p>'+esc(b.description||"")+'</p>'
+      // Impact section (item 523) + response time (item 597).
+      +'<div class="grid2"><div class="card stat"><div class="n">'+esc(imp.asksReceived||0)+'</div><div class="l">'+esc(t("asks_received"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(imp.asksResponded||0)+'</div><div class="l">'+esc(t("asks_responded"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(imp.collaborations||0)+'</div><div class="l">'+esc(t("collaborations"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+(b.medianResponseHours!=null?esc(b.medianResponseHours)+"h":"—")+'</div><div class="l">'+esc(t("response_time"))+'</div></div></div>'
+      +'<div class="btn-row"><button class="btn secondary small" id="bp-share">🔗 '+esc(t("share"))+'</button>'
+      +(isOwner?'<button class="btn secondary small" id="bp-edit">'+esc(t("edit"))+'</button><button class="btn secondary small" id="bp-checklist">'+esc(t("onboarding_checklist"))+'</button><button class="btn secondary small" id="bp-report">'+esc(t("monthly_report"))+'</button>':"")
+      +(!b.verified&&isOwner&&b.status==="approved"?'<button class="btn secondary small" id="bp-verify">'+esc(t("request_verification"))+'</button>':"")
+      +'</div></div>'
+      +'<div id="bp-extra"></div>'
+      +'<h2 style="margin-top:14px">'+esc(t("brand_responses"))+'</h2>'
+      +((b.responses||[]).length? b.responses.map(function(r){
+        return '<div class="card"><p>'+esc(r.body||"")+'</p><p class="small"><a href="#/brand/'+encodeURIComponent(r.askId)+'">'+esc(r.askName||"")+'</a> · '+esc(fmtDate(r.createdAt))+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_responses_yet"))+'</p>')
+      +'<h2 style="margin-top:14px">'+esc(t("csr_updates"))+'</h2>'
+      +((b.csrUpdates||[]).length? b.csrUpdates.map(function(c){
+        return '<div class="card"><strong>'+esc(c.title||"")+'</strong><p>'+esc(c.body||"")+'</p><p class="small">'+esc(c.status||"")+' · '+esc(fmtDate(c.createdAt))+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_csr_yet"))+'</p>')
+      +(isOwner&&b.verified?'<p><button class="btn secondary small" id="bp-csr">'+esc(t("post_csr"))+'</button></p>':""));
+    $("#bp-share").onclick=function(){ copyText(location.origin+"/share/brand/"+b.id, t("copied_link")); };
+    var editBtn=$("#bp-edit");
+    if(editBtn){
+      editBtn.onclick=function(){
+        openSheet('<h2>'+esc(t("edit"))+'</h2>'
+          +'<label for="be-desc">'+esc(t("brand_description"))+'</label><textarea id="be-desc" maxlength="1500">'+esc(b.description||"")+'</textarea>'
+          +'<label for="be-city">'+esc(t("city"))+'</label><input id="be-city" value="'+esc(b.city||"")+'">'
+          +'<label for="be-web">'+esc(t("website"))+'</label><input id="be-web" value="'+esc(b.website||"")+'">'
+          +'<div class="btn-row"><button class="btn secondary" id="be-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="be-save">'+esc(t("save"))+'</button></div>');
+        $("#be-cancel").onclick=closeSheets;
+        $("#be-save").onclick=async function(){
+          try{ await api("/brand-directory/"+encodeURIComponent(b.id), {method:"PATCH", body:{description:$("#be-desc").value.trim(), city:$("#be-city").value.trim(), website:$("#be-web").value.trim()}}); closeSheets(); toast(t("saved")); route(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        };
+      };
+    }
+    var clBtn=$("#bp-checklist");
+    if(clBtn){
+      clBtn.onclick=async function(){
+        try{
+          var cd=await api("/brand-directory/"+encodeURIComponent(b.id)+"/checklist");
+          var box=$("#bp-extra");
+          box.innerHTML='<div class="card"><h2>'+esc(t("onboarding_checklist"))+'</h2><ul>'+(cd.checklist||[]).map(function(c){ return '<li>'+(c.done?"✅ ":"⬜ ")+esc(c.label)+'</li>'; }).join("")+'</ul></div>';
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
+    var rpBtn=$("#bp-report");
+    if(rpBtn){
+      rpBtn.onclick=async function(){
+        try{
+          var rd=await api("/brand-directory/"+encodeURIComponent(b.id)+"/report");
+          var box=$("#bp-extra");
+          box.innerHTML='<div class="card"><h2>'+esc(t("monthly_report"))+' ('+esc(rd.month||"")+')</h2>'
+            +'<div class="kv"><span>'+esc(t("asks_received"))+'</span><b>'+esc(rd.asks||0)+'</b></div>'
+            +'<div class="kv"><span>'+esc(t("responses"))+'</span><b>'+esc(rd.responses||0)+'</b></div>'
+            +'<div class="kv"><span>'+esc(t("messages"))+'</span><b>'+esc(rd.messages||0)+'</b></div></div>';
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
+    var vfBtn=$("#bp-verify");
+    if(vfBtn){
+      vfBtn.onclick=async function(){
+        try{ await api("/brand-directory/"+encodeURIComponent(b.id)+"/verify-request", {method:"POST"}); toast(t("verify_requested")); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
+    var csrBtn=$("#bp-csr");
+    if(csrBtn){
+      csrBtn.onclick=function(){
+        openSheet('<h2>'+esc(t("post_csr"))+'</h2>'
+          +'<label for="csr-title">'+esc(t("title"))+'</label><input id="csr-title" maxlength="200">'
+          +'<label for="csr-body">'+esc(t("message"))+'</label><textarea id="csr-body" maxlength="5000" rows="5"></textarea>'
+          +'<div class="btn-row"><button class="btn secondary" id="csr-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="csr-send">'+esc(t("submit"))+'</button></div>');
+        $("#csr-cancel").onclick=closeSheets;
+        $("#csr-send").onclick=async function(){
+          try{ await api("/brand-directory/"+encodeURIComponent(b.id)+"/csr", {method:"POST", body:{title:$("#csr-title").value.trim(), body:$("#csr-body").value.trim()}}); closeSheets(); toast(t("csr_sent_review")); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        };
+      };
+    }
+  }).catch(function(e){ if(tok!==NAV) return; view(emptyState("🏢", t("brand_not_found"), e.message||"", "", "h1")); });
+}
+
+/* ---------- brand messaging (items 524–528) ---------- */
+function renderBrandMessages(){
+  if(!S.user){ view(emptyState("💬", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  var tok=view(skeleton(2));
+  api("/brand-directory/threads").then(function(d){
+    if(tok!==NAV) return;
+    var list=d.threads||[];
+    view('<h1>'+esc(t("brand_messages"))+'</h1>'
+      +(list.length? list.map(function(th){
+        return '<a class="card row-card" href="#/brand-messages/'+encodeURIComponent(th.id)+'"><div class="grow"><div class="t">'+esc(th.brandName||"")+' — '+esc(th.askName||"")+'</div><div class="s">'+esc(timeAgo(th.updatedAt))+(th.unread?' · <span class="chip on">'+esc(th.unread)+' '+esc(t("unread"))+'</span>':"")+'</div></div><span>›</span></a>';
+      }).join("") : emptyState("💬", t("empty_threads"), t("threads_hint"))));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderBrandMessages); });
+}
+
+function renderBrandThread(id){
+  if(!S.user){ view(emptyState("💬", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  var tok=view(skeleton(2));
+  api("/brand-directory/threads/"+encodeURIComponent(id)).then(function(d){
+    if(tok!==NAV) return;
+    var th=d.thread||{}, msgs=d.messages||[];
+    view('<a href="#/brand-messages" class="small">← '+esc(t("back"))+'</a><h1 style="margin-top:8px">'+esc(th.brandName||"")+'</h1>'
+      +'<p class="small">'+esc(t("ask"))+': <a href="#/brand/'+encodeURIComponent(th.askId)+'">'+esc(th.askId||"")+'</a></p>'
+      +'<div class="card"><p class="small">⚠️ '+esc(t("off_platform_warning"))+'</p></div>'
+      +'<div id="bt-msgs">'+(msgs.length? msgs.map(function(m){
+        var mine=String(m.senderId)===String(S.user.id);
+        return '<div class="card" style="'+(mine?"margin-left:24px;background:var(--accent-soft)":"margin-right:24px")+'"><p>'+esc(m.body||"")+'</p><p class="small">'+esc(m.senderName||"")+' · '+esc(fmtDate(m.createdAt))+'</p>'
+          +(!mine?'<p><button class="btn ghost small" data-repmsg="'+esc(m.id)+'">🚩 '+esc(t("report"))+'</button></p>':"")
+          +'</div>';
+      }).join("") : '<p>'+esc(t("no_messages"))+'</p>')+'</div>'
+      +'<div class="card" style="margin-top:12px"><label for="bt-body">'+esc(t("your_message"))+'</label><textarea id="bt-body" maxlength="2000" rows="3"></textarea><button class="btn" id="bt-send" style="margin-top:8px">'+esc(t("send"))+'</button></div>');
+    $("#bt-send").onclick=async function(){
+      var body=$("#bt-body").value.trim();
+      if(!body) return;
+      var btn=$("#bt-send"); btn.disabled=true;
+      try{ await api("/brand-directory/threads/"+encodeURIComponent(id)+"/messages", {method:"POST", body:{body:body}}); route(); }
+      catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+    };
+    $all("[data-repmsg]").forEach(function(b){
+      b.onclick=function(){ openReportSheet("message", b.getAttribute("data-repmsg")); };
+    });
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(function(){ renderBrandThread(id); }); });
+}
+
+/* ---------- sponsored drops (items 539–543) ---------- */
+function renderDrops(){
+  var tok=view(skeleton(2));
+  api("/brand-directory/drops").then(function(d){
+    if(tok!==NAV) return;
+    var list=d.drops||[];
+    var open=list.filter(function(x){ return x.status==="open"; });
+    var done=list.filter(function(x){ return x.status!=="open"; });
+    view('<h1>'+esc(t("drops"))+'</h1><p class="small">'+esc(t("drops_intro"))+'</p><p class="small"><a href="#/help?topic=drops">'+esc(t("how_drops_work"))+'</a></p>'
+      +'<h2>'+esc(t("open_drops"))+'</h2>'
+      +(open.length? open.map(function(dr){
+        return '<div class="card"><strong>'+esc(dr.title||"")+'</strong><p>'+esc(dr.product||"")+' × '+esc(dr.quantity||1)+' · '+esc(dr.brandName||"")+'</p>'
+          +(dr.eligibility?'<p class="small">'+esc(dr.eligibility)+'</p>':"")
+          +'<p class="small">'+esc(dr.entries||0)+' '+esc(t("entries"))+'</p>'
+          +'<button class="btn small" data-enter="'+esc(dr.id)+'">'+esc(t("register_interest"))+'</button></div>';
+      }).join("") : '<p>'+esc(t("no_open_drops"))+'</p>')
+      +'<h2 style="margin-top:14px">'+esc(t("past_drops"))+'</h2>'
+      +(done.length? done.map(function(dr){
+        return '<div class="card"><strong>'+esc(dr.title||"")+'</strong><p>'+esc(dr.product||"")+' · '+esc(dr.brandName||"")+'</p>'
+          +(dr.winnerName?'<p>🏆 '+esc(t("winner"))+': '+esc(dr.winnerName)+'</p>':"")
+          +'<p class="small">'+esc(dr.status||"")+(dr.drawnAt?' · '+esc(fmtDate(dr.drawnAt)):"")+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_past_drops"))+'</p>'));
+    $all("[data-enter]").forEach(function(btn){
+      btn.onclick=async function(){
+        if(!S.user){ toast(t("need_profile"), true); return; }
+        btn.disabled=true;
+        try{ await api("/brand-directory/drops/"+encodeURIComponent(btn.getAttribute("data-enter"))+"/enter", {method:"POST"}); toast(t("drop_entered")); route(); }
+        catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+      };
+    });
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderDrops); });
+}
+
+/* ---------- partnerships (items 552–554) ---------- */
+function renderPartnerships(){
+  view('<h1>'+esc(t("partnerships"))+'</h1><p>'+esc(t("partnerships_body"))+'</p>'
+    +'<div class="card"><h2>'+esc(t("partnership_form"))+'</h2>'
+    +'<label for="pt-org">'+esc(t("org_name"))+'</label><input id="pt-org" maxlength="200">'
+    +'<label for="pt-email">'+esc(t("contact_email"))+'</label><input id="pt-email" type="email" maxlength="200">'
+    +'<label for="pt-type">'+esc(t("partnership_type"))+'</label><select id="pt-type"><option value="csr">'+esc(t("type_csr"))+'</option><option value="sponsorship">'+esc(t("type_sponsorship"))+'</option><option value="media">'+esc(t("type_media"))+'</option><option value="other">'+esc(t("report_other"))+'</option></select>'
+    +'<label for="pt-prop">'+esc(t("proposal"))+'</label><textarea id="pt-prop" maxlength="2000" rows="5"></textarea>'
+    +'<div class="field-err" id="pt-err" role="alert"></div>'
+    +'<button class="btn" id="pt-send" style="margin-top:8px">'+esc(t("submit"))+'</button></div>');
+  $("#pt-send").onclick=async function(){
+    if(!needUser()) return;
+    var org=$("#pt-org").value.trim(), email=$("#pt-email").value.trim(), prop=$("#pt-prop").value.trim();
+    if(org.length<2||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||prop.length<20){ $("#pt-err").textContent=t("err_partnership_fields"); return; }
+    var btn=$("#pt-send"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      await api("/brand-directory/partnerships", {method:"POST", body:{orgName:org, contactEmail:email, type:$("#pt-type").value, proposal:prop}});
+      toast(t("partnership_sent")); go("#/community");
+    }catch(e){ btn.disabled=false; btn.textContent=t("submit"); toast(e.message||t("err_generic"), true); }
+  };
+}
+
+/* ---------- founder page (item 564) + supporter wall (item 565) ---------- */
+// NOTE (item 564): the founder's story below is a draft from existing
+// public copy — danish's own words still needed; flagged for his review.
+function renderFounderPage(){
+  view('<h1>'+esc(t("founder_page"))+'</h1>'
+    +'<div class="card"><h2>'+esc(t("founder_story"))+'</h2><p>'+esc(t("founder_story_draft"))+'</p><p class="small">'+esc(t("founder_story_note"))+'</p></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("support_sahay_pay"))+'</h2><p>'+esc(t("support_sahay_pay_body"))+'</p>'
+    +'<div style="display:grid;gap:8px"><a class="btn" href="#/founder-tip">'+esc(t("tip_founder"))+'</a><a class="btn secondary" href="#/supporters-wall">'+esc(t("supporters_wall"))+'</a></div></div>');
+}
+
+function renderSupportersWall(){
+  var tok=view(skeleton(2));
+  api("/supporters-wall").then(function(d){
+    if(tok!==NAV) return;
+    var list=d.supporters||[];
+    view('<h1>'+esc(t("supporters_wall"))+'</h1><p class="small">'+esc(t("supporters_wall_intro"))+'</p>'
+      +(list.length? list.map(function(s){
+        return '<a class="card row-card" href="#/profile/'+encodeURIComponent(s.username||"")+'"><div class="avatar">'+esc(initials(s.displayName||""))+'</div><div class="grow"><div class="t">'+esc(s.displayName||"")+'</div><div class="s">'+esc(money(s.tipsMinor||0, "NPR"))+' '+esc(t("tipped"))+'</div></div><span>›</span></a>';
+      }).join("") : emptyState("💙", t("empty_supporters_wall"), "")));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderSupportersWall); });
+}
+
 /* ---------- auctions ---------- */
 function renderAuctions(){
   view('<h1>'+esc(t("auctions"))+'</h1><p class="small">'+esc(t("auction_disabled_note"))+'</p>'
-    +'<div class="btn-row" style="margin-bottom:12px"><button class="btn" id="au-new">＋ '+esc(t("create_auction"))+'</button></div>'
+    +'<div class="btn-row" style="margin-bottom:12px"><button class="btn" id="au-new">＋ '+esc(t("create_auction"))+'</button><a class="btn secondary" href="#/auctions?watchlist=1">👁️ '+esc(t("watchlist"))+'</a></div>'
+    +'<label for="au-cat">'+esc(t("category"))+'</label><select id="au-cat" style="margin-bottom:10px"><option value="">'+esc(t("all"))+'</option>'+I.categories().map(function(c){ return '<option>'+esc(c)+'</option>'; }).join("")+'</select>'
     +'<div id="au-body">'+skeleton(2)+'</div>');
   $("#au-new").onclick=function(){ if(needUser()) openAuctionCreate(); };
+  $("#au-cat").addEventListener("change", load);
   load();
   async function load(){
     var body=$("#au-body"); if(!body) return;
+    var watchlist=location.hash.indexOf("watchlist=1")>=0;
     try{
-      var d=await api("/auctions");
+      var cat=$("#au-cat").value;
+      var d=await api(watchlist?"/auctions/watchlist":"/auctions"+(cat?"?category="+encodeURIComponent(cat):""));
       var list=pickList(d,["auctions"]);
       if(!list.length){ body.innerHTML=emptyState("🔨", t("empty_auctions"), "", '<button class="btn small" id="au-empty-new">'+esc(t("create_first_auction"))+'</button>'); var b=$("#au-empty-new"); if(b) b.onclick=function(){ if(needUser()) openAuctionCreate(); }; return; }
       body.innerHTML=list.map(function(a){
         var cur=a.currency||"NPR";
-        return '<a class="card row-card" href="#/auction/'+encodeURIComponent(a.id)+'"><div class="avatar">🔨</div><div class="grow"><div class="t">'+esc(a.title||"")+'</div><div class="s">'+esc(t("current_bid"))+': '+esc(money(a.current_bid_minor||a.currentBidMinor||a.start_bid_minor||a.startBidMinor||0, cur))+' · '+esc(t("ends"))+' '+esc((a.endsAt||a.ends_at)?fmtDate(a.endsAt||a.ends_at):"—")+'</div></div><span>›</span></a>';
+        return '<a class="card row-card" href="#/auction/'+encodeURIComponent(a.id)+'"><div class="avatar">🔨</div><div class="grow"><div class="t">'+esc(a.title||"")+'</div><div class="s">'+esc(t("current_bid"))+': '+esc(money(a.currentBidMinor||a.current_bid_minor||a.startBidMinor||a.start_bid_minor||0, cur))+' · '+esc(t("ends"))+' '+esc((a.endsAt||a.ends_at)?fmtDate(a.endsAt||a.ends_at):"—")+(a.ended?' · '+esc(t("ended")):"")+'</div></div><span>›</span></a>';
       }).join("");
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
   }
@@ -3495,6 +4053,7 @@ function openAuctionCreate(){
     +'<label for="ac-desc">'+esc(t("auction_desc"))+'</label><textarea id="ac-desc" maxlength="1500"></textarea>'
     +'<label for="ac-cat">'+esc(t("category"))+'</label><select id="ac-cat">'+I.categories().map(function(c){ return '<option>'+esc(c)+'</option>'; }).join("")+'</select>'
     +'<label for="ac-bid">'+esc(t("start_bid"))+' ('+(S.user&&countryCode(S.user.country)==="IN"?"₹":"रू")+')</label><input id="ac-bid" type="number" min="0" step="1">'
+    +'<label for="ac-inc">'+esc(t("min_increment"))+' ('+(S.user&&countryCode(S.user.country)==="IN"?"₹":"रू")+') '+esc(t("optional"))+'</label><input id="ac-inc" type="number" min="10" step="1" placeholder="10"><p class="small">'+esc(t("min_increment_note"))+'</p>'
     +'<label for="ac-ends">'+esc(t("auction_ends"))+'</label><input id="ac-ends" type="datetime-local">'
     +'<label for="ac-file">'+esc(t("upload"))+'</label><input type="file" id="ac-file" accept="image/jpeg,image/png,image/webp">'
     +'<div class="field-err" id="ac-err" role="alert"></div>'
@@ -3507,7 +4066,8 @@ function openAuctionCreate(){
     try{
       var photoUrl=null; var f=$("#ac-file").files[0];
       if(f){ var up=await uploadFile(f,"support"); photoUrl=up.url||up.fileUrl||up.path; }
-      await api("/auctions", {method:"POST", body:{title:title, description:$("#ac-desc").value.trim(), category:$("#ac-cat").value, country:countryCode(S.user.country), currency:curOf(S.user.country), startBidMinor:bid, endsAt:new Date(ends).toISOString(), photoUrl:photoUrl||undefined}});
+      var inc=toMinor($("#ac-inc").value);
+      await api("/auctions", {method:"POST", body:{title:title, description:$("#ac-desc").value.trim(), category:$("#ac-cat").value, country:countryCode(S.user.country), currency:curOf(S.user.country), startBidMinor:bid, endsAt:new Date(ends).toISOString(), photoUrl:photoUrl||undefined, minIncrementMinor:inc>0?inc:undefined}});
       closeSheets(); toast(t("auction_submitted")); route();
     }catch(e){ btn.disabled=false; btn.textContent=t("submit"); toast(e.message||t("err_generic"), true); }
   };
@@ -3519,28 +4079,74 @@ function renderAuction(id){
     var a=d.auction||d;
     var cur=a.currency||"NPR";
     var bids=pickList(a,["bids"])||pickList(d,["bids"]);
-    var high=a.current_bid_minor||a.currentBidMinor||a.start_bid_minor||a.startBidMinor||0;
+    var high=a.currentBidMinor||a.current_bid_minor||a.startBidMinor||a.start_bid_minor||0;
     var _ends=a.endsAt||a.ends_at; var ended=_ends? new Date(_ends).getTime()<Date.now() : false;
     var isOwner=S.user && String(a.user_id||a.userId)===String(S.user.id);
+    var minNext=a.minNextBidMinor||(high+(a.minIncrement||0));
+    var sellerName=(a.seller||{}).displayName||(a.seller||{}).display_name||(a.user||{}).display_name||a.seller_name||"";
+    var sellerUsername=(a.seller||{}).username||"";
+    var winner=a.winner||null;
+    var settlement=a.settlement||{};
+    var isWinner=S.user&&winner&&winner.bidderUsername===S.user.username;
     view('<a href="#/auctions" class="small">← '+esc(t("back"))+'</a><div class="card" style="margin-top:8px">'
       +((a.photoUrl||a.photo_url)?'<img class="bill-photo" src="'+esc(a.photoUrl||a.photo_url)+'" alt="'+esc(t("auction_photo_alt"))+'" loading="lazy">':"")
       +'<h1>'+esc(a.title||"")+'</h1><p>'+esc(a.description||"")+'</p>'
+      // Winner announcement (item 568).
+      +(ended&&winner?'<div class="card" style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#fff"><h2 style="color:#fff;margin-top:0">🏆 '+esc(t("auction_winner"))+'</h2><p>'+esc(winner.bidderName||"")+' — '+esc(money(winner.amountMinor||0, cur))+'</p></div>':"")
       +'<div class="kv"><span>'+esc(t("current_bid"))+'</span><b>'+esc(money(high,cur))+'</b></div>'
-      +'<div class="kv"><span>'+esc(t("start_bid"))+'</span><b>'+esc(money(a.start_bid_minor||a.startBidMinor||0,cur))+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("start_bid"))+'</span><b>'+esc(money(a.startBidMinor||a.start_bid_minor||0,cur))+'</b></div>'
+      // Min-next-bid display (item 575) + live countdown (item 576).
+      +(!ended?'<div class="kv"><span>'+esc(t("min_next_bid"))+'</span><b>'+esc(money(minNext,cur))+'</b></div>':"")
       +'<div class="kv"><span>'+esc(t("ends"))+'</span><b>'+esc(_ends?new Date(_ends).toLocaleString():"—")+' '+(ended?esc(t("ended")):"")+'</b></div>'
-      +'<div class="kv"><span>'+esc(t("seller"))+'</span><b>'+esc(((a.seller||{}).displayName||(a.seller||{}).display_name||(a.user||{}).display_name||a.seller_name||""))+'</b></div>'
+      +(!ended&&_ends?'<p class="small" id="au-countdown"></p>':"")
+      +'<div class="kv"><span>'+esc(t("seller"))+'</span><b>'+(sellerUsername?'<a href="#/profile/'+encodeURIComponent(sellerUsername)+'">'+esc(sellerName)+'</a>':esc(sellerName))+'</b></div>'
+      // Settlement (items 572/573): buyer + seller confirm.
+      +(ended&&winner&&(isOwner||isWinner)?'<div class="card" style="margin-top:10px"><h2>'+esc(t("settlement"))+'</h2>'
+        +'<p class="small">'+esc(t("settlement_body"))+'</p>'
+        +'<div class="kv"><span>'+esc(t("buyer_confirmed"))+'</span><b>'+(settlement.buyerSettled?"✅":"⬜")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("seller_confirmed"))+'</span><b>'+(settlement.sellerSettled?"✅":"⬜")+'</b></div>'
+        +(settlement.settled?'<p>✅ '+esc(t("settled"))+' '+esc(fmtDate(settlement.settledAt))+'</p>'
+          :'<button class="btn" id="au-settle">'+esc(t("confirm_settlement"))+'</button>')
+        +'</div>':"")
       +demoHtml()+'<p class="small">'+esc(t("auction_disabled_note"))+'</p>'
       +(ended?'<p><strong>'+esc(t("auction_ended"))+'</strong></p>':(isOwner?'<p class="small">'+esc(t("bid_self"))+'</p>':'<label for="bid-amt">'+esc(t("your_bid"))+' ('+(cur==="INR"?"₹":"रू")+')</label><input id="bid-amt" type="number" min="0" step="1" aria-describedby="bid-err"><div class="field-err" id="bid-err" role="alert"></div><button class="btn" id="bid-btn">'+esc(t("place_bid"))+'</button><p class="small">'+esc(t("outbid_note"))+'</p>'))
-      +'<div class="btn-row"><button class="btn secondary small" id="au-share">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="au-report">🚩 '+esc(t("report"))+'</button></div></div>'
+      +'<div class="btn-row"><button class="btn secondary small" id="au-watch">'+(a.watching?"👁️ "+esc(t("watching")):"👁️ "+esc(t("watch")))+'</button><button class="btn secondary small" id="au-share">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="au-report">🚩 '+esc(t("report"))+'</button></div></div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("bid_history"))+'</h2>'
-      +(bids.length? bids.map(function(bd){ return '<div class="kv"><span>'+esc(bd.anonymous?t("anonymous"):(bd.bidderName||bd.bidder_name||bd.display_name||bd.bidderUsername||bd.username||t("anonymous")))+'</span><b>'+esc(money(bd.amount_minor||bd.amountMinor||0,cur))+' · '+esc(timeAgo(bd.createdAt||bd.created_at))+'</b></div>'; }).join("") : '<p>'+esc(t("no_bids"))+'</p>')+'</div>');
+      +(bids.length? bids.map(function(bd){ return '<div class="kv"><span>'+esc(bd.anonymous?t("anonymous"):(bd.bidderName||bd.bidder_name||bd.display_name||bd.bidderUsername||bd.username||t("anonymous")))+'</span><b>'+esc(money(bd.amountMinor||bd.amount_minor||0,cur))+' · '+esc(timeAgo(bd.createdAt||bd.created_at))+'</b></div>'; }).join("") : '<p>'+esc(t("no_bids"))+'</p>')+'</div>');
+    // Live countdown (item 576).
+    var cd=$("#au-countdown");
+    if(cd&&_ends){
+      var endMs=new Date(_ends).getTime();
+      var cdTimer=setInterval(function(){
+        if(!document.body.contains(cd)){ clearInterval(cdTimer); return; }
+        var left=endMs-Date.now();
+        if(left<=0){ cd.textContent=t("ended"); clearInterval(cdTimer); return; }
+        var h=Math.floor(left/3600000), m=Math.floor(left%3600000/60000), s=Math.floor(left%60000/1000);
+        cd.textContent="⏳ "+h+"h "+String(m).padStart(2,"0")+"m "+String(s).padStart(2,"0")+"s";
+      }, 1000);
+      (function tick(){ var left=endMs-Date.now(); var h=Math.floor(left/3600000), m=Math.floor(left%3600000/60000), s=Math.floor(left%60000/1000); cd.textContent="⏳ "+h+"h "+String(m).padStart(2,"0")+"m "+String(s).padStart(2,"0")+"s"; })();
+    }
     $("#au-share").onclick=function(){ copyText(location.origin+location.pathname+"#/auction/"+a.id, t("copied_link")); };
     $("#au-report").onclick=function(){ openReportSheet("auction", a.id); };
+    $("#au-watch").onclick=async function(){
+      if(!S.user){ toast(t("need_profile"), true); return; }
+      try{
+        if(a.watching){ await api("/auctions/"+encodeURIComponent(a.id)+"/watch", {method:"DELETE"}); }
+        else { await api("/auctions/"+encodeURIComponent(a.id)+"/watch", {method:"POST"}); }
+        route();
+      }catch(e){ toast(e.message||t("err_generic"), true); }
+    };
+    var st=$("#au-settle");
+    if(st) st.onclick=async function(){
+      st.disabled=true;
+      try{ var r=await api("/auctions/"+encodeURIComponent(a.id)+"/settle", {method:"POST"}); toast(r.settled?t("settled"):t("settlement_noted")); route(); }
+      catch(e){ st.disabled=false; toast(e.message||t("err_generic"), true); }
+    };
     var bb=$("#bid-btn");
     if(bb) bb.onclick=async function(){
       if(!needUser()) return;
       var amt=toMinor($("#bid-amt").value);
-      if(amt<=high){ $("#bid-err").textContent=t("bid_min"); return; }
+      if(amt<minNext){ $("#bid-err").textContent=t("bid_min")+" "+money(minNext,cur); return; }
       bb.disabled=true; bb.textContent=t("loading");
       try{ await api("/auctions/"+encodeURIComponent(a.id)+"/bid", {method:"POST", body:{amountMinor:amt}}); toast(t("bid_placed")); route(); }
       catch(e){ bb.disabled=false; bb.textContent=t("place_bid"); toast(e.message||t("err_generic"), true); }
@@ -3553,8 +4159,22 @@ function renderMyBills(){
   if(!S.user){ view(emptyState("📁", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
   var tabs=[["active",t("active")],["pending",t("pending_review")],["approved",t("approved")],["rejected",t("rejected")],["completed",t("completed")],["expired",t("expired_title")],["given",t("help_given")],["received",t("help_received")]];
   view('<h1>'+esc(t("my_bills"))+'</h1><p class="small">'+esc(t("mybills_tabs_note"))+'</p>'
+    +'<div id="mb-impact"></div>'
     +'<div class="tabs">'+tabs.map(function(x){ return '<button class="tab-btn'+(S.mybillsTab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")+'</div>'
     +'<div id="mb-body">'+skeleton(2)+'</div>');
+  // Lifetime impact card + tier progress (items 433/413).
+  api("/profile/"+encodeURIComponent(S.user.username)).then(function(d){
+    var el=$("#mb-impact"); if(!el) return;
+    var totals=d.totals||{}, tier=d.tier||{}, streak=d.streak||{};
+    el.innerHTML='<div class="card" style="margin-bottom:12px"><h2 style="margin-top:0">'+esc(t("lifetime_impact"))+'</h2>'
+      +'<div class="grid2"><div class="card stat"><div class="n">'+esc(money(totals.givenMinor||0, curOf(S.user.country)))+'</div><div class="l">'+esc(t("given"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(money(totals.receivedMinor||0, curOf(S.user.country)))+'</div><div class="l">'+esc(t("received_total"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.billsHelped||0)+'</div><div class="l">'+esc(t("bills_helped"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.peopleHelped||0)+'</div><div class="l">'+esc(t("people_helped"))+'</div></div></div>'
+      +(tier.tier?'<p style="margin-top:10px">'+esc(tier.tier.icon)+' <strong>'+esc(tier.tier.name)+'</strong>'+(streak.weeks?' · 🔥 '+esc(streak.weeks)+' '+esc(t("week_streak")):"")+'</p>':"")
+      +(tier.next?'<p class="small">'+esc(t("tier_next"))+': '+esc(tier.next.icon)+' '+esc(tier.next.name)+' — '+esc(tier.giftsToNext||0)+' '+esc(t("gifts_to_go"))+'</p><div class="bar"><div class="fill" style="width:'+Math.round((tier.progress||0)*100)+'%"></div></div>':"")
+      +'<p class="small" style="margin-top:8px"><a href="#/profile/'+encodeURIComponent(S.user.username)+'">'+esc(t("view_profile"))+'</a> · <a href="#/achievements">'+esc(t("achievements"))+'</a> · <a href="#/activity">'+esc(t("activity_feed"))+'</a></p></div>';
+  }).catch(function(){ /* impact card is best-effort */ });
   $all(".tab-btn").forEach(function(b){ b.onclick=function(){ S.mybillsTab=b.getAttribute("data-t"); renderMyBills(); }; });
   load();
   async function load(){
@@ -3604,6 +4224,8 @@ function renderMyBills(){
           +'<button class="btn secondary small" data-act="payout" data-id="'+esc(b.id)+'">'+esc(t("change_payout"))+'</button>'
           +'<button class="btn secondary small" data-act="docs" data-id="'+esc(b.id)+'">'+esc(t("upload_docs"))+'</button>'
           +(b.status==="approved"?'<button class="btn secondary small" data-act="share" data-id="'+esc(b.id)+'">'+esc(t("share"))+'</button>':"")
+          +(b.status==="completed"?'<button class="btn secondary small" data-act="story" data-id="'+esc(b.id)+'">📖 '+esc(t("share_story"))+'</button>':"")
+          +((b.status==="removed"||b.status==="rejected"||b.status==="under_investigation")?'<button class="btn secondary small" data-act="appeal" data-id="'+esc(b.id)+'">'+esc(t("appeal"))+'</button>':"")
           +(b.status==="approved"&&!b.extensionUsed?'<button class="btn secondary small" data-act="extend" data-id="'+esc(b.id)+'">'+esc(t("extend_btn"))+'</button>':"")
           +(b.status==="expired"&&((b.repostCount||0)<3)?'<button class="btn small" data-act="repost" data-id="'+esc(b.id)+'">'+esc(t("repost_btn"))+'</button><button class="btn secondary small" data-act="edit" data-id="'+esc(b.id)+'">'+esc(t("repost_with_changes"))+'</button>':"")
           +(b.status!=="completed"&&b.status!=="removed"&&b.status!=="expired"?'<button class="btn secondary small" data-act="complete" data-id="'+esc(b.id)+'">'+esc(t("mark_completed"))+'</button>':"")
@@ -3615,6 +4237,8 @@ function renderMyBills(){
           var act=btn.getAttribute("data-act"), id=btn.getAttribute("data-id");
           var bill=bills.find(function(x){ return String(x.id)===String(id); });
           if(act==="share") copyText(location.origin+location.pathname+"#/bill/"+id, t("copied_link"));
+          if(act==="story") openStoryComposer(id, bill.title);
+          if(act==="appeal") openBillAppeal(bill);
           if(act==="edit") go("#/post?edit="+encodeURIComponent(id));
           if(act==="history") openEditHistory(bill);
           if(act==="extend") confirmDialog(t("extend_btn"), t("expiry_warn_7"), t("extend_btn"), async function(){ try{ await api("/bills/"+encodeURIComponent(id)+"/extend", {method:"POST"}); toast(t("extended_done")); load(); }catch(e){ toast(e.message||t("err_generic"), true); } });
@@ -3645,6 +4269,8 @@ function giftRowHtml(g){
     +((g.billId||g.bill_id)?'<a class="btn secondary small" href="#/bill/'+encodeURIComponent(g.billId||g.bill_id)+'">'+esc(t("view_bill"))+'</a>':"")
     +(g.status==="confirmed"?'<a class="btn secondary small" href="#/receipt/'+encodeURIComponent(g.id)+'">🧾 '+esc(t("view_receipt"))+'</a>':"")
     +(g.status==="donor_reported_sent"&&S.mybillsTab==="received"?'<button class="btn small" data-gift="confirm" data-id="'+esc(g.id)+'">'+esc(t("confirm_yes"))+'</button><button class="btn secondary small" data-gift="notreceived" data-id="'+esc(g.id)+'">'+esc(t("not_received"))+'</button>':"")
+    // Say thanks (item 424): received + confirmed + not anonymous.
+    +(g.status==="confirmed"&&S.mybillsTab==="received"&&!g.anonymous?'<button class="btn secondary small" data-gift="thanks" data-id="'+esc(g.id)+'" data-bill="'+esc(g.billId||g.bill_id||"")+'" data-name="'+esc(g.supporterName||"")+'">💛 '+esc(t("say_thanks"))+'</button>':"")
     +(g.status!=="confirmed"&&g.status!=="disputed"?'<button class="btn secondary small" data-gift="dispute" data-id="'+esc(g.id)+'">'+esc(t("dispute"))+'</button>':"")
     +((g.status==="disputed"||feeReviewOpen)?'<button class="btn secondary small" data-gift="thread" data-id="'+esc(g.id)+'">💬 '+esc(t("gift_messages"))+'</button>':"")
     +(canFeeReview?'<button class="btn secondary small" data-gift="feereview" data-id="'+esc(g.id)+'">'+esc(t("fee_review_btn"))+'</button>':"")
@@ -3656,6 +4282,7 @@ function bindGiftRows(root){
       var act=btn.getAttribute("data-gift"), id=btn.getAttribute("data-id");
       if(act==="thread"){ openGiftThread(id); return; }
       if(act==="feereview"){ openFeeReview(id); return; }
+      if(act==="thanks"){ openThanksComposer(btn.getAttribute("data-bill"), id, btn.getAttribute("data-name")); return; }
       if(act!=="dispute") btn.disabled=true;
       try{
         if(act==="confirm"){ await api("/gifts/"+encodeURIComponent(id)+"/confirm", {method:"POST"}); toast(t("gift_confirmed_msg")); }
@@ -3783,48 +4410,433 @@ function openDocsUpload(bill){
   };
 }
 
+/* ---------- bill appeal (item 351) ---------- */
+function openBillAppeal(bill){
+  openSheet('<h2>'+esc(t("appeal_bill"))+'</h2><p class="small">'+esc(bill.title||"")+'</p>'
+    +'<label for="ap-reason">'+esc(t("appeal_reason"))+'</label><textarea id="ap-reason" maxlength="1000" rows="4"></textarea>'
+    +'<div class="btn-row"><button class="btn secondary" id="ap-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="ap-send">'+esc(t("submit_appeal"))+'</button></div>');
+  $("#ap-cancel").onclick=closeSheets;
+  $("#ap-send").onclick=async function(){
+    var reason=$("#ap-reason").value.trim();
+    if(reason.length<10){ toast(t("appeal_too_short"), true); return; }
+    try{
+      await api("/bills/"+encodeURIComponent(bill.id)+"/appeal", {method:"POST", body:{reason:reason}});
+      closeSheets(); toast(t("appeal_submitted"));
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+  };
+}
+
 /* ---------- public profile ---------- */
+/* ---------- impact card (items 434/435/437) ---------- */
+// Shareable 1080x1350 canvas card: name, totals, tier, streak. Downloaded
+// as a PNG the user can post anywhere; no tracking, no server round-trip.
+function downloadImpactCard(u, totals, tier, streak){
+  var c=document.createElement("canvas"); c.width=1080; c.height=1350;
+  var x=c.getContext("2d");
+  var g=x.createLinearGradient(0,0,0,1350); g.addColorStop(0,"#1d4ed8"); g.addColorStop(1,"#0ea5e9");
+  x.fillStyle=g; x.fillRect(0,0,1080,1350);
+  x.fillStyle="#ffffff"; x.textAlign="center";
+  x.font="700 44px system-ui, sans-serif"; x.fillText("Sahay Pay", 540, 110);
+  x.font="500 30px system-ui, sans-serif"; x.fillStyle="#dbeafe"; x.fillText(t("impact_card_tag"), 540, 160);
+  x.fillStyle="#ffffff"; x.font="700 64px system-ui, sans-serif";
+  x.fillText((u.displayName||u.display_name||"").slice(0,24), 540, 320);
+  x.font="500 32px system-ui, sans-serif"; x.fillStyle="#dbeafe";
+  x.fillText("@"+(u.username||""), 540, 375);
+  var stats=[
+    [t("given"), money(totals.givenMinor||0, curOf(u.country))],
+    [t("received_total"), money(totals.receivedMinor||0, curOf(u.country))],
+    [t("bills_helped"), String(totals.billsHelped||0)],
+    [t("people_helped"), String(totals.peopleHelped||0)]
+  ];
+  var y=520;
+  stats.forEach(function(s){
+    x.fillStyle="#ffffff"; x.font="700 56px system-ui, sans-serif"; x.fillText(s[1], 540, y);
+    x.fillStyle="#dbeafe"; x.font="500 30px system-ui, sans-serif"; x.fillText(s[0], 540, y+48);
+    y+=160;
+  });
+  if(tier&&tier.tier){ x.fillStyle="#fde68a"; x.font="700 40px system-ui, sans-serif"; x.fillText(tier.tier.icon+" "+tier.tier.name, 540, y+20); }
+  if(streak&&streak.weeks){ x.fillStyle="#ffffff"; x.font="500 32px system-ui, sans-serif"; x.fillText("🔥 "+streak.weeks+" "+t("week_streak"), 540, y+80); }
+  x.fillStyle="#dbeafe"; x.font="500 28px system-ui, sans-serif";
+  x.fillText("sahay-pay.netlify.app", 540, 1280);
+  c.toBlob(function(blob){
+    if(!blob){ toast(t("err_generic"), true); return; }
+    var a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download="sahay-pay-impact-"+(u.username||"card")+".png";
+    a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+    toast(t("impact_card_saved"));
+  }, "image/png");
+}
+
 function renderProfile(username){
   var tok=view(skeleton(2));
   api("/profile/"+encodeURIComponent(username)).then(function(d){
     if(tok!==NAV) return;
-    var u=d.profile||d.user||d;
-    var bills=pickList(d,["bills","liveAsks"])||[];
+    // BUG FIX (items 431/462): the API sends totals:{givenMinor,
+    // receivedMinor} and badges:[...] — the old client read
+    // u.total_given_minor / u.verifications, so totals rendered 0 and
+    // badges never rendered.
+    var u=d.user||d.profile||d;
     var totals=d.totals||{};
-    var showTotals=d.showTotals!==false && u.show_totals!==false;
+    var badges=d.badges||[];
+    var bills=d.liveAsks||pickList(d,["bills","liveAsks"])||[];
+    var tier=d.tier||{};
+    var streak=d.streak||{};
+    var achievements=d.achievements||[];
+    var isSelf=S.user&&(u.username===S.user.username);
+    var cur=curOf(u.country);
+    var blockedByViewer=d.isBlockedByViewer===true;
     var impact=d.impact||null;
-    var blocked=S.blocked.indexOf(u.id||username)>=0;
-    view('<div class="card" style="text-align:center"><div class="avatar" style="width:84px;height:84px;font-size:32px;margin:0 auto">'+(u.photo_url||u.photoUrl?'<img src="'+esc(u.photo_url||u.photoUrl)+'" alt="">':esc(initials(u.display_name||u.displayName)))+'</div>'
-      +'<h1 style="margin-top:10px">'+esc(u.display_name||u.displayName||"")+'</h1><p class="small">@'+esc(u.username||username)+' · '+flag(u.country)+' '+esc(u.city||"")+'</p>'
+    var showTotals=d.showTotals!==false;
+    // Completeness meter (item 463) — self only.
+    var comp=0, compTotal=5;
+    if(u.photoUrl) comp++;
+    if(u.about) comp++;
+    if(u.city) comp++;
+    if(u.coverUrl) comp++;
+    if(badges.length) comp++;
+    var h='<div class="card" style="text-align:center;position:relative;overflow:hidden">'
+      +(u.coverUrl?'<div style="margin:-16px -16px 12px;height:120px;background:url(\''+esc(u.coverUrl)+'\') center/cover"></div>':"")
+      +'<div class="avatar" style="width:84px;height:84px;font-size:32px;margin:0 auto">'+(u.photoUrl?'<img src="'+esc(u.photoUrl)+'" alt="">':esc(initials(u.displayName||u.display_name)))+'</div>'
+      +'<h1 style="margin-top:10px">'+esc(u.displayName||u.display_name||"")+'</h1>'
+      +'<p class="small">@'+esc(u.username||username)+' · '+flag(u.country)+' '+esc(u.city||"")+'</p>'
+      +(d.verifiedHelper?'<p><span class="chip">✅ '+esc(t("verified_helper"))+'</span></p>':"")
+      +(tier.tier?'<p><span class="chip">'+esc(tier.tier.icon)+' '+esc(tier.tier.name)+'</span>'+(streak.weeks? ' <span class="chip">🔥 '+esc(streak.weeks)+' '+esc(t("week_streak"))+'</span>':"")+'</p>':"")
       +'<p>'+esc(u.about||"")+'</p>'
-      +'<p class="small">'+esc(t("member_since"))+' '+esc((u.memberSince||u.created_at)?fmtDate(u.memberSince||u.created_at):"")+'</p>'
-      +'<div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">'+(u.verifications?badgesHtml({verifications:u.verifications}):"")+'</div>'
-      +'<div class="grid2" style="margin-top:12px"><div class="card stat"><div class="n">'+esc(u.live_asks!=null?u.live_asks:bills.length)+'</div><div class="l">'+esc(t("live_asks"))+'</div></div>'
-      +'<div class="card stat"><div class="n">'+esc(d.completedAsks!=null?d.completedAsks:(u.completed_asks||0))+'</div><div class="l">'+esc(t("completed_asks"))+'</div></div></div>'
+      +'<p class="small">'+esc(t("member_since"))+' '+esc(u.memberSince?fmtDate(u.memberSince):"")+'</p>'
+      +(badges.length?'<div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">'+badgesHtml({verifications:badges})+'</div>':"")
+      +(isSelf?'<div style="margin-top:10px"><p class="small">'+esc(t("profile_complete"))+' '+Math.round(comp/compTotal*100)+'%</p><div class="bar"><div class="fill" style="width:'+Math.round(comp/compTotal*100)+'%"></div></div></div>':"")
+      // Impact stats (items 431/432/470/471).
+      +'<div class="grid2" style="margin-top:12px">'
+      +'<div class="card stat"><div class="n">'+esc(totals.billsPosted||0)+'</div><div class="l">'+esc(t("bills_posted"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.billsCompleted||0)+'</div><div class="l">'+esc(t("bills_completed"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.billsHelped||0)+'</div><div class="l">'+esc(t("bills_helped"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.peopleHelped||0)+'</div><div class="l">'+esc(t("people_helped"))+'</div></div></div>'
+      +(d.showTotals===false&&!isSelf?'<p class="small">'+esc(t("totals_private"))+'</p>':'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(money(totals.givenMinor||0, cur))+'</div><div class="l">'+esc(t("given"))+'</div></div><div class="card stat"><div class="n">'+esc(money(totals.receivedMinor||0, cur))+'</div><div class="l">'+esc(t("received_total"))+'</div></div></div>')
       +(S.user&&(u.username===S.user.username||u.id===S.user.id)?'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(S.saved.length)+'</div><div class="l">'+esc(t("saved_title"))+'</div></div><div class="card stat"><div class="n">'+esc(loadDrafts().length)+'</div><div class="l">'+esc(t("drafts_title"))+'</div></div></div>':"")
-      +(showTotals?'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(money(totals.givenMinor!=null?totals.givenMinor:(u.total_given_minor||0), curOf(u.country)))+'</div><div class="l">'+esc(t("given"))+'</div></div><div class="card stat"><div class="n">'+esc(money(totals.receivedMinor!=null?totals.receivedMinor:(u.total_received_minor||0), curOf(u.country)))+'</div><div class="l">'+esc(t("received_total"))+'</div></div></div>':'<p class="small">'+esc(t("totals_private"))+'</p>')
       +(impact&&showTotals?'<div class="card" style="margin-top:10px;text-align:left"><h2>'+esc(t("impact_title"))+'</h2>'
-        +'<div class="kv"><span>'+esc(t("impact_confirmed"))+'</span><b>'+esc(impact.confirmedGifts||0)+'</b></div>'
-        +'<div class="kv"><span>'+esc(t("impact_helped"))+'</span><b>'+esc(impact.billsHelped||0)+'</b></div>'
-        +'<div class="kv"><span>'+esc(t("impact_streak"))+'</span><b>'+esc(t("impact_days",{n:impact.currentStreakDays||0}))+'</b></div>'
-        +(impact.byCurrency&&impact.byCurrency.NPR?'<div class="kv"><span>'+esc(t("impact_npr"))+'</span><b>'+esc(money(impact.byCurrency.NPR.totalMinor||0,"NPR"))+'</b></div>':"")
-        +(impact.byCurrency&&impact.byCurrency.INR?'<div class="kv"><span>'+esc(t("impact_inr"))+'</span><b>'+esc(money(impact.byCurrency.INR.totalMinor||0,"INR"))+'</b></div>':"")
-        +'</div>':"")
-      // Item 926: totals are Demo Mode figures.
+      +'<div class="kv"><span>'+esc(t("impact_confirmed"))+'</span><b>'+esc(impact.confirmedGifts||0)+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("impact_helped"))+'</span><b>'+esc(impact.billsHelped||0)+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("impact_streak"))+'</span><b>'+esc(t("impact_days",{n:impact.currentStreakDays||0}))+'</b></div>'
+      +(impact.byCurrency&&impact.byCurrency.NPR?'<div class="kv"><span>'+esc(t("impact_npr"))+'</span><b>'+esc(money(impact.byCurrency.NPR.totalMinor||0,"NPR"))+'</b></div>':"")
+      +(impact.byCurrency&&impact.byCurrency.INR?'<div class="kv"><span>'+esc(t("impact_inr"))+'</span><b>'+esc(money(impact.byCurrency.INR.totalMinor||0,"INR"))+'</b></div>':"")
+      +'</div>':"")
       +'<p class="small muted" style="margin-top:8px">'+esc(t("demo_totals_note"))+'</p>'
-      +'<div class="btn-row"><button class="btn secondary small" id="pf-share">🔗 '+esc(t("share_profile"))+'</button><button class="btn secondary small" id="pf-report">🚩 '+esc(t("report_user"))+'</button><button class="btn secondary small" id="pf-block">'+esc(blocked?t("unblock"):t("block_user"))+'</button></div></div>'
-      +'<h2>'+esc(t("live_asks"))+'</h2><div id="pf-bills">'
-      +(bills.length? bills.map(function(b){ return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amount_minor||b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.category||"")+'</div></div><span>›</span></a>'; }).join("") : '<p>'+esc(t("empty_mybills"))+'</p>')
-      +'</div>');
-    $("#pf-share").onclick=function(){ copyText(location.origin+location.pathname+"#/profile/"+(u.username||username), t("copy_profile_link")); };
+      +(d.bestWeekMinor?'<p class="small" style="margin-top:8px">📅 '+esc(t("best_week"))+': '+esc(money(d.bestWeekMinor, cur))+(d.bestWeek?' ('+esc(d.bestWeek)+')':"")+'</p>':"")
+      +(d.responseTimeHours!=null?'<p class="small">⏱️ '+esc(t("response_time"))+': '+esc(d.responseTimeHours)+'h</p>':"")
+      +(d.thankYouRate!=null?'<p class="small">💛 '+esc(t("thank_you_rate"))+': '+esc(d.thankYouRate)+'%</p>':"")
+      +(tier.next?'<p class="small" style="margin-top:8px">'+esc(t("tier_next"))+': '+esc(tier.next.icon)+' '+esc(tier.next.name)+' — '+esc(tier.giftsToNext||0)+' '+esc(t("gifts_to_go"))+'</p><div class="bar"><div class="fill" style="width:'+Math.round((tier.progress||0)*100)+'%"></div></div>':"")
+      +(d.followers!=null?'<p class="small" style="margin-top:10px"><a href="#/profile/'+encodeURIComponent(u.username)+'/followers">'+esc(d.followers)+' '+esc(t("followers"))+'</a> · <a href="#/profile/'+encodeURIComponent(u.username)+'/following">'+esc(d.followingCount||0)+' '+esc(t("following"))+'</a></p>':"")
+      +'<div class="btn-row">'
+      +'<button class="btn secondary small" id="pf-share">🔗 '+esc(t("share_profile"))+'</button>'
+      +'<button class="btn secondary small" id="pf-card">🖼️ '+esc(t("impact_card"))+'</button>'
+      +(S.user&&!isSelf?'<button class="btn secondary small" id="pf-follow">'+(d.isFollowing?esc(t("unfollow")):esc(t("follow")))+'</button>':"")
+      +'<button class="btn secondary small" id="pf-report">🚩 '+esc(t("report_user"))+'</button>'
+      +(S.user&&!isSelf?'<button class="btn secondary small" id="pf-block">'+(blockedByViewer?esc(t("unblock")):esc(t("block_user")))+'</button>':"")
+      +'</div></div>';
+    // Achievements row (items 415/417).
+    if(achievements.length){
+      h+='<h2>'+esc(t("achievements"))+'</h2><div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap">'
+        +achievements.map(function(a){ return '<span class="chip" title="'+esc(a.desc||"")+'">'+esc(a.icon||"🏅")+' '+esc(a.name||a.key)+'</span>'; }).join("")
+        +'</div><p class="small" style="margin-top:8px"><a href="#/achievements">'+esc(t("all_achievements"))+'</a></p></div>';
+    }
+    // Thank-you wall (item 423).
+    if((d.thankYouWall||[]).length){
+      h+='<h2>'+esc(t("thank_you_wall"))+'</h2><div id="pf-thanks">'
+        +d.thankYouWall.map(function(th){
+          return '<div class="card"><p>'+esc(th.body||"")+'</p>'
+            +(th.videoUrl?'<video src="'+esc(th.videoUrl)+'" controls style="max-width:100%;margin-top:8px"></video>':"")
+            +'<p class="small">— '+esc(th.receiverName||"")+' · '+esc(th.billTitle||"")+' · '+esc(fmtDate(th.createdAt))+(th.reactions?' · ❤️ '+esc(th.reactions):"")+'</p></div>';
+        }).join("")+'</div>';
+    }
+    // Gift history (item 469) — amount bands, never exact recipients.
+    if((d.giftHistory||[]).length){
+      h+='<h2>'+esc(t("gift_history"))+'</h2><div class="card">'
+        +d.giftHistory.slice(0,20).map(function(g){
+          return '<div class="row"><span>'+esc(fmtDate(g.confirmedAt))+' · '+esc(g.category||"")+'</span><span class="chip">'+esc(t("band_"+g.amountBand))+'</span></div>';
+        }).join("")+'</div>';
+    } else if(d.hideGiftHistory&&!isSelf){
+      h+='<p class="small">'+esc(t("gift_history_private"))+'</p>';
+    }
+    // Live asks with progress bars (item 468).
+    h+='<h2>'+esc(t("live_asks"))+'</h2><div id="pf-bills">'
+      +(bills.length? bills.map(function(b){
+        var pct=b.amountMinor?Math.min(100,Math.round((b.coveredMinor||0)/b.amountMinor*100)):0;
+        return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.category||"")+'</div><div class="bar" style="margin-top:6px"><div class="fill" style="width:'+pct+'%"></div></div><div class="small">'+pct+'% '+esc(t("covered"))+'</div></div><span>›</span></a>';
+      }).join("") : '<p>'+esc(t("empty_mybills"))+'</p>')
+      +'</div>';
+    view(h);
+    // Share via the clean /share URL (items 439/440) so crawlers see OG meta.
+    $("#pf-share").onclick=function(){ copyText(location.origin+"/share/profile/"+encodeURIComponent(u.username||username), t("copy_profile_link")); };
+    $("#pf-card").onclick=function(){ downloadImpactCard(u, totals, tier, streak); };
+    var followBtn=$("#pf-follow");
+    if(followBtn){
+      followBtn.onclick=async function(){
+        try{
+          if(d.isFollowing){ await api("/social/follow/"+encodeURIComponent(u.username), {method:"DELETE"}); d.isFollowing=false; }
+          else { await api("/social/follow/"+encodeURIComponent(u.username), {method:"POST"}); d.isFollowing=true; }
+          route();
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
     $("#pf-report").onclick=function(){ openReportSheet("user", u.id||username); };
-    $("#pf-block").onclick=function(){
-      var key=u.id||username;
-      var i=S.blocked.indexOf(key);
-      if(i>=0){ S.blocked.splice(i,1); } else { S.blocked.push(key); }
-      saveBlocked(); toast(t("blocked")); route();
-    };
+    var blockBtn=$("#pf-block");
+    if(blockBtn){
+      blockBtn.onclick=async function(){
+        try{
+          if(blockedByViewer){ await api("/social/block/"+encodeURIComponent(u.username), {method:"DELETE"}); }
+          else { await api("/social/block/"+encodeURIComponent(u.username), {method:"POST"}); }
+          toast(t("blocked")); route();
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
   }).catch(function(e){ if(tok!==NAV) return; view(emptyState("👤", t("profile_not_found"), e.message||"", "", "h1")); });
+}
+
+/* ---------- hall of fame (items 407/408/409/439/497) ---------- */
+function renderHallOfFame(arg, q){
+  var month=(q&&q.month)||"all";
+  view('<h1>'+esc(t("hall_of_fame"))+'</h1><p class="small">'+esc(t("hof_intro"))+'</p><p class="small">'+esc(t("hof_rule"))+'</p>'
+    +'<div class="btn-row" style="margin-bottom:10px"><button class="btn secondary small" id="hof-share">🔗 '+esc(t("share"))+'</button></div>'
+    +'<div id="hof-months" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>'
+    +'<div id="hof-body">'+skeleton(2)+'</div>');
+  $("#hof-share").onclick=function(){ copyText(location.origin+"/share/hof", t("copied")); };
+  load();
+  async function load(){
+    var body=$("#hof-body"); if(!body) return;
+    try{
+      var d=await api("/hall-of-fame"+(month!=="all"?"?month="+encodeURIComponent(month):""));
+      var months=d.months||[];
+      $("#hof-months").innerHTML='<button class="chip'+(month==="all"?" on":"")+'" data-m="all">'+esc(t("all_time"))+'</button>'
+        +months.map(function(m){ return '<button class="chip'+(month===m?" on":"")+'" data-m="'+esc(m)+'">'+esc(m)+'</button>'; }).join("");
+      $all("#hof-months [data-m]").forEach(function(b){ b.onclick=function(){ month=b.getAttribute("data-m"); load(); }; });
+      var entries=d.entries||[];
+      if(!entries.length){ body.innerHTML=emptyState("🏆", t("empty_hof"), d.emptyMessage||""); return; }
+      var h='<div class="podium">'+entries.slice(0,3).map(function(e,i){
+        return '<div class="pod card '+(i===0?"first":i===1?"second":"third")+'"><div class="rank">'+(i===0?"🥇":i===1?"🥈":"🥉")+'</div><div class="avatar" style="margin:6px auto">'+esc(initials(e.displayName||""))+'</div><a href="#/profile/'+encodeURIComponent(e.username||"")+'"><strong>'+esc(e.displayName||"")+'</strong></a><div class="small">'+esc(money(e.totalMinor||0, e.currency||"NPR"))+'</div><div class="small muted">'+esc(e.billsPaid||0)+' '+esc(t("bills_paid"))+' · '+esc(e.gifts||0)+' '+esc(t("gifts"))+'</div></div>';
+      }).join("")+'</div>';
+      h+=entries.slice(3).map(function(e){
+        return '<a class="card leader-row" href="#/profile/'+encodeURIComponent(e.username||"")+'"><span class="rank">'+esc(e.rank)+'</span><div class="avatar">'+esc(initials(e.displayName||""))+'</div><div class="grow" style="flex:1;min-width:0"><strong>'+esc(e.displayName||"")+'</strong><div class="small">'+esc(t("first_helped"))+' '+esc(e.firstHelped?fmtDate(e.firstHelped):"")+(e.tier?" · "+esc(e.tier.icon)+" "+esc(e.tier.name):"")+'</div></div><strong class="money">'+esc(money(e.totalMinor||0, e.currency||"NPR"))+'</strong></a>';
+      }).join("");
+      if((d.fullyPaid||[]).length){
+        h+='<h2 style="margin-top:16px">'+esc(t("most_bills_paid"))+'</h2>'
+          +d.fullyPaid.map(function(b){ return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.helpers||0)+' '+esc(t("helpers"))+'</div></div><span>›</span></a>'; }).join("");
+      }
+      body.innerHTML=h;
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
+  }
+}
+
+/* ---------- community (items 458–461, 478, 481, 484, 544/546, 549) ---------- */
+function renderCommunity(){
+  var tok=view(skeleton(3));
+  api("/community").then(function(d){
+    if(tok!==NAV) return;
+    var h='<h1>'+esc(t("community_title"))+'</h1>';
+    // Scam notices (item 365) shown at the top of the community page.
+    h+='<div id="cm-scam"></div>';
+    // Community banner (item 459) + milestone banner (item 478).
+    var dg=d.digest||{};
+    h+='<div class="card" style="background:linear-gradient(135deg,#1d4ed8,#0ea5e9);color:#fff"><h2 style="color:#fff;margin-top:0">'+esc(t("community_banner"))+'</h2>'
+      +'<p>'+esc(dg.giftsWeek||0)+' '+esc(t("gifts_this_week"))+' · '+esc(dg.paidWeek||0)+' '+esc(t("bills_paid_this_week"))+'</p>'
+      +'<p class="small" style="color:#dbeafe">'+esc(t("all_time"))+': '+esc(dg.giftsAll||0)+' '+esc(t("gifts"))+' · '+esc(dg.paidAll||0)+' '+esc(t("bills_paid"))+'</p>'
+      +'<p><a href="#/milestones" style="color:#fff;text-decoration:underline">'+esc(t("milestones"))+' →</a></p></div>';
+    // Featured brand of the week (items 544/546).
+    if(d.featured){
+      h+='<h2>'+esc(t("featured_brand"))+'</h2><a class="card row-card" href="#/brand-directory/'+encodeURIComponent(d.featured.id)+'"><div class="grow"><div class="t">'+esc(d.featured.name)+(d.featured.verified?" ✅":"")+'</div><div class="s">'+esc(d.featured.industry||"")+' · '+esc(d.featured.city||"")+'</div><p class="small">'+esc((d.featured.description||"").slice(0,160))+'</p></div><span>›</span></a>'
+        +'<p class="small"><a href="#/help?topic=featured-brand">'+esc(t("how_featured_chosen"))+'</a></p>';
+    }
+    // Giver of the week (item 481).
+    if(d.giverOfWeek){
+      var g=d.giverOfWeek;
+      h+='<h2>⭐ '+esc(t("giver_of_week"))+'</h2><a class="card row-card" href="#/profile/'+encodeURIComponent(g.username||"")+'"><div class="avatar">'+esc(initials(g.displayName||""))+'</div><div class="grow"><div class="t">'+esc(g.displayName||"")+'</div><div class="s">'+esc(money(g.totalMinor||0, g.currency||"NPR"))+' · '+esc(g.gifts||0)+' '+esc(t("gifts"))+'</div></div><span>›</span></a>';
+    }
+    if((d.newestBills||[]).length){
+      h+='<h2>'+esc(t("newest_asks"))+'</h2>'+d.newestBills.map(function(b){
+        return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.category||"")+' · '+esc(b.posterName||"")+'</div></div><span>›</span></a>';
+      }).join("");
+    }
+    if((d.thanks||[]).length){
+      h+='<h2>'+esc(t("recent_thanks"))+'</h2>'+d.thanks.map(function(th){
+        return '<div class="card"><p>'+esc(th.body||"")+'</p><p class="small">— '+esc(th.receiverName||"")+' '+esc(t("to"))+' '+esc(th.giverName||"")+' · '+esc(th.billTitle||"")+'</p></div>';
+      }).join("")+'<p><a href="#/thanks">'+esc(t("all_thanks"))+' →</a></p>';
+    }
+    if((d.newestHelpers||[]).length){
+      h+='<h2>'+esc(t("newest_helpers"))+'</h2><div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap">'
+        +d.newestHelpers.map(function(u){ return '<a class="chip" href="#/profile/'+encodeURIComponent(u.username||"")+'">'+esc(u.displayName||"")+'</a>'; }).join("")
+        +'</div></div>';
+    }
+    if((d.stories||[]).length){
+      h+='<h2>'+esc(t("receiver_stories"))+'</h2>'+d.stories.map(function(s){
+        return '<div class="card"><p>'+esc(s.body||"")+'</p><p class="small">— '+esc(s.authorName||"")+' · <a href="#/bill/'+encodeURIComponent(s.billId)+'">'+esc(s.billTitle||"")+'</a></p></div>';
+      }).join("");
+    }
+    if((d.csrStories||[]).length){
+      h+='<h2>'+esc(t("csr_stories"))+'</h2>'+d.csrStories.map(function(c){
+        return '<div class="card"><strong>'+esc(c.title||"")+'</strong><p>'+esc((c.body||"").slice(0,300))+'</p><p class="small">'+esc(c.brandName||"")+' · '+esc(fmtDate(c.createdAt))+'</p></div>';
+      }).join("");
+    }
+    view(h);
+    api("/scam-notices").then(function(sd){
+      var box=$("#cm-scam"); if(!box) return;
+      var list=sd.notices||[];
+      if(list.length){
+        box.innerHTML=list.slice(0,3).map(function(n){
+          return '<div class="card" style="border-left:4px solid var(--warn)"><strong>⚠️ '+esc(n.title||"")+'</strong><p class="small">'+esc(n.body||"")+'</p></div>';
+        }).join("")+'<p class="small"><a href="#/help?topic=scams">'+esc(t("learn_scams"))+' →</a></p>';
+      }
+    }).catch(function(){});
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderCommunity); });
+}
+
+/* ---------- milestones (items 478/479) ---------- */
+function renderMilestones(){
+  var tok=view(skeleton(2));
+  api("/milestones").then(function(d){
+    if(tok!==NAV) return;
+    var tot=d.totals||{};
+    var h='<h1>'+esc(t("milestones"))+'</h1>'
+      +'<div class="grid2"><div class="card stat"><div class="n">'+esc(tot.gifts||0)+'</div><div class="l">'+esc(t("gifts"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(tot.billsPaid||0)+'</div><div class="l">'+esc(t("bills_paid"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(tot.helpers||0)+'</div><div class="l">'+esc(t("helpers"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(money(tot.totalNprMinor||0,"NPR"))+'</div><div class="l">'+esc(t("total_npr"))+'</div></div></div>'
+      +(d.nextGiftMilestone?'<p class="small" style="margin-top:10px">🎯 '+esc(t("next_milestone"))+': '+esc(d.nextGiftMilestone)+' '+esc(t("gifts"))+' ('+esc(d.nextGiftMilestone-(tot.gifts||0))+' '+esc(t("to_go"))+')</p>':"")
+      +'<h2 style="margin-top:14px">'+esc(t("reached"))+'</h2>'
+      +((d.milestones||[]).length? d.milestones.map(function(m){
+        return '<div class="card row-card"><div class="grow"><div class="t">🎉 '+esc(m.threshold)+' '+(m.kind==="gifts"?esc(t("gifts")):esc(t("bills_paid")))+'</div><div class="s">'+esc(fmtDate(m.reachedAt))+'</div></div></div>';
+      }).join("") : '<p>'+esc(t("no_milestones_yet"))+'</p>');
+    view(h);
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderMilestones); });
+}
+
+/* ---------- activity feed (item 447) ---------- */
+function renderActivity(){
+  if(!S.user){ view(emptyState("📰", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  var tok=view(skeleton(2));
+  api("/social/activity").then(function(d){
+    if(tok!==NAV) return;
+    var items=d.activity||[];
+    view('<h1>'+esc(t("activity_feed"))+'</h1><p class="small">'+esc(t("activity_intro"))+'</p>'
+      +(items.length? items.map(function(a){
+        return '<a class="card row-card" href="#/bill/'+encodeURIComponent(a.billId)+'"><div class="grow"><div class="t">'+esc(a.actorName||"")+' '+(a.kind==="gift_confirmed"?esc(t("helped")):esc(t("bill_completed")))+'</div><div class="s">'+esc(a.billTitle||"")+(a.amountMinor? ' · '+esc(money(a.amountMinor, a.currency||"NPR")):"")+' · '+esc(fmtDate(a.createdAt))+'</div></div><span>›</span></a>';
+      }).join("") : emptyState("📰", t("empty_activity"), t("activity_empty_hint"))));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderActivity); });
+}
+
+/* ---------- thank-you feed (items 424–430) ---------- */
+function renderThanksFeed(){
+  var tok=view(skeleton(2));
+  api("/social/thanks/feed").then(function(d){
+    if(tok!==NAV) return;
+    var items=d.thanks||[];
+    view('<h1>'+esc(t("thank_you_wall"))+'</h1>'
+      +(items.length? items.map(function(th){
+        return '<div class="card"><p>'+esc(th.body||"")+'</p>'
+          +(th.videoUrl?'<video src="'+esc(th.videoUrl)+'" controls style="max-width:100%;margin-top:8px"></video>':"")
+          +'<p class="small">— '+esc(th.receiverName||"")+' '+esc(t("to"))+' <a href="#/profile/'+encodeURIComponent(th.giverUsername||"")+'">'+esc(th.giverName||"")+'</a> · '+esc(th.billTitle||"")+'</p>'
+          +'<div class="btn-row"><button class="btn secondary small" data-react="'+esc(th.id)+'" data-k="heart">❤️ '+(th.reactions&&th.reactions.heart?esc(th.reactions.heart):"")+'</button><button class="btn secondary small" data-react="'+esc(th.id)+'" data-k="clap">👏 '+(th.reactions&&th.reactions.clap?esc(th.reactions.clap):"")+'</button><button class="btn secondary small" data-react="'+esc(th.id)+'" data-k="legend">🏆 '+(th.reactions&&th.reactions.legend?esc(th.reactions.legend):"")+'</button></div></div>';
+      }).join("") : emptyState("💛", t("empty_thanks"), "")));
+    $all("[data-react]").forEach(function(btn){
+      btn.onclick=async function(){
+        if(!S.user){ toast(t("need_profile"), true); return; }
+        try{ await api("/social/thanks/"+encodeURIComponent(btn.getAttribute("data-react"))+"/react", {method:"POST", body:{kind:btn.getAttribute("data-k")}}); route(); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    });
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderThanksFeed); });
+}
+
+/* ---------- achievements catalogue (item 417) ---------- */
+function renderAchievements(){
+  var tok=view(skeleton(2));
+  api("/social/achievements/definitions").then(function(d){
+    if(tok!==NAV) return;
+    var defs=d.definitions||[];
+    view('<h1>'+esc(t("achievements"))+'</h1><p class="small">'+esc(t("achievements_intro"))+'</p>'
+      +defs.map(function(a){
+        return '<div class="card row-card"><span style="font-size:28px">'+esc(a.icon||"🏅")+'</span><div class="grow"><div class="t">'+esc(a.name||"")+'</div><div class="s">'+esc(a.desc||"")+'</div></div><span class="chip">'+esc(a.holders||0)+' '+esc(t("holders"))+'</span></div>';
+      }).join(""));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderAchievements); });
+}
+
+/* ---------- follower lists (item 444) ---------- */
+function renderFollowList(username, kind){
+  if(!S.user){ view(emptyState("👥", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  var tok=view(skeleton(2));
+  api("/social/"+encodeURIComponent(username)+"/"+kind).then(function(d){
+    if(tok!==NAV) return;
+    var users=d.users||[];
+    view('<h1>'+esc(kind==="followers"?t("followers"):t("following"))+'</h1><p class="small">@'+esc(username)+'</p>'
+      +(users.length? users.map(function(u){
+        return '<a class="card row-card" href="#/profile/'+encodeURIComponent(u.username||"")+'"><div class="avatar">'+esc(initials(u.displayName||""))+'</div><div class="grow"><div class="t">'+esc(u.displayName||"")+'</div><div class="s">@'+esc(u.username||"")+'</div></div><span>›</span></a>';
+      }).join("") : '<p>'+esc(t("empty_followers"))+'</p>'));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(function(){ renderFollowList(username, kind); }); });
+}
+
+/* ---------- changelog feed (item 492) ---------- */
+// Served from a static public/changelog.json (the Netlify function bundle
+// does not include CHANGELOG.md, so the app cannot read it at runtime).
+function renderChangelog(){
+  var tok=view(skeleton(2));
+  fetch("changelog.json").then(function(r){ return r.json(); }).then(function(d){
+    if(tok!==NAV) return;
+    var entries=d.entries||[];
+    view('<h1>'+esc(t("changelog"))+'</h1>'
+      +(entries.length? entries.map(function(e){
+        return '<div class="card"><strong>'+esc(e.version||"")+'</strong> <span class="small">'+esc(e.date||"")+'</span><ul>'+(e.changes||[]).map(function(c){ return '<li>'+esc(c)+'</li>'; }).join("")+'</ul></div>';
+      }).join("") : '<p>'+esc(t("empty_changelog"))+'</p>'));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); });
+}
+
+/* ---------- thank-you composer (items 424–428) ---------- */
+function openThanksComposer(billId, giftId, giverName){
+  var videoUrl=null, videoDurationSec=null;
+  openSheet('<h2>'+esc(t("say_thanks"))+'</h2><p class="small">'+esc(t("thanks_intro"))+' '+esc(giverName||"")+'</p>'
+    +'<label for="th-body">'+esc(t("your_message"))+'</label><textarea id="th-body" maxlength="1000" rows="4"></textarea>'
+    +'<label for="th-video">'+esc(t("video_thanks"))+' ('+esc(t("video_60s"))+')</label><input type="file" id="th-video" accept="video/*"><p class="small">'+esc(t("video_thanks_note"))+'</p>'
+    +'<div class="btn-row"><button class="btn secondary" id="th-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="th-send">'+esc(t("send_thanks"))+'</button></div>');
+  $("#th-cancel").onclick=closeSheets;
+  $("#th-send").onclick=async function(){
+    var body=$("#th-body").value.trim();
+    var f=$("#th-video").files[0];
+    if(!body && !f){ toast(t("thanks_empty"), true); return; }
+    try{
+      if(f){
+        // ≤60s enforcement (item 426): the server has no video decoder,
+        // so duration is checked from the file's metadata in the browser
+        // before upload (the 5 MB server cap still applies).
+        var dur=await new Promise(function(resolve){
+          var v=document.createElement("video");
+          v.preload="metadata";
+          v.onloadedmetadata=function(){ resolve(v.duration); URL.revokeObjectURL(v.src); };
+          v.onerror=function(){ resolve(null); URL.revokeObjectURL(v.src); };
+          v.src=URL.createObjectURL(f);
+        });
+        if(dur!==null&&dur>60){ toast(t("video_too_long"), true); return; }
+        videoDurationSec=dur===null?null:Math.ceil(dur);
+        var up=await uploadFile(f, "thanks_video");
+        videoUrl=up.url||up.fileUrl||up.path;
+      }
+      await api("/social/thanks", {method:"POST", body:{billId:billId, giftId:giftId, body:body, videoUrl:videoUrl, videoDurationSec:videoDurationSec}});
+      closeSheets(); toast(t("thanks_sent_review"));
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+  };
+}
+
+/* ---------- receiver story composer (items 482/483) ---------- */
+function openStoryComposer(billId, billTitle){
+  openSheet('<h2>'+esc(t("share_story"))+'</h2><p class="small">'+esc(t("story_intro"))+' — '+esc(billTitle||"")+'</p>'
+    +'<label for="st-story">'+esc(t("your_story"))+'</label><textarea id="st-story" maxlength="5000" rows="6"></textarea>'
+    +'<div class="btn-row"><button class="btn secondary" id="st-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="st-send">'+esc(t("submit_story"))+'</button></div>');
+  $("#st-cancel").onclick=closeSheets;
+  $("#st-send").onclick=async function(){
+    var body=$("#st-story").value.trim();
+    if(body.length<20){ toast(t("story_too_short"), true); return; }
+    try{
+      await api("/social/stories", {method:"POST", body:{billId:billId, body:body}});
+      closeSheets(); toast(t("story_sent_review"));
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+  };
 }
 
 /* ---------- settings ---------- */
@@ -3849,8 +4861,10 @@ function renderSettings(){
     +'<label for="st-name">'+esc(t("display_name"))+'</label><input id="st-name" maxlength="60" value="'+esc(u.display_name||u.displayName||"")+'" autocomplete="name">'
     +'<label for="st-username">'+esc(t("username"))+'</label><input id="st-username" maxlength="30" value="'+esc(u.username||"")+'" autocomplete="username"><p class="small">'+esc(t("username_rules"))+'</p>'
     +'<label for="st-city">'+esc(t("city"))+'</label><input id="st-city" value="'+esc(u.city||"")+'" autocomplete="address-level2">'
-    +'<label for="st-about">'+esc(t("about"))+'</label><textarea id="st-about" maxlength="500">'+esc(u.about||"")+'</textarea>'
-    +'<label for="st-photo">'+esc(t("q_photo"))+'</label><input type="file" id="st-photo" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("photo_change_review"))+'</p>'
+    +'<label for="st-about">'+esc(t("about"))+'</label><textarea id="st-about" maxlength="300">'+esc(u.about||"")+'</textarea><p class="small" id="st-about-count"></p>'
+    +'<label for="st-photo">'+esc(t("q_photo"))+'</label><input type="file" id="st-photo" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("photo_change_review"))+'</p><div id="st-photo-crop"></div>'
+    +'<label for="st-cover">'+esc(t("cover_image"))+'</label><input type="file" id="st-cover" accept="image/jpeg,image/png,image/webp"><p class="small">'+esc(t("cover_image_note"))+'</p>'
+    +(u.coverUrl||u.cover_url?'<p><button class="btn secondary small" id="st-cover-remove">'+esc(t("remove_cover"))+'</button></p>':"")
     +'<label>'+esc(t("country"))+'</label><div class="seg" id="st-country"><button type="button" data-c="NP" class="'+(countryCode(u.country)==="NP"?"on":"")+'">🇳🇵 '+esc(t("nepal"))+'</button><button type="button" data-c="IN" class="'+(countryCode(u.country)==="IN"?"on":"")+'">🇮🇳 '+esc(t("india"))+'</button></div><p class="small">'+esc(t("change_country_note"))+'</p>'
     +'<button class="btn" id="st-save-profile" style="margin-top:12px">'+esc(t("save"))+'</button></div>'
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("prefs_section"))+'</h2>'
@@ -3869,9 +4883,18 @@ function renderSettings(){
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("privacy_section"))+'</h2>'
     +'<label class="check-row"><input type="checkbox" id="st-show" '+(showTotals?"checked":"")+'> '+esc(t("show_history"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="st-anon" '+(anonDefault?"checked":"")+'> '+esc(t("anon_default"))+'</label>'
+    +'<label class="check-row"><input type="checkbox" id="st-hide-gh" '+(prefs.hideGiftHistory?"checked":"")+'> '+esc(t("hide_gift_history"))+'</label>'
+    +'<label class="check-row"><input type="checkbox" id="st-hide-la" '+(prefs.hideLiveAsks?"checked":"")+'> '+esc(t("hide_live_asks"))+'</label>'
+    +'<label class="check-row"><input type="checkbox" id="st-hide-fl" '+(prefs.hideFollowers?"checked":"")+'> '+esc(t("hide_followers"))+'</label>'
+    +'<label class="check-row"><input type="checkbox" id="st-hide-sw" '+(prefs.hideFromSupporterWall?"checked":"")+'> '+esc(t("hide_supporter_wall"))+'</label>'
     +'<h3 style="margin-top:12px">'+esc(t("blocked_users"))+' ('+S.blocked.length+')</h3>'
     +(S.blocked.length? S.blocked.map(function(b){ return '<div class="kv"><span>'+esc(b)+'</span><button class="btn secondary small" data-unblock="'+esc(b)+'">'+esc(t("unblock"))+'</button></div>'; }).join("") : '<p class="small">'+esc(t("no_blocked"))+'</p>')
     +'<button class="btn secondary" id="st-save-priv" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("security_section"))+'</h2>'
+    // "Secure your account" checklist (item 390).
+    +'<ul id="st-checklist" class="small" style="line-height:1.9"></ul>'
+    +'<h3 style="margin-top:12px">'+esc(t("signin_history"))+'</h3><div id="st-signins"><p class="small">'+esc(t("loading"))+'</p></div>'
+    +'<p class="small">'+esc(t("signin_history_note"))+'</p></div>'
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("support_section"))+'</h2>'
     +'<div style="display:grid;gap:8px"><a class="btn secondary" href="#/help">'+esc(t("help_centre"))+'</a><a class="btn secondary" href="#/verify">'+esc(t("verify_centre"))+'</a><a class="btn secondary" href="#/help?topic=ranking">'+esc(t("topic_ranking"))+'</a><button class="btn secondary" id="st-tour">'+esc(t("tour_replay"))+'</button><a class="btn secondary" href="#/admin">'+esc(t("open_console"))+'</a></div>'
     +'<p class="small" style="margin-top:10px">'+esc(t("ranking_note_settings"))+'</p>'
@@ -3887,6 +4910,8 @@ function renderSettings(){
     +'<div style="display:grid;gap:8px;margin-top:12px"><button class="btn secondary" id="st-regen">'+esc(t("regen_recovery"))+'</button>'
     // Item 821: log out of every other device.
     +'<button class="btn secondary" id="st-logout-others">'+esc(t("logout_others"))+'</button></div></div>'
+    // Support Sahay Pay (item 566).
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("support_sahay_pay"))+'</h2><p class="small">'+esc(t("support_sahay_pay_body"))+'</p><div style="display:grid;gap:8px"><a class="btn secondary" href="#/founder">'+esc(t("founder_page"))+'</a><a class="btn secondary" href="#/supporters-wall">'+esc(t("supporters_wall"))+'</a></div></div>'
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("account_section"))+'</h3>'
     // Item 921: consent record — which Terms/Privacy versions were
     // accepted, and when.
@@ -3898,6 +4923,53 @@ function renderSettings(){
     +'<p class="small legal" style="margin-top:12px">'+esc(t("version_note"))+'</p></div>');
   // Data export (items 183/273/429): download profile, bills, gifts,
   // notifications as one JSON file.
+  // Bio character counter (item 464: 300 characters).
+  var aboutEl=$("#st-about"), aboutCount=$("#st-about-count");
+  function updateAboutCount(){ if(aboutEl&&aboutCount) aboutCount.textContent=aboutEl.value.length+" / 300"; }
+  if(aboutEl){ aboutEl.addEventListener("input", updateAboutCount); updateAboutCount(); }
+  // Avatar crop step (item 465): centre-square crop preview; the cropped
+  // image (max 512px) is what gets uploaded.
+  var croppedPhotoBlob=null;
+  var photoInput=$("#st-photo");
+  if(photoInput){
+    photoInput.addEventListener("change", function(){
+      croppedPhotoBlob=null;
+      var f=photoInput.files[0]; if(!f) return;
+      var img=new Image();
+      img.onload=function(){
+        var side=Math.min(img.naturalWidth, img.naturalHeight);
+        var sx=(img.naturalWidth-side)/2, sy=(img.naturalHeight-side)/2;
+        var size=Math.min(512, side);
+        var c=document.createElement("canvas"); c.width=size; c.height=size;
+        c.getContext("2d").drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        c.toBlob(function(blob){ croppedPhotoBlob=blob; }, "image/jpeg", 0.85);
+        var box=$("#st-photo-crop");
+        if(box) box.innerHTML='<p class="small">'+esc(t("crop_preview"))+'</p><img src="'+c.toDataURL("image/jpeg", 0.85)+'" alt="" style="width:120px;height:120px;object-fit:cover;border-radius:50%">';
+        URL.revokeObjectURL(img.src);
+      };
+      img.src=URL.createObjectURL(f);
+    });
+  }
+  // Security checklist (item 390) + sign-in history (item 386).
+  (function loadSecurity(){
+    var checklist=[
+      {done:!!(u.photoUrl||u.photo_url), label:t("sec_photo")},
+      {done:!!(u.about&&u.about.length>=20), label:t("sec_about")},
+      {done:!!(u.city), label:t("sec_city")},
+      {done:!!(u.verified||(u.badges&&u.badges.length)), label:t("sec_verified")},
+      {done:true, label:t("sec_recovery")},
+    ];
+    var cl=$("#st-checklist");
+    if(cl) cl.innerHTML=checklist.map(function(c){ return '<li>'+(c.done?"✅ ":"⬜ ")+esc(c.label)+'</li>'; }).join("");
+    var box=$("#st-signins"); if(!box) return;
+    api("/auth/signin-history").then(function(d){
+      var list=d.history||[];
+      if(!list.length){ box.innerHTML='<p class="small">'+esc(t("no_signins"))+'</p>'; return; }
+      box.innerHTML=list.map(function(s){
+        return '<div class="kv"><span>'+esc(s.device||t("session_device_unknown"))+'</span><b>'+esc(fmtDate(s.createdAt))+'</b></div>';
+      }).join("");
+    }).catch(function(){ box.innerHTML='<p class="small">'+esc(t("err_generic"))+'</p>'; });
+  })();
   $("#st-tour").onclick=function(){ try{ localStorage.removeItem("sp_tour_seen"); }catch(e){} go("#/swipe"); };
   $("#st-export").onclick=async function(){
     var btn=$("#st-export"); btn.disabled=true; btn.textContent=t("loading");
@@ -3996,9 +5068,16 @@ function renderSettings(){
     var btn=$("#st-save-profile"); btn.disabled=true; btn.textContent=t("loading");
     try{
       var photoUrl=null; var f=$("#st-photo").files[0];
-      if(f){ var up=await uploadFile(f,"avatar"); photoUrl=up.url||up.fileUrl||up.path; }
+      if(f){
+        // Upload the cropped square when the crop step produced one.
+        var up=await uploadFile(croppedPhotoBlob?new File([croppedPhotoBlob], "avatar.jpg", {type:"image/jpeg"}):f, "avatar");
+        photoUrl=up.url||up.fileUrl||up.path;
+      }
+      var coverUrl=null; var cf=$("#st-cover").files[0];
+      if(cf){ var up2=await uploadFile(cf, "cover"); coverUrl=up2.url||up2.fileUrl||up2.path; }
       var body={displayName:$("#st-name").value.trim(), username:$("#st-username").value.trim(), city:$("#st-city").value.trim(), about:$("#st-about").value.trim(), country:newCountry};
       if(photoUrl) body.photoUrl=photoUrl;
+      if(coverUrl) body.coverUrl=coverUrl;
       var res=await api("/profile/me", {method:"PATCH", body:body});
       S.user=res.user||res.profile||S.user;
       if(newCountry!==countryCode(u.country)) toast(t("country_changed"));
@@ -4007,6 +5086,13 @@ function renderSettings(){
     }catch(e){ toast(e.message||t("err_generic"), true); }
     finally{ btn.disabled=false; btn.textContent=t("save"); }
   };
+  var coverRemove=$("#st-cover-remove");
+  if(coverRemove){
+    coverRemove.onclick=async function(){
+      try{ await api("/profile/me", {method:"PATCH", body:{coverUrl:""}}); toast(t("cover_removed")); route(); }
+      catch(e){ toast(e.message||t("err_generic"), true); }
+    };
+  }
   $("#st-save-prefs").onclick=async function(){
     var b=$("#st-save-prefs"); b.disabled=true; b.textContent=t("loading");
     try{ await api("/profile/me", {method:"PATCH", body:{notifyPrefs:{posts:$("#st-n1").checked, gifts:$("#st-n2").checked, brands:$("#st-n3").checked}}}); toast(t("notification_prefs_saved")); }
@@ -4015,7 +5101,7 @@ function renderSettings(){
   };
   $("#st-save-priv").onclick=async function(){
     var b=$("#st-save-priv"); b.disabled=true; b.textContent=t("loading");
-    try{ await api("/profile/me", {method:"PATCH", body:{showTotals:$("#st-show").checked, anonDefault:$("#st-anon").checked}}); toast(t("saved")); }
+    try{ await api("/profile/me", {method:"PATCH", body:{showTotals:$("#st-show").checked, anonDefault:$("#st-anon").checked, hideGiftHistory:$("#st-hide-gh").checked, hideLiveAsks:$("#st-hide-la").checked, hideFollowers:$("#st-hide-fl").checked, hideFromSupporterWall:$("#st-hide-sw").checked}}); toast(t("saved")); }
     catch(e){ toast(e.message||t("err_generic"), true); }
     finally{ b.disabled=false; b.textContent=t("save"); }
   };
@@ -4283,7 +5369,13 @@ var HELP_TOPICS=[
   {id:"fees", titleKey:"topic_fees", body:function(){ return '<p>'+esc(feeSentence())+'</p><p>'+esc(t("charity_free"))+'</p><p>'+esc(t("tip_separate"))+'</p>'; }},
   {id:"refunds", titleKey:"topic_refunds", body:function(){ return '<p>'+esc(t("refunds_body"))+'</p>'+REFUNDS_HTML; }},
   {id:"safety", titleKey:"topic_safety", body:function(){ return '<p>'+esc(t("safety_body"))+'</p><p class="small">'+esc(t("crisis_note"))+'</p>'; }},
-  {id:"content-rules", titleKey:"topic_content_rules", body:function(){ return '<p>'+esc(t("content_rules_body"))+'</p>'+CONTENT_RULES_HTML; }},
+  {id:"content-rules", titleKey:"topic_content_rules", body:function(){ return '<p>'+esc(t("content_rules_body"))+'</p>'+CONTENT_RULES_HTML
+    // Community guidelines (item 457): expected behaviour for posters and helpers.
+    +'<h2>'+esc(t("topic_content_rules"))+'</h2><p>'+esc(t("guidelines_intro"))+'</p>'
+    +'<h3>'+esc(t("guidelines_posters_t"))+'</h3><p>'+esc(t("guidelines_posters_b"))+'</p>'
+    +'<h3>'+esc(t("guidelines_helpers_t"))+'</h3><p>'+esc(t("guidelines_helpers_b"))+'</p>'
+    +'<ul><li>'+esc(t("guidelines_kindness"))+'</li><li>'+esc(t("guidelines_no_begging"))+'</li><li>'+esc(t("guidelines_no_contacts"))+'</li></ul>'
+    +'<p class="small">'+esc(t("guidelines_enforcement"))+'</p>'; }},
   {id:"complaints", titleKey:"topic_complaints", body:function(){ return '<p>'+esc(t("complaints_body"))+'</p><div id="complaint-form"></div>'; }},
   {id:"privacy", titleKey:"topic_privacy", body:function(){ return '<p>'+esc(t("privacy_body"))+'</p>'+LEGAL_PRIVACY_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'+legalFeedbackHtml(); }},
   {id:"terms", titleKey:"topic_terms", body:function(){ return '<p>'+esc(t("terms_body"))+'</p>'+LEGAL_TERMS_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'+legalFeedbackHtml(); }},
@@ -4315,7 +5407,27 @@ var HELP_TOPICS=[
   {id:"contact-owner", titleKey:"topic_contact_owner", body:function(){ return CONTACT_OWNER_HTML; }},
   {id:"complaint-timeline", titleKey:"topic_complaint_timeline", body:function(){ return COMPLAINT_TIMELINE_HTML; }},
   {id:"how-we-keep-safe", titleKey:"topic_keep_safe", body:function(){ return KEEP_SAFE_HTML; }},
-  {id:"security-status", titleKey:"topic_security_status", body:function(){ return securityStatusHtml(); }}
+  {id:"security-status", titleKey:"topic_security_status", body:function(){ return securityStatusHtml(); }},
+  // Phase 2, sections 4–6 topics (scam hub, appeals, leaderboard, brands, drops).
+  {id:"scams", titleKey:"topic_scams", body:function(){
+    var guides=[["scam_g1_t","scam_g1_b"],["scam_g2_t","scam_g2_b"],["scam_g3_t","scam_g3_b"],["scam_g4_t","scam_g4_b"],["scam_g5_t","scam_g5_b"],["scam_g6_t","scam_g6_b"]];
+    var h='<div id="scam-notices"></div><p>'+esc(t("scams_body"))+'</p><p>'+esc(t("scam_hub_intro"))+'</p>';
+    guides.forEach(function(pair){
+      h+='<details class="help-topic card"><summary>'+esc(t(pair[0]))+'</summary><p>'+esc(t(pair[1]))+'</p></details>';
+    });
+    h+='<p><strong>'+esc(t("scam_hub_what_to_do"))+'</strong></p><ul><li>'+esc(t("scam_tip_1"))+'</li><li>'+esc(t("scam_tip_2"))+'</li><li>'+esc(t("scam_tip_3"))+'</li><li>'+esc(t("scam_tip_4"))+'</li><li>'+esc(t("scam_tip_5"))+'</li></ul><p>'+esc(t("scams_report"))+'</p>';
+    return h;
+  }},
+  {id:"appeals", titleKey:"topic_appeals", body:function(){ return '<p>'+esc(t("appeals_body"))+'</p><p class="small">'+esc(t("appeals_note"))+'</p>'; }},
+  {id:"leaderboard", titleKey:"topic_leaderboard", body:function(){ return '<p>'+esc(t("leaderboard_body"))+'</p><p class="small">'+esc(t("leaders_fairness"))+'</p>'; }},
+  {id:"featured-brand", titleKey:"topic_featured_brand", body:function(){ return '<p>'+esc(t("featured_brand_body"))+'</p>'; }},
+  {id:"reviewer-guide", titleKey:"topic_reviewer_guide", body:function(){ return '<p>'+esc(t("reviewer_guide_body"))+'</p><ul><li>'+esc(t("reviewer_step_1"))+'</li><li>'+esc(t("reviewer_step_2"))+'</li><li>'+esc(t("reviewer_step_3"))+'</li><li>'+esc(t("reviewer_step_4"))+'</li></ul>'; }},
+  {id:"brand-connect", titleKey:"topic_brand_connect", body:function(){ return '<p>'+esc(t("brand_connect_body"))+'</p><p class="small">'+esc(t("brand_connect_note"))+'</p>'; }},
+  {id:"drops", titleKey:"topic_drops", body:function(){ return '<p>'+esc(t("drops_body"))+'</p>'; }},
+  {id:"how-brands-help", titleKey:"topic_how_brands_help", body:function(){ return '<p>'+esc(t("how_brands_help_body"))+'</p>'; }},
+  {id:"monetisation", titleKey:"topic_monetisation", body:function(){ return '<p>'+esc(t("monetisation_body"))+'</p>'; }},
+  {id:"brand-faq", titleKey:"topic_brand_faq", body:function(){ return '<p>'+esc(t("brand_faq_body"))+'</p>'; }},
+  {id:"who-sees", titleKey:"topic_who_sees", body:function(){ return '<p>'+esc(t("who_sees_body"))+'</p><ul><li>'+esc(t("who_sees_1"))+'</li><li>'+esc(t("who_sees_2"))+'</li><li>'+esc(t("who_sees_3"))+'</li></ul>'; }}
 ];
 /* Item 988: feedback link on the legal pages — goes to the complaint
    form with the legal category preselected. */
@@ -4405,7 +5517,7 @@ function renderHelp(id, q){
       // when another page links here (failed payments, disputes, legal
       // feedback).
       form.innerHTML='<label for="cp-category">'+esc(t("complaint_category"))+'</label><select id="cp-category">'
-        +[["general",t("complaint_cat_general")],["security",t("complaint_cat_security")],["legal",t("complaint_cat_legal")],["privacy",t("complaint_cat_privacy")],["press",t("complaint_cat_press")]].map(function(o){ return '<option value="'+o[0]+'"'+((q&&q.category)===o[0]?" selected":"")+'>'+esc(o[1])+'</option>'; }).join("")
+        +[["general",t("complaint_cat_general")],["security",t("complaint_cat_security")],["legal",t("complaint_cat_legal")],["privacy",t("complaint_cat_privacy")],["press",t("complaint_cat_press")],["scam",t("complaint_scam")],["brand",t("complaint_brand")]].map(function(o){ return '<option value="'+o[0]+'"'+((q&&q.category)===o[0]?" selected":"")+'>'+esc(o[1])+'</option>'; }).join("")
         +'</select>'
         +'<label for="cp-subject">'+esc(t("complaint_subject"))+'</label><input id="cp-subject" maxlength="120" value="'+esc((q&&q.subject)||"")+'" aria-describedby="cp-err"><label for="cp-body">'+esc(t("complaint_body"))+'</label><textarea id="cp-body" maxlength="2000" aria-describedby="cp-err">'+esc((q&&q.body)||"")+'</textarea><input id="cp-website" name="website" autocomplete="off" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0"><div class="field-err" id="cp-err" role="alert"></div><button class="btn" id="cp-send" style="margin-top:10px">'+esc(t("file_complaint"))+'</button><div id="cp-done" style="margin-top:10px"></div>';
       $("#cp-send").onclick=async function(){
@@ -4425,6 +5537,20 @@ function renderHelp(id, q){
         catch(e){ toast(e.message||t("err_generic"), true); }
         finally{ btn.disabled=false; btn.textContent=t("file_complaint"); }
       };
+    }
+    // Scam notices (item 365): owner-posted warnings shown in the hub.
+    if(topic==="scams"){
+      var snBox=$("#scam-notices");
+      if(snBox){
+        api("/scam-notices").then(function(d){
+          var list=d.notices||[];
+          if(list.length){
+            snBox.innerHTML=list.map(function(n){
+              return '<div class="card" style="border-left:4px solid var(--warn);margin-bottom:10px"><strong>⚠️ '+esc(n.title||"")+'</strong><p>'+esc(n.body||"")+'</p><p class="small">'+esc(fmtDate(n.created_at))+'</p></div>';
+            }).join("");
+          }
+        }).catch(function(){ /* notices are best-effort */ });
+      }
     }
     return;
   }
@@ -4473,7 +5599,13 @@ function renderNotifications(){
 /* ---------- verification centre ---------- */
 function renderVerify(){
   if(!S.user){ view(emptyState("✅", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
-  view('<h1>'+esc(t("verify_centre"))+'</h1><p>'+esc(t("verify_centre_intro"))+'</p><div id="vf-body">'+skeleton(2)+'</div>');
+  view('<h1>'+esc(t("verify_centre"))+'</h1><p>'+esc(t("verify_centre_intro"))+'</p>'
+    // "Why verify?" explainer (item 310) + upload guidance (item 321).
+    +'<div class="card"><h2>'+esc(t("why_verify"))+'</h2><p>'+esc(t("why_verify_body"))+'</p>'
+    +'<p class="small">'+esc(t("verify_upload_guidance"))+'</p>'
+    +'<p class="small">'+esc(t("verify_privacy_note"))+'</p></div>'
+    +'<div id="vf-body">'+skeleton(2)+'</div>'
+    +'<h2 style="margin-top:14px">'+esc(t("your_documents"))+'</h2><div id="vf-docs"><p class="small">'+esc(t("loading"))+'</p></div>');
   load();
   async function load(){
     var body=$("#vf-body"); if(!body) return;
@@ -4485,29 +5617,64 @@ function renderVerify(){
       {type:"name", label:t("verify_name"), help:t("verify_name_help"), kind:"private_proof"},
       {type:"biller", label:t("verify_biller"), help:t("verify_biller_help"), kind:"private_proof"}
     ];
+    var docTypes=[["bill",t("doc_type_bill")],["id_card",t("doc_type_id")],["passport",t("doc_type_passport")],["bank_statement",t("doc_type_bank")],["other",t("doc_type_other")]];
     body.innerHTML=defs.map(function(def){
       var v=mine.find(function(x){ return x.type===def.type; });
       var status=v? v.status : "not_submitted";
       var label={not_submitted:t("not_submitted"),submitted:t("submitted"),under_review:t("under_review"),approved:t("approved"),rejected:t("rejected"),more_required:t("more_required")}[status]||status;
+      // Expiry + re-verify prompt (item 306).
+      var expHtml="";
+      if(v&&v.status==="approved"&&v.expiresAt){
+        var daysLeft=Math.ceil((new Date(v.expiresAt).getTime()-Date.now())/86400000);
+        expHtml='<p class="small">'+esc(t("badge_expires"))+' '+esc(fmtDate(v.expiresAt))
+          +(daysLeft<=30? ' · <strong>'+esc(t("reverify_soon"))+'</strong>':"")+'</p>';
+      }
+      if(v&&v.expired) expHtml='<p class="small" style="color:var(--warn)">⚠️ '+esc(t("badge_expired_reverify"))+'</p>';
       return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(def.label)+'</strong><span class="chip">'+esc(label)+'</span></div>'
         +'<p class="small">'+esc(def.help)+'</p>'
         +(v&&v.reviewer_note?'<p class="small"><strong>'+esc(t("reviewer_msg"))+':</strong> '+esc(v.reviewer_note)+'</p>':"")
+        +expHtml
+        // Document-type selector (item 323).
+        +'<label for="vf-doctype-'+def.type+'">'+esc(t("document_type"))+'</label><select id="vf-doctype-'+def.type+'">'+docTypes.map(function(dt){ return '<option value="'+dt[0]+'">'+esc(dt[1])+'</option>'; }).join("")+'</select>'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input type="file" id="vf-file-'+def.type+'" accept="image/jpeg,image/png,image/webp,application/pdf" aria-label="'+esc(def.label)+'" style="flex:1;min-width:180px">'
-        +'<button class="btn small" data-vf="'+def.type+'" data-kind="'+def.kind+'">'+esc(t("verify_submit"))+'</button></div></div>';
+        +'<button class="btn small" data-vf="'+def.type+'" data-kind="'+def.kind+'">'+esc(v&&v.expired?t("reverify"):t("verify_submit"))+'</button></div></div>';
     }).join("");
+    // "Your documents" section (item 328): what was submitted, when, status.
+    var docsEl=$("#vf-docs");
+    if(docsEl){
+      if(!mine.length) docsEl.innerHTML='<p class="small">'+esc(t("no_documents"))+'</p>';
+      else docsEl.innerHTML=mine.map(function(v){
+        return '<div class="card row-card"><div class="grow"><div class="t">'+esc(v.type||"")+(v.docType?' · '+esc(v.docType):"")+'</div><div class="s">'+esc(fmtDate(v.createdAt||v.created_at))+' · '+esc(v.status||"")+(v.expiresAt?' · '+esc(t("badge_expires"))+' '+esc(fmtDate(v.expiresAt)):"")+'</div></div></div>';
+      }).join("");
+    }
     $all("[data-vf]", body).forEach(function(btn){
       btn.onclick=async function(){
         var type=btn.getAttribute("data-vf"), kind=btn.getAttribute("data-kind");
         var inp=$("#vf-file-"+type);
         var f=inp.files[0];
         if(!f){ toast(t("verify_upload_first"), true); return; }
-        btn.disabled=true; btn.textContent=t("loading");
-        try{
-          var up=await uploadFile(f, kind);
-          var url=up.url||up.fileUrl||up.path;
-          await api("/verification", {method:"POST", body:{type:type, docUrl:url}});
-          toast(t("verification_submitted")); load();
-        }catch(e){ btn.disabled=false; btn.textContent=t("verify_submit"); toast(e.message||t("err_generic"), true); }
+        var docType=$("#vf-doctype-"+type)?$("#vf-doctype-"+type).value:"other";
+        // Image-quality retake prompt (item 322): warn, let the user
+        // choose another file or continue with this one.
+        var q=await checkImageQuality(f);
+        if(!q.notImage&&(q.dark||q.blurry||q.lowRes)){
+          var issues=[];
+          if(q.dark) issues.push(t("photo_quality_dark"));
+          if(q.blurry) issues.push(t("photo_quality_blurry"));
+          if(q.lowRes) issues.push(t("photo_quality_lowres"));
+          confirmDialog(t("photo_quality_title"), issues.join(" ")+" "+t("photo_quality_body"), t("use_anyway"), function(){ doSubmit(); });
+          return;
+        }
+        doSubmit();
+        async function doSubmit(){
+          btn.disabled=true; btn.textContent=t("loading");
+          try{
+            var up=await uploadFile(f, kind);
+            var url=up.url||up.fileUrl||up.path;
+            await api("/verification", {method:"POST", body:{type:type, docUrl:url, docType:docType}});
+            toast(t("verification_submitted")); load();
+          }catch(e){ btn.disabled=false; btn.textContent=t("verify_submit"); toast(e.message||t("err_generic"), true); }
+        }
       };
     });
   }
@@ -4629,7 +5796,7 @@ function renderComplaintStatus(id, q){
 
 /* ---------- admin ---------- */
 function adminNav(active){
-  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["users",t("users")],["verifications",t("verifications")],["reports",t("reports")],["complaints",t("admin_complaints")],["abuse",t("admin_abuse")],["security",t("admin_security")],["fees",t("fees")],["disputes",t("admin_disputes")],["billers",t("admin_billers")],["currency",t("admin_currency")],["audit",t("audit_log")]];
+  var links=[["dashboard",t("dashboard")],["queue",t("queue")],["fraud",t("admin_fraud")],["users",t("users")],["verifications",t("verifications")],["reports",t("reports")],["appeals",t("admin_appeals")],["complaints",t("admin_complaints")],["abuse",t("admin_abuse")],["security",t("admin_security")],["brands",t("admin_brands")],["scam-notices",t("admin_scam")],["velocity",t("admin_velocity")],["trust-report",t("admin_trust")],["drops",t("admin_drops")],["fees",t("fees")],["disputes",t("admin_disputes")],["billers",t("admin_billers")],["currency",t("admin_currency")],["audit",t("audit_log")]];
   return '<div class="admin-nav">'+links.map(function(l){ return '<a href="#/admin/'+l[0]+'" class="'+(active===l[0]?"on":"")+'">'+esc(l[1])+'</a>'; }).join("")+'</div>';
 }
 function adminGuard(){
@@ -4756,6 +5923,12 @@ async function renderAdminDashboard(){
       +statBox(t("open_complaints"), m.openComplaints!=null?m.openComplaints:(m.open_complaints||0))
       +statBox(t("dispute_open"), m.openDisputes!=null?m.openDisputes:0)
       +statBox(t("dispute_stale_label"), m.staleDisputes||0)
+      +statBox(t("pending_appeals"), m.pendingAppeals||m.pending_appeals||0)
+      +statBox(t("open_fraud_flags"), m.openFraudFlags||m.open_fraud_flags||0)
+      +statBox(t("high_risk_flags"), m.highRiskFlags||m.high_risk_flags||0)
+      +statBox(t("pending_brand_profiles"), m.pendingBrandProfiles||m.pending_brand_profiles||0)
+      +statBox(t("open_partnerships"), m.openPartnerships||m.open_partnerships||0)
+      +statBox(t("pending_connects"), m.pendingConnects||m.pending_connects||0)
       +'</div>'
       +((m.staleDisputes||0)>0?'<div class="notice warn" style="margin-top:12px">⚠️ '+esc(t("dispute_stale",{n:m.staleDisputes}))+' — <a href="#/admin/disputes">'+esc(t("dispute_centre"))+'</a></div>':"")
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("analytics_title"))+'</h2><div id="ad-funnel">'+esc(t("loading"))+'</div></div>'
@@ -4938,9 +6111,29 @@ function renderAdminUsers(){
       $all("[data-u]", body).forEach(function(btn){
         btn.onclick=async function(){
           var act=btn.getAttribute("data-act"), id=btn.getAttribute("data-u");
-          btn.disabled=true;
-          try{ await api("/admin/users/"+encodeURIComponent(id)+"/"+act, {method:"POST"}); toast(act==="suspend"?t("user_suspended"):t("user_restored")); load(); }
-          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          if(act==="restore"){
+            btn.disabled=true;
+            try{ await api("/admin/users/"+encodeURIComponent(id)+"/restore", {method:"POST"}); toast(t("user_restored")); load(); }
+            catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+            return;
+          }
+          // Suspend with reason + duration (item 384). Duration empty =
+          // indefinite; the user is told the reason and can appeal.
+          openSheet('<h2>'+esc(t("suspend"))+'</h2>'
+            +'<label for="sp-reason">'+esc(t("suspend_reason"))+'</label><textarea id="sp-reason" maxlength="600" rows="3"></textarea>'
+            +'<label for="sp-days">'+esc(t("suspend_days"))+'</label><input id="sp-days" type="number" min="1" max="3650" placeholder="'+esc(t("suspend_days_ph"))+'">'
+            +'<p class="small">'+esc(t("suspend_note"))+'</p>'
+            +'<div class="btn-row"><button class="btn secondary" id="sp-cancel">'+esc(t("cancel"))+'</button><button class="btn danger" id="sp-go">'+esc(t("suspend"))+'</button></div>');
+          $("#sp-cancel").onclick=closeSheets;
+          $("#sp-go").onclick=async function(){
+            var reason=$("#sp-reason").value.trim();
+            if(reason.length<5){ toast(t("suspend_reason_needed"), true); return; }
+            var days=parseInt($("#sp-days").value, 10);
+            try{
+              await api("/admin/users/"+encodeURIComponent(id)+"/suspend", {method:"POST", body:{reason:reason, durationDays:isNaN(days)?undefined:days}});
+              closeSheets(); toast(t("user_suspended")); load();
+            }catch(e){ toast(e.message||t("err_generic"), true); }
+          };
         };
       });
     }catch(e){
@@ -4951,31 +6144,68 @@ function renderAdminUsers(){
 }
 function renderAdminVerifications(){
   if(!adminGuard()) return;
-  view('<h1>'+esc(t("verifications"))+'</h1>'+adminNav("verifications")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  view('<h1>'+esc(t("verifications"))+'</h1>'+adminNav("verifications")
+    +'<p class="small">'+esc(t("verif_sla_note"))+'</p>'
+    +'<div class="tabs"><button class="tab-btn on" data-s="">'+esc(t("all"))+'</button><button class="tab-btn" data-s="submitted">'+esc(t("submitted"))+'</button><button class="tab-btn" data-s="under_review">'+esc(t("under_review"))+'</button><button class="tab-btn" data-s="approved">'+esc(t("approved"))+'</button><button class="tab-btn" data-s="rejected">'+esc(t("rejected"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
   bindAdminLogout();
+  var status="";
+  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ status=b.getAttribute("data-s"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
   load();
   async function load(){
     var body=$("#ad-body"); if(!body) return;
     try{
-      var d=await api("/admin/verifications");
+      var d=await api("/admin/verifications"+(status?"?status="+encodeURIComponent(status):""));
       var list=pickList(d,["verifications"]);
       if(!list.length){ body.innerHTML=emptyState("✅", t("no_verifications"), ""); return; }
       body.innerHTML=list.map(function(v){
-        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(v.type||"")+'</strong><span class="chip">'+esc(v.status||"")+'</span></div>'
-          +'<p class="small">'+esc(v.display_name||v.username||v.user_id||"")+(v.bill_id?' · '+esc(t("bill"))+' '+esc(v.bill_id):"")+' · '+esc(timeAgo(v.created_at||v.createdAt))+'</p>'
-          +(v.doc_url?'<p><a href="'+esc(v.doc_url)+'" target="_blank" rel="noopener">'+esc(t("verif_doc"))+'</a></p>':"")
+        var sla=(v.waitHours||0)>48;
+        var isImg=v.doc_url&&/\.(jpe?g|png|webp)$/i.test(v.doc_url);
+        return '<div class="card list-item" '+(sla?'style="border-left:4px solid var(--warn)"':"")+'><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(v.type||"")+(v.doc_type?' ('+esc(v.doc_type)+')':"")+'</strong><span class="chip">'+esc(v.status||"")+'</span></div>'
+          +'<p class="small">'+esc(v.user_name||v.username||v.user_id||"")+(v.bill_title?' · '+esc(t("bill"))+': '+esc(v.bill_title)+' ('+esc(v.bill_category||"")+(v.bill_amount_minor!=null?', '+esc(money(v.bill_amount_minor, v.bill_currency||"NPR")):"")+')':"")+' · '+esc(timeAgo(v.created_at||v.createdAt))+' · '+esc(t("wait"))+' '+esc(v.waitHours||0)+'h'+(sla?' · <strong style="color:var(--warn)">⚠️ '+esc(t("sla_over_48h"))+'</strong>':"")+'</p>'
+          +(v.duplicateDoc?'<p class="small" style="color:var(--warn)">⚠️ '+esc(t("duplicate_doc_flag"))+'</p>':"")
+          // Reviewer checklist (item 312).
+          +'<div class="small" style="margin:8px 0"><strong>'+esc(t("verif_checklist"))+'</strong><ul>'
+          +'<li>'+esc(t("verif_check_name"))+'</li><li>'+esc(t("verif_check_doc"))+'</li><li>'+esc(t("verif_check_expiry"))+'</li><li>'+esc(t("verif_check_overshare"))+'</li></ul></div>'
+          // Side-by-side compare + zoom (item 313): document next to the
+          // bill photo (when the verification is tied to a bill).
+          +(v.doc_url?'<div class="compare-row">'+(isImg?'<a href="'+esc(v.doc_url)+'" target="_blank" rel="noopener"><img src="'+esc(v.doc_url)+'" alt="'+esc(t("verif_doc"))+'" style="max-width:100%;max-height:240px;border-radius:8px"></a>':'<p><a href="'+esc(v.doc_url)+'" target="_blank" rel="noopener">'+esc(t("verif_doc"))+'</a></p>')+'</div>':"")
+          +(v.reviewer_note?'<p class="small"><strong>'+esc(t("reviewer_msg"))+':</strong> '+esc(v.reviewer_note)+'</p>':"")
+          +'<p><button class="btn secondary small" data-hist="'+esc(v.id)+'">'+esc(t("verif_history"))+'</button></p><div id="hist-'+esc(v.id)+'"></div>'
           +'<label for="vn-'+esc(v.id)+'">'+esc(t("verif_note"))+'</label><textarea id="vn-'+esc(v.id)+'" maxlength="500"></textarea>'
+          +'<label for="vr-'+esc(v.id)+'">'+esc(t("reject_reason"))+'</label><select id="vr-'+esc(v.id)+'"><option value="">'+esc(t("reject_reason_none"))+'</option><option value="unclear">'+esc(t("reject_unclear"))+'</option><option value="mismatch">'+esc(t("reject_mismatch"))+'</option><option value="expired">'+esc(t("reject_expired"))+'</option><option value="oversharing">'+esc(t("reject_oversharing"))+'</option><option value="other">'+esc(t("report_other"))+'</option></select>'
           +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
           +'<button class="btn small" data-v="'+esc(v.id)+'" data-dec="approved">'+esc(t("verif_approve"))+'</button>'
           +'<button class="btn secondary small" data-v="'+esc(v.id)+'" data-dec="more_required">'+esc(t("verif_more"))+'</button>'
-          +'<button class="btn danger small" data-v="'+esc(v.id)+'" data-dec="rejected">'+esc(t("verif_reject"))+'</button></div></div>';
+          +'<button class="btn danger small" data-v="'+esc(v.id)+'" data-dec="rejected">'+esc(t("verif_reject"))+'</button>'
+          +(v.status==="approved"?'<button class="btn danger small" data-v="'+esc(v.id)+'" data-dec="revoke">'+esc(t("verif_revoke"))+'</button>':"")
+          +'</div></div>';
       }).join("");
+      $all("[data-hist]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          var id=btn.getAttribute("data-hist");
+          var box=$("#hist-"+CSS.escape(id)); if(!box) return;
+          try{
+            var hd=await api("/admin/verifications/"+encodeURIComponent(id)+"/history");
+            var hist=hd.history||[];
+            box.innerHTML=hist.length? '<div class="small">'+hist.map(function(h){ return '<div>'+esc(fmtDate(h.createdAt))+' · '+esc(h.action)+(h.meta&&h.meta.note?' — '+esc(h.meta.note):"")+'</div>'; }).join("")+'</div>' : '<p class="small">'+esc(t("no_history"))+'</p>';
+          }catch(e){ box.innerHTML=errBox(e.message); }
+        };
+      });
       $all("[data-v]", body).forEach(function(btn){
         btn.onclick=async function(){
           var id=btn.getAttribute("data-v"), dec=btn.getAttribute("data-dec");
+          var noteEl=$("#vn-"+CSS.escape(id));
+          var reasonEl=$("#vr-"+CSS.escape(id));
+          var note=(noteEl?noteEl.value.trim():"");
+          var reason=(reasonEl?reasonEl.value:"");
+          // Over-sharing rejection (item 329) is a named reason.
+          if((dec==="rejected"||dec==="revoke")&&!note&&!reason){ toast(t("verif_reason_needed"), true); return; }
           btn.disabled=true;
-          try{ await api("/admin/verifications/"+encodeURIComponent(id), {method:"POST", body:{decision:dec, note:$("#vn-"+CSS.escape(id)).value.trim()||undefined}}); toast(t("verification_decided")); load(); }
-          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          try{
+            await api("/admin/verifications/"+encodeURIComponent(id), {method:"POST", body:{decision:dec, note:(reason? "["+reason+"] ":"")+note||undefined}});
+            toast(t("verification_decided")); load();
+          }catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
         };
       });
     }catch(e){
@@ -4998,7 +6228,11 @@ function renderAdminReports(){
       body.innerHTML=list.map(function(r){
         return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(r.reason||"")+'</strong><span class="chip">'+esc(r.status||"")+'</span></div>'
           +'<p class="small">'+esc(t("reports_target"))+': '+esc(r.target_type||"")+' '+esc(r.target_id||"")+' · '+esc(timeAgo(r.created_at||r.createdAt))+'</p>'
+          // Reporter + decision columns (item 353) + false-report flag (354).
+          +'<p class="small">'+esc(t("reporter"))+': '+esc(r.reporter_name||r.reporter_username||"")+(r.reporterFlagged?' · <strong style="color:var(--warn)">⚠️ '+esc(t("reporter_flagged"))+' ('+esc(r.reporterDismissedCount||0)+' '+esc(t("dismissed"))+')</strong>':"")+'</p>'
+          +(r.decision?'<p class="small">'+esc(t("decision"))+': '+esc(r.decision)+(r.decision_reason?' — '+esc(r.decision_reason):"")+(r.decided_at?' · '+esc(fmtDate(r.decided_at)):"")+'</p>':"")
           +(r.note?'<p>'+esc(r.note)+'</p>':"")
+          +'<label for="rr-'+esc(r.id)+'">'+esc(t("decision_reason"))+'</label><input id="rr-'+esc(r.id)+'" maxlength="600" placeholder="'+esc(t("reason_ph"))+'">'
           +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
           // Item 859: warn the poster (notification, report resolved).
           +[["dismiss",t("dismiss")],["warn",t("warn_poster")],["hide",t("hide_post")],["pause",t("pause_bill")],["remove",t("remove_bill")],["suspend",t("suspend_account")],["restore",t("restore_bill")]].map(function(a){ return '<button class="btn secondary small" data-r="'+esc(r.id)+'" data-a="'+a[0]+'">'+esc(a[1])+'</button>'; }).join("")
@@ -5006,8 +6240,11 @@ function renderAdminReports(){
       }).join("");
       $all("[data-r]", body).forEach(function(btn){
         btn.onclick=async function(){
+          var id=btn.getAttribute("data-r");
+          var reasonEl=$("#rr-"+CSS.escape(id));
+          var reason=reasonEl?reasonEl.value.trim():"";
           btn.disabled=true;
-          try{ await api("/admin/reports/"+encodeURIComponent(btn.getAttribute("data-r")), {method:"POST", body:{action:btn.getAttribute("data-a")}}); toast(t("decision_saved")); load(); }
+          try{ await api("/admin/reports/"+encodeURIComponent(id), {method:"POST", body:{action:btn.getAttribute("data-a"), reason:reason||undefined}}); toast(t("decision_saved")); load(); }
           catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
         };
       });
@@ -5362,11 +6599,17 @@ function renderAdminSecurity(){
 function renderAdminAudit(){
   if(!adminGuard()) return;
   view('<h1>'+esc(t("audit_log"))+'</h1>'+adminNav("audit")
-    +'<div style="display:flex;gap:8px;margin-bottom:10px"><label class="sr-only" for="audit-filter">'+esc(t("audit_filter"))+'</label><input id="audit-filter" placeholder="'+esc(t("audit_filter"))+'" style="flex:1"><button class="btn secondary small" id="audit-export">'+esc(t("export_audit"))+'</button></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap"><label class="sr-only" for="audit-filter">'+esc(t("audit_filter"))+'</label><input id="audit-filter" placeholder="'+esc(t("audit_filter"))+'" style="flex:1;min-width:140px">'
+    // Per-bill / per-user views + date range (items 378/379/380).
+    +'<input id="audit-bill" placeholder="'+esc(t("audit_bill_id"))+'" style="flex:1;min-width:120px">'
+    +'<input id="audit-user" placeholder="'+esc(t("audit_user_id"))+'" style="flex:1;min-width:120px">'
+    +'<input id="audit-from" type="date" aria-label="'+esc(t("audit_from"))+'"><input id="audit-to" type="date" aria-label="'+esc(t("audit_to"))+'">'
+    +'<button class="btn secondary small" id="audit-apply">'+esc(t("apply"))+'</button><button class="btn secondary small" id="audit-export">'+esc(t("export_audit"))+'</button></div>'
     +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
   bindAdminLogout();
   var rows=[];
   $("#audit-filter").addEventListener("input", draw);
+  $("#audit-apply").onclick=load;
   $("#audit-export").onclick=function(){
     if(!rows.length) return;
     var csv="when,actor,action,target\n"+rows.map(function(r){ return [r.created_at||r.createdAt||"", r.actor_type||r.actorType||"", r.action||"", (r.target_type||"")+"/"+(r.target_id||"")].map(function(x){ return '"'+String(x).replace(/"/g,'""')+'"'; }).join(","); }).join("\n");
@@ -5378,7 +6621,15 @@ function renderAdminAudit(){
   async function load(){
     var body=$("#ad-body"); if(!body) return;
     try{
-      var d=await api("/admin/audit");
+      var q=new URLSearchParams();
+      var billId=$("#audit-bill").value.trim(), userId=$("#audit-user").value.trim();
+      var from=$("#audit-from").value, to=$("#audit-to").value;
+      if(billId) q.set("billId", billId);
+      if(userId) q.set("userId", userId);
+      if(from) q.set("from", from);
+      if(to) q.set("to", to+"T23:59:59Z");
+      q.set("limit", "500");
+      var d=await api("/admin/audit?"+q.toString());
       rows=pickList(d,["audit","logs","entries"]);
       draw();
     }catch(e){
@@ -5393,6 +6644,345 @@ function renderAdminAudit(){
     if(!list.length){ body.innerHTML=emptyState("📋", t("no_audit"), ""); return; }
     body.innerHTML='<div class="card" style="overflow-x:auto"><table class="tbl"><tr><th>'+esc(t("audit_when"))+'</th><th>'+esc(t("audit_who"))+'</th><th>'+esc(t("audit_what"))+'</th><th>'+esc(t("audit_target"))+'</th></tr>'
       +list.map(function(r){ return '<tr><td>'+esc(timeAgo(r.created_at||r.createdAt))+'</td><td>'+esc((r.actor_type||"")+" "+(r.actor_id||""))+'</td><td>'+esc(r.action||"")+'</td><td>'+esc((r.target_type||"")+" "+(r.target_id||""))+'</td></tr>'; }).join("")+'</table></div>';
+  }
+}
+
+/* ---------- admin: fraud dashboard (items 331–345, 398) ---------- */
+function renderAdminFraud(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_fraud"))+'</h1>'+adminNav("fraud")
+    +'<p class="small">'+esc(t("fraud_note"))+'</p>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/fraud");
+      var flags=d.flags||[];
+      var h='<div class="grid2">'
+        +'<div class="card stat"><div class="n">'+esc(flags.length)+'</div><div class="l">'+esc(t("open_fraud_flags"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.unresolvedHighRisk||0)+'</div><div class="l">'+esc(t("high_risk_flags"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc((d.riskBands&&d.riskBands.high)||0)+'</div><div class="l">'+esc(t("high_risk_bills"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc((d.riskBands&&d.riskBands.medium)||0)+'</div><div class="l">'+esc(t("medium_risk_bills"))+'</div></div></div>'
+        +'<h2 style="margin-top:14px">'+esc(t("top_signals"))+'</h2><div class="card">'
+        +((d.bySignal||[]).length? d.bySignal.map(function(s){ return '<div class="kv"><span>'+esc(s.signal)+'</span><b>'+esc(s.count)+'</b></div>'; }).join("") : '<p class="small">'+esc(t("no_signals"))+'</p>')
+        +'</div>'
+        +'<h2 style="margin-top:14px">'+esc(t("signal_weights"))+'</h2><div class="card"><p class="small">'+esc(t("weights_note"))+'</p>'
+        +Object.keys(d.weights||{}).map(function(k){ var w=d.weights[k]; return '<div class="kv"><span>'+esc(w.label||k)+'</span><b>'+esc(w.weight)+'</b></div>'; }).join("")
+        +'</div>'
+        +'<h2 style="margin-top:14px">'+esc(t("trend_30d"))+'</h2><div class="card">'
+        +((d.trend30d||[]).length? d.trend30d.map(function(tr){ return '<div class="kv"><span>'+esc(tr.day)+'</span><b>'+esc(tr.count)+'</b></div>'; }).join("") : '<p class="small">'+esc(t("no_trend"))+'</p>')
+        +'</div>'
+        +'<h2 style="margin-top:14px">'+esc(t("weekly_review"))+'</h2>'
+        +(flags.length? flags.map(function(f){
+          return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(f.signal||"")+'</strong><span class="chip '+(f.severity==="high"?"bad":f.severity==="medium"?"warn":"")+'">'+esc(f.severity||"")+'</span></div>'
+            +'<p class="small">'+(f.billTitle?esc(t("bill"))+': '+esc(f.billTitle)+' · ':"")+(f.userName?esc(f.userName)+' · ':"")+esc(timeAgo(f.createdAt))+'</p>'
+            +(f.detail?'<p>'+esc(f.detail)+'</p>':"")
+            +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+            +(f.billId?'<a class="btn secondary small" href="#/bill/'+encodeURIComponent(f.billId)+'">'+esc(t("view_bill"))+'</a>':"")
+            +'<button class="btn secondary small" data-resolve="'+esc(f.id)+'">'+esc(t("resolve_flag"))+'</button>'
+            +(f.billId?'<button class="btn secondary small" data-override="'+esc(f.billId)+'">'+esc(t("fraud_override"))+'</button>':"")
+            +'</div></div>';
+        }).join("") : '<p>'+esc(t("no_flags"))+'</p>');
+      body.innerHTML=h;
+      $all("[data-resolve]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          btn.disabled=true;
+          try{ await api("/admin/fraud/"+encodeURIComponent(btn.getAttribute("data-resolve"))+"/resolve", {method:"POST"}); toast(t("flag_resolved")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+      $all("[data-override]", body).forEach(function(btn){
+        btn.onclick=function(){
+          var billId=btn.getAttribute("data-override");
+          openSheet('<h2>'+esc(t("fraud_override"))+'</h2>'
+            +'<label for="fo-band">'+esc(t("fraud_band"))+'</label><select id="fo-band"><option value="low">'+esc(t("band_low"))+'</option><option value="medium">'+esc(t("band_medium"))+'</option><option value="high">'+esc(t("band_high"))+'</option><option value="">'+esc(t("clear_override"))+'</option></select>'
+            +'<label for="fo-reason">'+esc(t("decision_reason"))+'</label><textarea id="fo-reason" maxlength="600"></textarea>'
+            +'<div class="btn-row"><button class="btn secondary" id="fo-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="fo-go">'+esc(t("save"))+'</button></div>');
+          $("#fo-cancel").onclick=closeSheets;
+          $("#fo-go").onclick=async function(){
+            var band=$("#fo-band").value, reason=$("#fo-reason").value.trim();
+            if(band&&reason.length<5){ toast(t("override_reason_needed"), true); return; }
+            try{ await api("/admin/bills/"+encodeURIComponent(billId)+"/fraud-override", {method:"POST", body:{band:band||null, reason:reason}}); closeSheets(); toast(t("override_saved")); load(); }
+            catch(e){ toast(e.message||t("err_generic"), true); }
+          };
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: appeals (items 351, 384) ---------- */
+function renderAdminAppeals(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_appeals"))+'</h1>'+adminNav("appeals")
+    +'<div class="tabs"><button class="tab-btn on" data-s="open">'+esc(t("open"))+'</button><button class="tab-btn" data-s="overturned">'+esc(t("overturned"))+'</button><button class="tab-btn" data-s="upheld">'+esc(t("upheld"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  var status="open";
+  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ status=b.getAttribute("data-s"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/appeals?status="+encodeURIComponent(status));
+      var list=d.appeals||[];
+      if(!list.length){ body.innerHTML=emptyState("⚖️", t("no_appeals"), ""); return; }
+      body.innerHTML=list.map(function(a){
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(a.target_type||"")+' '+esc(a.target_id||"")+'</strong><span class="chip">'+esc(a.status||"")+'</span></div>'
+          +'<p class="small">'+esc(a.user_name||a.user_username||"")+' · '+esc(timeAgo(a.created_at))+'</p>'
+          +(a.reason?'<p>'+esc(a.reason)+'</p>':"")
+          +(a.reviewer_note?'<p class="small"><strong>'+esc(t("reviewer_msg"))+':</strong> '+esc(a.reviewer_note)+'</p>':"")
+          +(a.status==="open"?'<label for="an-'+esc(a.id)+'">'+esc(t("appeal_note"))+'</label><textarea id="an-'+esc(a.id)+'" maxlength="600"></textarea>'
+          +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn small" data-ap="'+esc(a.id)+'" data-dec="overturn">'+esc(t("overturn"))+'</button><button class="btn secondary small" data-ap="'+esc(a.id)+'" data-dec="uphold">'+esc(t("uphold"))+'</button></div>':"")
+          +'</div>';
+      }).join("");
+      $all("[data-ap]", body).forEach(function(btn){
+        btn.onclick=async function(){
+          var id=btn.getAttribute("data-ap"), dec=btn.getAttribute("data-dec");
+          var noteEl=$("#an-"+CSS.escape(id));
+          btn.disabled=true;
+          try{ await api("/admin/appeals/"+encodeURIComponent(id), {method:"POST", body:{decision:dec, note:noteEl?noteEl.value.trim()||undefined:undefined}}); toast(t("appeal_decided")); load(); }
+          catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: brands — connects, partnerships, featured, verify (items 521/531/544/554/506) ---------- */
+function renderAdminBrands(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_brands"))+'</h1>'+adminNav("brands")
+    +'<div class="tabs"><button class="tab-btn on" data-t="connects">'+esc(t("connects"))+'</button><button class="tab-btn" data-t="partnerships">'+esc(t("partnerships"))+'</button><button class="tab-btn" data-t="featured">'+esc(t("featured_brand"))+'</button></div>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  var tab="connects";
+  $all(".tab-btn").forEach(function(b){ b.onclick=function(){ tab=b.getAttribute("data-t"); $all(".tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    body.innerHTML=skeleton(2);
+    try{
+      if(tab==="connects"){
+        var d=await api("/admin/connects?status=pending");
+        var list=d.connects||[];
+        if(!list.length){ body.innerHTML=emptyState("🤝", t("no_connects"), ""); return; }
+        body.innerHTML=list.map(function(c){
+          return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(c.brand_name||"")+'</strong><span class="chip">'+esc(c.plan||"")+' · '+esc(c.status||"")+'</span></div>'
+            +'<p class="small">'+esc(t("ask"))+': '+esc(c.ask_name||"")+' · '+esc(t("asker"))+': '+esc(c.asker_name||"")+' · '+esc(timeAgo(c.created_at))+'</p>'
+            +(c.contact_name?'<p class="small">'+esc(c.contact_name)+(c.work_email?' · '+esc(c.work_email):"")+(c.phone?' · '+esc(c.phone):"")+'</p>':"")
+            +(c.industry?'<p class="small">'+esc(t("industry"))+': '+esc(c.industry)+'</p>':"")
+            +(c.offer?'<p>'+esc(c.offer)+'</p>':"")
+            +(c.note?'<p class="small">'+esc(c.note)+'</p>':"")
+            +'<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" data-cn="'+esc(c.id)+'" data-dec="approve">'+esc(t("approve_intro"))+'</button><button class="btn secondary small" data-cn="'+esc(c.id)+'" data-dec="decline">'+esc(t("decline"))+'</button></div>'
+            +'<p class="small" style="margin-top:6px">'+esc(t("connect_email_note"))+'</p></div>';
+        }).join("");
+        $all("[data-cn]", body).forEach(function(btn){
+          btn.onclick=async function(){
+            btn.disabled=true;
+            try{ await api("/admin/connects/"+encodeURIComponent(btn.getAttribute("data-cn")), {method:"POST", body:{decision:btn.getAttribute("data-dec")}}); toast(t("connect_decided")); load(); }
+            catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          };
+        });
+        return;
+      }
+      if(tab==="partnerships"){
+        var dp=await api("/admin/partnerships?status=open");
+        var plist=dp.partnerships||[];
+        if(!plist.length){ body.innerHTML=emptyState("🤝", t("no_partnerships"), ""); return; }
+        body.innerHTML=plist.map(function(p){
+          return '<div class="card list-item"><strong>'+esc(p.org_name||"")+'</strong><span class="chip">'+esc(p.type||"")+'</span>'
+            +'<p class="small">'+esc(p.contact_email||"")+' · '+esc(timeAgo(p.created_at))+'</p><p>'+esc(p.proposal||"")+'</p>'
+            +'<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn secondary small" data-ps="'+esc(p.id)+'" data-st="reviewed">'+esc(t("mark_reviewed"))+'</button><button class="btn secondary small" data-ps="'+esc(p.id)+'" data-st="declined">'+esc(t("decline"))+'</button></div></div>';
+        }).join("");
+        $all("[data-ps]", body).forEach(function(btn){
+          btn.onclick=async function(){
+            btn.disabled=true;
+            try{ await api("/admin/partnerships/"+encodeURIComponent(btn.getAttribute("data-ps")), {method:"POST", body:{status:btn.getAttribute("data-st")}}); toast(t("partnership_updated")); load(); }
+            catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+          };
+        });
+        return;
+      }
+      // Featured brand of the week (items 544/547).
+      var dd=await api("/brand-directory/directory");
+      var brands=dd.brands||[];
+      body.innerHTML='<div class="card"><h2>'+esc(t("featured_brand"))+'</h2><p class="small">'+esc(t("featured_brand_note"))+'</p>'
+        +'<label for="fb-select">'+esc(t("brand"))+'</label><select id="fb-select"><option value="">'+esc(t("none"))+'</option>'
+        +brands.map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.name)+' ('+esc(b.industry||"")+', '+esc(b.country||"")+')</option>'; }).join("")
+        +'</select><button class="btn" id="fb-save" style="margin-top:10px">'+esc(t("set_featured"))+'</button></div>'
+        +'<p class="small" style="margin-top:10px"><a href="#/help?topic=featured-brand">'+esc(t("how_featured_chosen"))+'</a></p>';
+      $("#fb-save").onclick=async function(){
+        var btn=$("#fb-save"); btn.disabled=true;
+        try{ await api("/admin/featured-brand", {method:"PUT", body:{brandProfileId:$("#fb-select").value||undefined}}); toast(t("featured_set")); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ btn.disabled=false; }
+      };
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: scam notices (item 365) ---------- */
+function renderAdminScamNotices(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_scam"))+'</h1>'+adminNav("scam-notices")
+    +'<div class="card"><h2>'+esc(t("post_scam_notice"))+'</h2>'
+    +'<label for="sn-title">'+esc(t("title"))+'</label><input id="sn-title" maxlength="200">'
+    +'<label for="sn-body">'+esc(t("message"))+'</label><textarea id="sn-body" maxlength="2000" rows="4"></textarea>'
+    +'<button class="btn" id="sn-post" style="margin-top:8px">'+esc(t("post_notice"))+'</button></div>'
+    +'<div id="ad-body" style="margin-top:12px">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  $("#sn-post").onclick=async function(){
+    var btn=$("#sn-post"); btn.disabled=true;
+    try{
+      await api("/admin/scam-notices", {method:"POST", body:{title:$("#sn-title").value.trim(), body:$("#sn-body").value.trim()}});
+      toast(t("notice_posted")); $("#sn-title").value=""; $("#sn-body").value=""; load();
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ btn.disabled=false; }
+  };
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/scam-notices");
+      var list=d.notices||[];
+      body.innerHTML=list.length? list.map(function(n){
+        return '<div class="card list-item"><strong>'+esc(n.title||"")+'</strong><p>'+esc(n.body||"")+'</p><p class="small">'+esc(fmtDate(n.created_at))+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_notices"))+'</p>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: velocity caps (item 333) ---------- */
+function renderAdminVelocity(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_velocity"))+'</h1>'+adminNav("velocity")
+    +'<p class="small">'+esc(t("velocity_note"))+'</p>'
+    +'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/velocity");
+      body.innerHTML='<div class="card">'
+        +'<label for="vc-day">'+esc(t("bill_day_cap"))+'</label><input id="vc-day" type="number" min="1" max="1000" value="'+esc(d.billDayCap||3)+'">'
+        +'<label for="vc-week">'+esc(t("bill_week_cap"))+'</label><input id="vc-week" type="number" min="1" max="1000" value="'+esc(d.billWeekCap||10)+'">'
+        +'<label for="vc-gift">'+esc(t("gift_hour_cap"))+'</label><input id="vc-gift" type="number" min="1" max="1000" value="'+esc(d.giftHourCap||10)+'">'
+        +'<label for="vc-reveal">'+esc(t("reveal_day_cap"))+'</label><input id="vc-reveal" type="number" min="1" max="1000" value="'+esc(d.revealDayCap||20)+'">'
+        +'<button class="btn" id="vc-save" style="margin-top:10px">'+esc(t("save"))+'</button></div>';
+      $("#vc-save").onclick=async function(){
+        var btn=$("#vc-save"); btn.disabled=true;
+        try{
+          await api("/admin/velocity", {method:"PUT", body:{
+            billDayCap:parseInt($("#vc-day").value,10), billWeekCap:parseInt($("#vc-week").value,10),
+            giftHourCap:parseInt($("#vc-gift").value,10), revealDayCap:parseInt($("#vc-reveal").value,10),
+          }});
+          toast(t("caps_saved"));
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+        finally{ btn.disabled=false; }
+      };
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: monthly trust report (item 399) ---------- */
+function renderAdminTrustReport(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_trust"))+'</h1>'+adminNav("trust-report")
+    +'<label for="tr-month">'+esc(t("month"))+'</label><input id="tr-month" type="month" value="'+new Date().toISOString().slice(0,7)+'">'
+    +'<div id="ad-body" style="margin-top:12px">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  $("#tr-month").addEventListener("change", load);
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var month=$("#tr-month").value||new Date().toISOString().slice(0,7);
+      var d=await api("/admin/trust-report?month="+encodeURIComponent(month));
+      body.innerHTML='<div class="grid2">'
+        +'<div class="card stat"><div class="n">'+esc(d.verificationsCompleted||0)+'</div><div class="l">'+esc(t("verifications_completed"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.verificationsApproved||0)+'</div><div class="l">'+esc(t("verifications_approved"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.reportsFiled||0)+'</div><div class="l">'+esc(t("reports_filed"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.reportsResolved||0)+'</div><div class="l">'+esc(t("reports_resolved"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.billsPaused||0)+'</div><div class="l">'+esc(t("bills_paused"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.fraudFlags||0)+'</div><div class="l">'+esc(t("fraud_flags"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(d.appealsDecided||0)+'</div><div class="l">'+esc(t("appeals_decided"))+'</div></div>'
+        +'</div>';
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
+  }
+}
+
+/* ---------- admin: drops (items 539–543) ---------- */
+function renderAdminDrops(){
+  if(!adminGuard()) return;
+  view('<h1>'+esc(t("admin_drops"))+'</h1>'+adminNav("drops")
+    +'<div class="card"><h2>'+esc(t("new_drop"))+'</h2>'
+    +'<label for="dr-brand">'+esc(t("brand"))+'</label><input id="dr-brand" maxlength="120">'
+    +'<label for="dr-title">'+esc(t("title"))+'</label><input id="dr-title" maxlength="200">'
+    +'<label for="dr-product">'+esc(t("product"))+'</label><input id="dr-product" maxlength="300">'
+    +'<label for="dr-qty">'+esc(t("quantity"))+'</label><input id="dr-qty" type="number" min="1" value="1">'
+    +'<label for="dr-elig">'+esc(t("eligibility"))+'</label><textarea id="dr-elig" maxlength="1000"></textarea>'
+    +'<button class="btn" id="dr-create" style="margin-top:8px">'+esc(t("create_drop"))+'</button></div>'
+    +'<div id="ad-body" style="margin-top:12px">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  bindAdminLogout();
+  $("#dr-create").onclick=async function(){
+    var btn=$("#dr-create"); btn.disabled=true;
+    try{
+      await api("/admin/drops", {method:"POST", body:{
+        brandName:$("#dr-brand").value.trim(), title:$("#dr-title").value.trim(),
+        product:$("#dr-product").value.trim(), quantity:parseInt($("#dr-qty").value,10)||1,
+        eligibility:$("#dr-elig").value.trim(),
+      }});
+      toast(t("drop_created")); load();
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ btn.disabled=false; }
+  };
+  load();
+  async function load(){
+    var body=$("#ad-body"); if(!body) return;
+    try{
+      var d=await api("/admin/drops");
+      var list=d.drops||[];
+      body.innerHTML=list.length? list.map(function(dr){
+        return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(dr.title||"")+'</strong><span class="chip">'+esc(dr.status||"")+'</span></div>'
+          +'<p class="small">'+esc(dr.brandName||"")+' · '+esc(dr.product||"")+' × '+esc(dr.quantity||1)+' · '+esc(dr.entries||0)+' '+esc(t("entries"))+(dr.drawnAt?' · '+esc(t("drawn"))+' '+esc(fmtDate(dr.drawnAt)):"")+'</p>'
+          +(dr.eligibility?'<p class="small">'+esc(dr.eligibility)+'</p>':"")
+          +(dr.status==="open"?'<button class="btn small" data-draw="'+esc(dr.id)+'">'+esc(t("draw_winner"))+'</button>':"")
+          +'</div>';
+      }).join("") : '<p>'+esc(t("no_drops"))+'</p>';
+      $all("[data-draw]", body).forEach(function(btn){
+        btn.onclick=function(){
+          confirmDialog(t("draw_winner"), t("draw_confirm"), t("draw_winner"), async function(){
+            try{ var r=await api("/admin/drops/"+encodeURIComponent(btn.getAttribute("data-draw"))+"/draw", {method:"POST"}); toast(t("draw_done")+" ("+(r.entries||0)+" "+t("entries")+")"); load(); }
+            catch(e){ toast(e.message||t("err_generic"), true); }
+          });
+        };
+      });
+    }catch(e){
+      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      body.innerHTML=errBox(e.message); bindErrRetry(load);
+    }
   }
 }
 
@@ -5738,6 +7328,26 @@ async function boot(){
   if("serviceWorker" in navigator){
     try{ navigator.serviceWorker.register("/sw.js").catch(function(){ /* offline shell is best-effort */ }); }catch(e){ /* unsupported */ }
   }
+  // Install prompt (item 583): show once for eligible browsers, dismissible.
+  window.addEventListener("beforeinstallprompt", function(e){
+    e.preventDefault();
+    if(localStorage.getItem("sp-install-dismissed")) return;
+    if(document.getElementById("install-banner")) return;
+    S.deferredInstall=e;
+    var bar=document.createElement("div");
+    bar.id="install-banner";
+    bar.className="install-banner";
+    bar.innerHTML='<span>'+esc(t("install_prompt"))+'</span><button class="btn small" id="ib-install">'+esc(t("install"))+'</button><button class="btn ghost small" id="ib-dismiss" aria-label="'+esc(t("dismiss"))+'">✕</button>';
+    document.body.appendChild(bar);
+    document.getElementById("ib-install").addEventListener("click", function(){
+      if(S.deferredInstall){ S.deferredInstall.prompt(); S.deferredInstall=null; }
+      bar.remove();
+    });
+    document.getElementById("ib-dismiss").addEventListener("click", function(){
+      localStorage.setItem("sp-install-dismissed", "1");
+      bar.remove();
+    });
+  });
 }
 document.addEventListener("DOMContentLoaded", boot);
 if(document.readyState!=="loading") boot();
