@@ -13,6 +13,7 @@ const express = require('express');
 const db = require('./db');
 const { attachUser, verifyOrigin, verifyCsrf } = require('./lib/auth');
 const { maintenanceGate } = require('./lib/maintenance');
+const { sanitizeText } = require('./lib/sanitize');
 const { payoutKeySource, PUBLIC_DIR } = require('./lib/storage');
 
 const ROOT = path.join(__dirname, '..');
@@ -102,8 +103,10 @@ app.use('/api', (req, res) => {
 });
 
 // Central error handler: always the {error:{code,message}} shape.
+// Item 836: error text is sanitized before it is logged or returned, so a
+// payout account number can never leak into a log line or error message.
 app.use((err, req, res, _next) => {
-  console.error('[error]', err && err.stack ? err.stack : err);
+  console.error('[error]', sanitizeText(err && err.stack ? err.stack : String(err)));
   if (err && err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: { code: 'BAD_JSON', message: 'Request body is not valid JSON.' } });
   }

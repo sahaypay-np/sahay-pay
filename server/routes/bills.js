@@ -21,10 +21,24 @@ const {
   cleanStr, validatePayoutMethod, methodAllowedForCountry,
 } = require('../lib/validate');
 const { parseMajorToMinor, isMinorAmount } = require('../lib/money');
-const { upload, isPrivateKind, isKnownKind, publicUrlFor, privateRefFor, encryptAccount, PUBLIC_DIR, PRIVATE_DIR, fileMatchesMime } = require('../lib/storage');
-const { createReviewPacket, billPacketPayload } = require('../lib/notify');
+const { upload, isPrivateKind, isKnownKind, publicUrlFor, privateRefFor, encryptAccount, PUBLIC_DIR, PRIVATE_DIR, fileMatchesMime, stripImageMetadata, inspectPhotoOrigin } = require('../lib/storage');
+const { createReviewPacket, billPacketPayload, createNotification } = require('../lib/notify');
+const { scanScamPhrases, findDuplicateBill } = require('../lib/abuse');
+const { findSensitiveNumbers } = require('../lib/sensitive');
+const { deviceFingerprint } = require('../lib/device');
 
 const router = express.Router();
+
+// Item 870: per-account upload storage quota (50 MB).
+const UPLOAD_QUOTA_BYTES = 50 * 1024 * 1024;
+// Item 855: per-device posting cap (coarse user-agent fingerprint).
+const DEVICE_BILLS_PER_DAY = 10;
+// Item 848: velocity flag threshold (bills in the last hour).
+const BILL_VELOCITY_PER_HOUR = 5;
+// Item 838: payout-edit cooldown.
+const PAYOUT_EDIT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+// Item 839: payout edits need a session re-authenticated within 15 min.
+const PAYOUT_REAUTH_MINUTES = 15;
 
 const MATERIAL_FIELDS = ['title', 'category', 'amountMinor', 'story', 'details', 'photoUrl', 'supportPhotoUrl', 'company', 'charity', 'payDirect'];
 
@@ -103,7 +117,7 @@ async function storePayoutMethods(billId, methods, country) {
     await db.run(
       `INSERT INTO payout_methods (id, bill_id, method, holder_name, account_enc, account_hint, meta_json, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [crypto.randomUUID(), billId, method, cleanStr(m.holderName, 120), encryptAccount(v.account), v.hint, JSON.stringify(v.meta || {}), nowIso()]
+      [crypto.randomUUID(), billId, method, cleanStr(m.holderName, 120), encryptAccount(v.account, method), v.hint, JSON.stringify(v.meta || {}), nowIso()]
     );
     hints.push(v.hint);
   }
@@ -134,6 +148,11 @@ function validateBillFields(body, categories) {
 router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), async (req, res, next) => {
   try {
     const body = req.body || {};
+    // Item 846: honeypot — the form carries a hidden "website" field no
+    // human ever sees; bots fill it. Reject those submissions outright.
+    if (typeof body.website === 'string' && body.website.trim() !== '') {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Submission rejected.' } });
+    }
     const categories = await db.getSettingJson('categories', []);
     const v = validateBillFields(body, categories);
     if (v.error) return res.status(400).json({ error: { code: 'VALIDATION', message: v.error } });
@@ -149,6 +168,26 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
         error: { code: 'VALIDATION', message: 'Add at least one way for supporters to pay you — e.g. your eSewa number, Khalti number, UPI ID or bank details.' },
       });
     }
+    // Item 920: separate consent before payout details are collected.
+    if (submit && !payDirect && methods.length > 0 && body.payoutConsent !== true) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION', message: 'Please confirm you understand your payout details are encrypted and shown publicly only as a masked hint.' },
+      });
+    }
+    // Item 855: per-device posting cap (coarse user-agent fingerprint).
+    if (submit) {
+      const fp = deviceFingerprint(req.headers['user-agent']);
+      const deviceBills = await db.get(
+        `SELECT COUNT(*) AS c FROM bills b JOIN users u ON u.id = b.user_id
+         WHERE u.device_fp = $1 AND b.created_at >= $2`,
+        [fp, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()]
+      );
+      if (Number(deviceBills?.c || 0) >= DEVICE_BILLS_PER_DAY) {
+        return res.status(429).json({
+          error: { code: 'DEVICE_LIMIT', message: 'Too many bills were posted from this device today. Please try again tomorrow.' },
+        });
+      }
+    }
     if (submit && payDirect && (!cleanStr(body.billerName, 120) || !cleanStr(body.billerDestination, 500))) {
       return res.status(400).json({
         error: { code: 'VALIDATION', message: 'Pay-direct bills need the biller name and the official payment destination from the bill.' },
@@ -163,8 +202,8 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
         covered_minor, due_date, story, details, charity, anonymous, status, city, country, photo_url,
         support_photo_url, private_proof_url, pay_direct, biller_name, biller_ref, biller_destination,
         views, report_count, rejection_reason, changes_note, approved_at, approved_by, completed_at,
-        created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 0, 0, '', '', NULL, NULL, NULL, $24, $25)`,
+        payout_consent_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 0, 0, '', '', NULL, NULL, NULL, $24, $25, $26)`,
       [
         id, req.user.id, await uniqueRequestCode(), v.title, body.category, v.company,
         v.amountMinor, currency, body.dueDate ? cleanStr(body.dueDate, 10) : null,
@@ -177,6 +216,7 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
         cleanStr(body.billerName || '', 120),
         cleanStr(body.billerRef || '', 120),
         cleanStr(body.billerDestination || '', 500),
+        body.payoutConsent === true ? now : null,
         now, now,
       ]
     );
@@ -189,14 +229,47 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
 
     const bill = await db.get('SELECT * FROM bills WHERE id = $1', [id]);
     let packet = null;
+    // Abuse signals (flags for the human reviewer, never auto-blocks):
+    // 853 scam phrases, 854 duplicate bill, 848 velocity, 866/867
+    // sensitive numbers in the text, 856 web-download photo flag.
+    const scamPhrases = scanScamPhrases(`${v.title} ${v.story} ${v.details}`);
+    const sensitiveNumbers = findSensitiveNumbers(`${v.title} ${v.story} ${v.details}`);
+    const duplicateOf = await findDuplicateBill({
+      title: v.title, amountMinor: v.amountMinor,
+      photoUrl: bill.photo_url, excludeBillId: id,
+    });
+    const photoFlags = body.photoFlags && typeof body.photoFlags === 'object' ? body.photoFlags : null;
+    let velocityFlag = false;
     if (submit) {
-      packet = await createReviewPacket('bill', id, await billPacketPayload(bill, await getPayoutHints(id)));
+      const recent = await db.get(
+        `SELECT COUNT(*) AS c FROM bills WHERE user_id = $1 AND created_at >= $2`,
+        [req.user.id, new Date(Date.now() - 60 * 60 * 1000).toISOString()]
+      );
+      velocityFlag = Number(recent?.c || 0) >= BILL_VELOCITY_PER_HOUR;
+      if (velocityFlag) {
+        await logAudit('system', 'velocity', 'bill_velocity_flag', 'user', req.user.id, { billsLastHour: Number(recent.c) });
+      }
+    }
+    if (submit) {
+      const payload = await billPacketPayload(bill, await getPayoutHints(id));
+      payload.flags = {
+        scamPhrases: scamPhrases.length ? scamPhrases : undefined,
+        duplicateOf: duplicateOf || undefined,
+        velocityFlag: velocityFlag || undefined,
+        sensitiveNumbers: sensitiveNumbers.length ? sensitiveNumbers : undefined,
+        photoWebDownloadSuspected: photoFlags?.webDownloadSuspected === true || undefined,
+        photoSoftware: photoFlags?.software || undefined,
+      };
+      packet = await createReviewPacket('bill', id, payload);
       await logAudit('user', req.user.id, 'bill_submitted', 'bill', id, { requestCode: bill.request_code });
     }
     res.status(201).json({
       bill: publicBill(bill, req.user),
       payoutHints: stored.hints,
       reviewPacketId: packet ? packet.id : null,
+      // 866/867: tell the poster what was found so they can redact it.
+      sensitiveWarning: sensitiveNumbers.length ? sensitiveNumbers : undefined,
+      scamWarning: scamPhrases.length ? scamPhrases : undefined,
     });
   } catch (err) {
     next(err);
@@ -373,7 +446,12 @@ router.post('/:id/remove', requireActive, async (req, res, next) => {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Bill not found.' } });
     }
     await db.run(`UPDATE bills SET status = 'removed', updated_at = $1 WHERE id = $2`, [nowIso(), bill.id]);
-    await logAudit('user', req.user.id, 'bill_removed', 'bill', bill.id, {});
+    // Item 840: deleting the bill also deletes its encrypted payout rows
+    // (the account numbers must not outlive the bill).
+    const deleted = await db.run('DELETE FROM payout_methods WHERE bill_id = $1', [bill.id]);
+    await logAudit('user', req.user.id, 'bill_removed', 'bill', bill.id, {
+      payoutRowsDeleted: deleted.changes || 0,
+    });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -382,6 +460,9 @@ router.post('/:id/remove', requireActive, async (req, res, next) => {
 
 // POST /api/bills/:id/payout — replace payout methods. Changing the payout
 // account on a LIVE bill pauses it (back to pending_review) until re-approved.
+// Item 839: requires a session re-authenticated (recovery code) within the
+// last 15 minutes. Item 838: 24-hour cooldown between edits. Item 837: the
+// bill owner is notified of the change.
 router.post('/:id/payout', requireActive, async (req, res, next) => {
   try {
     const bill = await db.get('SELECT * FROM bills WHERE id = $1', [req.params.id]);
@@ -390,6 +471,23 @@ router.post('/:id/payout', requireActive, async (req, res, next) => {
     }
     if (['completed', 'removed', 'expired'].includes(bill.status)) {
       return res.status(409).json({ error: { code: 'INVALID_STATE', message: `A ${bill.status} bill cannot change payout details.` } });
+    }
+    const reauthedAt = req.sessionRow?.reauthed_at;
+    if (!reauthedAt || Date.now() - Date.parse(reauthedAt) > PAYOUT_REAUTH_MINUTES * 60 * 1000) {
+      return res.status(403).json({
+        error: {
+          code: 'REAUTH_REQUIRED',
+          message: 'Changing payout details needs a fresh identity check — please confirm with your recovery code first.',
+        },
+      });
+    }
+    if (bill.payout_edited_at && Date.now() - Date.parse(bill.payout_edited_at) < PAYOUT_EDIT_COOLDOWN_MS) {
+      return res.status(409).json({
+        error: {
+          code: 'PAYOUT_COOLDOWN',
+          message: 'Payout details can only be changed once every 24 hours. Please try again tomorrow.',
+        },
+      });
     }
     const methods = Array.isArray(req.body.payoutMethods) ? req.body.payoutMethods : [];
     if (bill.pay_direct !== 1 && methods.length === 0) {
@@ -411,9 +509,10 @@ router.post('/:id/payout', requireActive, async (req, res, next) => {
       await db.run(
         `INSERT INTO payout_methods (id, bill_id, method, holder_name, account_enc, account_hint, meta_json, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [crypto.randomUUID(), bill.id, v.method, v.holderName, encryptAccount(v.account), v.hint, JSON.stringify(v.meta), nowIso()]
+        [crypto.randomUUID(), bill.id, v.method, v.holderName, encryptAccount(v.account, v.method), v.hint, JSON.stringify(v.meta), nowIso()]
       );
     }
+    await db.run('UPDATE bills SET payout_edited_at = $1 WHERE id = $2', [nowIso(), bill.id]);
     let packet = null;
     let backToReview = false;
     if (bill.status === 'approved') {
@@ -423,6 +522,11 @@ router.post('/:id/payout', requireActive, async (req, res, next) => {
       backToReview = true;
     }
     await logAudit('user', req.user.id, 'bill_payout_changed', 'bill', bill.id, { backToReview });
+    await createNotification(
+      bill.user_id, 'payout_changed', 'Your payout details were changed',
+      `The payout details on "${bill.title}" were changed just now. If that was not you, change them back and contact the owner via the Help Centre.`,
+      '#/mybills'
+    );
     const updated = await db.get('SELECT * FROM bills WHERE id = $1', [bill.id]);
     res.json({ bill: publicBill(updated, req.user), payoutHints: await getPayoutHints(bill.id), backToReview, reviewPacketId: packet ? packet.id : null });
   } catch (err) {
@@ -478,15 +582,44 @@ uploadsRouter.post('/', requireActive, (req, res, next) => {
       req.file.path = target;
       req.file.destination = expectedDir;
     }
+    // Item 856: photo-origin heuristic (web-download suspicion) — read
+    // BEFORE stripping, since stripping removes the metadata it reads.
+    const origin = inspectPhotoOrigin(req.file.path, req.file.mimetype);
+    // Item 864: strip EXIF location/device metadata from photos on upload.
+    const stripped = stripImageMetadata(req.file.path, req.file.mimetype);
+    // Item 870: per-account storage quota (50 MB) — checked before the
+    // upload is recorded; the file is deleted when the quota is exceeded.
+    const used = await db.get(
+      'SELECT COALESCE(SUM(size_bytes), 0) AS total FROM uploads WHERE user_id = $1',
+      [req.user.id]
+    );
+    const finalSize = fs.statSync(req.file.path).size;
+    if (Number(used?.total || 0) + finalSize > UPLOAD_QUOTA_BYTES) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(413).json({
+        error: { code: 'QUOTA_EXCEEDED', message: 'Your upload storage is full (50 MB per account). Please delete an old bill photo first.' },
+      });
+    }
+    await db.run(
+      `INSERT INTO uploads (id, user_id, filename, size_bytes, kind, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [crypto.randomUUID(), req.user.id, req.file.filename, finalSize, kind, nowIso()]
+    );
     const url = isPrivateKind(kind) ? privateRefFor(req.file.filename) : publicUrlFor(req.file.filename);
     res.status(201).json({
       ok: true,
       kind,
       url,
       filename: req.file.filename,
-      size: req.file.size,
+      size: finalSize,
       mimeType: req.file.mimetype,
       private: isPrivateKind(kind),
+      metadataStripped: stripped.stripped,
+      photoFlags: {
+        webDownloadSuspected: origin.webDownloadSuspected,
+        software: origin.software,
+        hasExif: origin.hasExif,
+      },
     });
   } catch (err) {
     next(err);
