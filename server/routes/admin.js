@@ -16,7 +16,7 @@ const db = require('../db');
 const { logAudit, nowIso } = require('../lib/audit');
 const {
   isPinSet, setupPin, verifyAdminPin, changePin,
-  createAdminSession, destroyAdminSession, requireAdmin,
+  createAdminSession, destroyAdminSession, requireAdmin, lookupAdminSession,
   sessionCookieOptions, ADMIN_SESSION_HOURS, rateLimit,
   getOrCreateCsrfToken,
 } = require('../lib/auth');
@@ -87,6 +87,20 @@ router.post('/logout', async (req, res, next) => {
   }
 });
 
+// GET /api/admin/session — 200 always: {admin: true/false}. Lets the frontend
+// detect an admin session at boot without a 401 console error (same pattern
+// as /api/auth/me returning 200 {user:null} when logged out). The /metrics
+// probe it replaces fired a 401 for every logged-out visitor on every boot,
+// which Lighthouse flagged under Best Practices.
+router.get('/session', async (req, res, next) => {
+  try {
+    const row = await lookupAdminSession(req.cookies?.sp_admin);
+    res.json({ admin: Boolean(row) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Everything below requires a valid admin session.
 router.use(requireAdmin);
 
@@ -95,6 +109,56 @@ router.get('/csrf', async (req, res, next) => {
   try {
     const csrfToken = await getOrCreateCsrfToken('admin_sessions', req.cookies?.sp_admin);
     res.json({ csrfToken });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Full-data export (backups without a paid plan) ---
+// GET /api/admin/export — admin session required. Returns a JSON download of
+// the service's user-facing data (everything needed to rebuild state).
+// SAFETY: payout accounts are exported ONLY as their stored AES-256-GCM
+// ciphertext (account_enc) — never decrypted. The export NEVER contains:
+// sessions / admin_sessions (token hashes), users.recovery_code_hash /
+// recovery_code_lookup (credential-equivalent), or settings.admin_pin_hash.
+// Uploaded photo FILES are not included (photo_url references only).
+const EXPORT_TABLES = [
+  'bills', 'payout_methods', 'gifts', 'verifications', 'brands',
+  'brand_connects', 'auctions', 'auction_bids', 'notifications',
+  'reports', 'complaints', 'review_packets', 'audit_logs',
+];
+const SECRET_SETTING_KEYS = new Set(['admin_pin_hash']);
+const SECRET_SETTING_PATTERN = /secret|token|password/i;
+
+router.get('/export', async (req, res, next) => {
+  try {
+    const tables = {};
+    // Users: explicit column list so recovery-code hashes can never leak,
+    // even if the schema grows new secret columns later.
+    const users = await db.query(
+      `SELECT id, display_name, username, age, country, city, about, language,
+              photo_url, prefs_json, terms_accepted_version, terms_accepted_at,
+              privacy_accepted_version, privacy_accepted_at, suspended, created_at
+       FROM users ORDER BY 1`
+    );
+    tables.users = users.rows;
+    for (const t of EXPORT_TABLES) {
+      const r = await db.query(`SELECT * FROM ${t} ORDER BY 1`);
+      tables[t] = r.rows;
+    }
+    // Settings: everything except secrets.
+    const settings = await db.query('SELECT key, value FROM settings ORDER BY 1');
+    tables.settings = settings.rows.filter(
+      (row) => !SECRET_SETTING_KEYS.has(row.key) && !SECRET_SETTING_PATTERN.test(row.key)
+    );
+    await logAudit('admin', 'owner', 'admin_data_export', 'admin', 'export', {
+      tables: Object.keys(tables),
+      rows: Object.values(tables).reduce((n, rows) => n + rows.length, 0),
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="sahay-pay-export-${stamp}.json"`);
+    res.json({ exportedAt: new Date().toISOString(), app: 'Sahay Pay', version: 1, tables });
   } catch (err) {
     next(err);
   }

@@ -71,13 +71,14 @@ async function main() {
   const text = () => (doc.getElementById('view') ? doc.getElementById('view').textContent : doc.body.textContent);
 
   // 1. Boot -> splash -> welcome (1.4s splash timer).
-  check('splash renders', await waitFor(() => text().includes('Sahay Pay'), 5000, 'splash'));
+  check('splash renders', await waitFor(() => !$('#boot-loading') && text().includes('Sahay Pay'), 5000, 'splash'));
   check('welcome slides render', await waitFor(() => !!$('#w-next'), 5000, 'welcome'));
 
   // 2. Welcome -> country -> onboarding.
   check('welcome offers recovery-code sign-in', !!$('#w-recover'));
   $('#w-skip').click();
   check('country screen renders', await waitFor(() => !!$('.country-card'), 3000, 'country'));
+  check('topbar+dock hidden on no-chrome country page', window.getComputedStyle($('#topbar')).display === 'none' && window.getComputedStyle($('#dock')).display === 'none');
   doc.querySelector('.country-card[data-c="NP"]').click();
   await sleep(100);
   $('#c-next').click();
@@ -119,6 +120,7 @@ async function main() {
 
   // 4. Swipe: honest empty state (no approved bills on a fresh DB).
   check('swipe renders after onboarding', await waitFor(() => window.location.hash.startsWith('#/swipe') && !!$('#deck-wrap'), 5000, 'swipe'));
+  check('topbar+dock visible on chrome swipe page', window.getComputedStyle($('#topbar')).display === 'flex' && window.getComputedStyle($('#dock')).display === 'flex');
   check('swipe shows empty state, not a crash', await waitFor(() => text().includes('No bills') || text().includes('Post the first') || text().includes('first bill') || !!doc.querySelector('.empty'), 5000, 'swipe empty'));
 
   // 5. Leaders (empty), Help Centre (6 topics), Settings, My Bills.
@@ -274,6 +276,7 @@ async function main() {
   const loginBtn = [...doc.querySelectorAll('button')].find((x) => x.id === 'ad-login' || /log in/i.test(x.textContent));
   if (loginBtn) loginBtn.click();
   check('admin dashboard loads', await waitFor(() => window.location.hash.startsWith('#/admin/dashboard') && !!$('#ad-body'), 8000, 'dashboard'));
+  check('admin export button present', !!$('#ad-export'));
   check('dashboard shows real metrics (1 user)', await waitFor(() => text().includes('1'), 5000, 'metrics'));
 
   // 6b. Logout resets the header (a): avatar back to '?', badge hidden.

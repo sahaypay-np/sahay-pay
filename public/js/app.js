@@ -2335,7 +2335,7 @@ function adminGuard(){
   return true;
 }
 async function checkAdminSession(){
-  try{ var d=await api("/admin/metrics"); S.admin=true; return d; }
+  try{ var d=await api("/admin/session"); S.admin=!!(d&&d.admin); return d; }
   catch(e){ S.admin=false; return null; }
 }
 function renderAdminLogin(){
@@ -2403,14 +2403,35 @@ function renderAdminLogin(){
 function adminLogoutBtn(){
   return '<button class="btn ghost" id="ad-logout">'+esc(t("admin_logout"))+'</button>';
 }
+function adminExportBtn(){
+  return '<button class="btn secondary" id="ad-export">'+esc(t("export_data"))+'</button>';
+}
 function bindAdminLogout(){
   var b=$("#ad-logout");
   if(b) b.onclick=async function(){ try{ await api("/admin/logout", {method:"POST"}); }catch(e){} S.admin=false; go("#/admin"); };
 }
+function bindAdminExport(){
+  var b=$("#ad-export"); if(!b) return;
+  b.onclick=async function(){
+    var btn=$("#ad-export"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      var d=await api("/admin/export");
+      var blob=new Blob([JSON.stringify(d, null, 2)], {type:"application/json"});
+      var a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download="sahay-pay-export-"+new Date().toISOString().slice(0,10)+".json";
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      toast(t("admin_export_done"));
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ btn.disabled=false; btn.textContent=t("export_data"); }
+  };
+}
 async function renderAdminDashboard(){
   if(!adminGuard()) return;
-  view('<h1>'+esc(t("admin"))+' — '+esc(t("dashboard"))+'</h1><p class="small">'+esc(t("admin_metrics_note"))+'</p>'+adminNav("dashboard")+'<div id="ad-body">'+skeleton(2)+'</div>'+adminLogoutBtn());
+  view('<h1>'+esc(t("admin"))+' — '+esc(t("dashboard"))+'</h1><p class="small">'+esc(t("admin_metrics_note"))+'</p>'+adminNav("dashboard")+'<div id="ad-body">'+skeleton(2)+'</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'+adminExportBtn()+adminLogoutBtn()+'</div>');
   bindAdminLogout();
+  bindAdminExport();
   try{
     var d=await api("/admin/metrics");
     var m=d.metrics||d;

@@ -74,6 +74,9 @@ r=$(curl -s -w '\n%{http_code}' "$B/admin/pin-status")
 echo "$(body "$r")" | grep -q '"pinSet":false' && { echo "PASS: pinSet false"; pass=$((pass+1)); } || { echo "FAIL: pinSet false"; fail=$((fail+1)); }
 r=$(curl -s -w '\n%{http_code}' -X POST "$B/admin/login" $J -d '{"pin":"123456"}'); c=$(code "$r")
 t "admin login before setup -> 403 PIN_NOT_SET" 403 "$c"
+r=$(curl -s -w '\n%{http_code}' "$B/admin/session"); c=$(code "$r")
+t "GET /admin/session logged out -> 200 (no 401 console error)" 200 "$c"
+echo "$(body "$r")" | grep -q '"admin":false' && { echo "PASS: session admin false logged out"; pass=$((pass+1)); } || { echo "FAIL: session admin false"; fail=$((fail+1)); }
 r=$(curl -s -w '\n%{http_code}' -X POST "$B/admin/setup-pin" $J -d '{"pin":"smoke-pin-12345"}'); c=$(code "$r")
 t "setup-pin" 200 "$c"
 r=$(curl -s -w '\n%{http_code}' -X POST "$B/admin/setup-pin" $J -d '{"pin":"other-pin-99999"}'); c=$(code "$r")
@@ -82,6 +85,8 @@ r=$(curl -s -w '\n%{http_code}' -c "$TMPD/c-admin.txt" -X POST "$B/admin/login" 
 t "admin login wrong PIN -> 401" 401 "$c"
 r=$(curl -s -w '\n%{http_code}' -c "$TMPD/c-admin.txt" -X POST "$B/admin/login" $J -d '{"pin":"smoke-pin-12345"}'); c=$(code "$r")
 t "admin login correct PIN" 200 "$c"
+r=$(curl -s -b "$TMPD/c-admin.txt" "$B/admin/session")
+echo "$r" | grep -q '"admin":true' && { echo "PASS: session admin true after login"; pass=$((pass+1)); } || { echo "FAIL: session admin true"; fail=$((fail+1)); }
 T_ADMIN=$(curl -s -b "$TMPD/c-admin.txt" "$B/admin/csrf" | jget "['csrfToken']")
 
 # --- payout validation ---
@@ -107,6 +112,18 @@ r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/queue?s
 echo "$r" | grep -q "$PACKET_ID" && { echo "PASS: packet in admin queue"; pass=$((pass+1)); } || { echo "FAIL: packet in queue"; fail=$((fail+1)); }
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/review/$PACKET_ID" $J -d '{"decision":"approve"}'); c=$(code "$r")
 t "admin approve" 200 "$c"
+
+# --- admin export: admin-only, full data, no secrets, payout stays encrypted ---
+r=$(curl -s -w '\n%{http_code}' "$B/admin/export"); c=$(code "$r")
+t "GET /admin/export anonymous -> 401" 401 "$c"
+curl -s -b "$TMPD/c-admin.txt" "$B/admin/export" > "$TMPD/export.json"
+python3 -c "import json; d=json.load(open('$TMPD/export.json')); t=d['tables']; assert 'users' in t and 'bills' in t and 'payout_methods' in t and 'gifts' in t and 'settings' in t and 'audit_logs' in t, 'missing tables'; assert len(t['users'])>=1 and len(t['bills'])>=1 and len(t['payout_methods'])>=1, 'empty tables'; assert all('account_enc' in p for p in t['payout_methods']), 'no account_enc'; assert all(s.get('key') != 'admin_pin_hash' for s in t['settings']), 'admin_pin_hash in settings'; assert all('recovery_code_hash' not in u and 'recovery_code_lookup' not in u for u in t['users']), 'recovery hashes in users'" && { echo "PASS: export parses with expected tables + encrypted payout + no secret keys"; pass=$((pass+1)); } || { echo "FAIL: export shape"; fail=$((fail+1)); }
+# Plaintext secrets must not appear anywhere in the file (the audit log legitimately
+# names 'admin_pin_hash' as the target of the PIN-setup action — that string is metadata,
+# not the hash, so it is asserted structurally above, not by raw grep).
+for bad in 9845671234 smoke-pin-12345; do
+  grep -q "$bad" "$TMPD/export.json" && { echo "FAIL: export leaks $bad"; fail=$((fail+1)); } || { echo "PASS: export has no $bad"; pass=$((pass+1)); }
+done
 r=$(curl -s -b "$TMPD/c-supporter.txt" -H "X-CSRF-Token: $T_SUPPORTER" "$B/feed")
 echo "$r" | grep -q "$BILL_ID" && { echo "PASS: approved bill in feed"; pass=$((pass+1)); } || { echo "FAIL: approved bill in feed"; fail=$((fail+1)); }
 

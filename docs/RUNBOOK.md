@@ -261,6 +261,31 @@ Within one week of any P1/P2 (and any P3 that taught something):
   someone is guessing the PIN — see §9).
 - Load-time check: open the live site and note if it feels slow; run a
   PageSpeed check monthly (below) or sooner if it feels off.
+- Data export (weekly backup): Admin → Dashboard → Export data. Save the
+  downloaded `sahay-pay-export-YYYY-MM-DD.json` somewhere safe (encrypted
+  drive or USB — never in the repo, email, or chat). See below.
+
+### Data export — the weekly backup (admin database export)
+
+Supabase free has no scheduled backups, so the admin export IS the backup.
+Once a week (e.g. every Monday) the owner downloads it from the live site:
+Admin console → Dashboard → Export data. The file is a JSON download
+(`GET /api/admin/export`, admin PIN session required).
+
+What it contains: all user-facing data needed to rebuild service state —
+users, bills, payout methods, gifts, verifications, brands, brand connects,
+auctions, bids, notifications, reports, complaints, review packets, audit
+logs, and settings.
+What it never contains: payout accounts appear only as their stored
+AES-256-GCM ciphertext (never decrypted); no PIN hash, no recovery-code
+hashes, no session tokens. Uploaded photo FILES are not included
+(`photo_url` references only).
+Keep it safe: the file holds other people's bill and payout data — store it
+encrypted, share it with nobody, and delete old copies when you no longer
+need them. To restore from it you also need the `PAYOUT_ENCRYPTION_KEY`
+from the Netlify env vars (without it the payout ciphertext cannot be
+decrypted) — no automated restore script exists yet; a restore is a manual
+re-import job, not a one-click operation.
 
 ### Monthly (items 906/909/964/940/791)
 
