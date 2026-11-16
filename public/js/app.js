@@ -119,7 +119,7 @@ function setFieldErr(inputId, errId, msg){
 }
 function badgeHtml(b){
   if(!b) return "";
-  var map={bill:t("verified_bill"),id:t("verified_id"),name:t("verified_name")};
+  var map={bill:t("verified_bill"),id:t("verified_id"),name:t("verified_name"),biller:t("verified_biller")};
   var label=map[b]||b;
   return '<button type="button" class="chip good badge-btn" data-badge="'+esc(b)+'">✓ '+esc(label)+'</button>';
 }
@@ -556,7 +556,24 @@ var ROUTES = [
   {re:/^#\/auctions$/, fn:renderAuctions, chrome:true, tab:"brands"},
   {re:/^#\/auction\/([^\/\?]+)$/, fn:renderAuction, chrome:true, tab:"brands"},
   {re:/^#\/mybills$/, fn:renderMyBills, chrome:true, tab:"mybills"},
+  {re:/^#\/profile\/([^\/\?]+)\/(followers|following)$/, fn:function(a,b){ renderFollowList(a,b); }, chrome:true},
   {re:/^#\/profile\/([^\/\?]+)$/, fn:renderProfile, chrome:true},
+  {re:/^#\/hall-of-fame$/, fn:renderHallOfFame, chrome:true},
+  {re:/^#\/community$/, fn:renderCommunity, chrome:true},
+  {re:/^#\/milestones$/, fn:renderMilestones, chrome:true},
+  {re:/^#\/activity$/, fn:renderActivity, chrome:true},
+  {re:/^#\/thanks$/, fn:renderThanksFeed, chrome:true},
+  {re:/^#\/achievements$/, fn:renderAchievements, chrome:true},
+  {re:/^#\/changelog$/, fn:renderChangelog, chrome:true},
+  {re:/^#\/brand-directory$/, fn:renderBrandDirectory, chrome:true, tab:"brands"},
+  {re:/^#\/brand-directory\/new$/, fn:renderBrandApply, chrome:true, tab:"brands"},
+  {re:/^#\/brand-directory\/([^\/\?]+)$/, fn:renderBrandProfile, chrome:true, tab:"brands"},
+  {re:/^#\/brand-messages$/, fn:renderBrandMessages, chrome:true, tab:"brands"},
+  {re:/^#\/brand-messages\/([^\/\?]+)$/, fn:renderBrandThread, chrome:true, tab:"brands"},
+  {re:/^#\/drops$/, fn:renderDrops, chrome:true, tab:"brands"},
+  {re:/^#\/partnerships$/, fn:renderPartnerships, chrome:true},
+  {re:/^#\/founder$/, fn:renderFounderPage, chrome:true},
+  {re:/^#\/supporters-wall$/, fn:renderSupportersWall, chrome:true},
   {re:/^#\/settings$/, fn:renderSettings, chrome:true},
   {re:/^#\/help$/, fn:renderHelp, chrome:true},
   {re:/^#\/notifications$/, fn:renderNotifications, chrome:true},
@@ -1382,7 +1399,7 @@ function renderBill(id){
       +'<div class="card" style="margin-top:8px">'
       +(photo?'<a href="#/photo/'+encodeURIComponent(bill.id)+'"><img class="bill-photo" src="'+esc(photo)+'" alt="'+esc(t("bill_photo_alt"))+'"></a>':"")
       +'<h1>'+esc(bill.title||"")+'</h1>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">'+badgesHtml(bill)+askTypeBadge(bill)+'<span class="chip">'+categoryIcon(bill.category)+' '+esc(bill.category||"")+'</span>'+statusChip(bill.status)+((bill.expiresAt||bill.expires_at)?'<span class="chip">⏳ '+esc(expiryLabel(bill))+'</span>':"")+'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">'+badgesHtml(bill)+askTypeBadge(bill)+'<span class="chip">'+categoryIcon(bill.category)+' '+esc(bill.category||"")+'</span>'+statusChip(bill.status)+((bill.expiresAt||bill.expires_at)?'<span class="chip">⏳ '+esc(expiryLabel(bill))+'</span>':"")+((bill.trustSummary&&bill.trustSummary.firstBill)?'<span class="chip">🌱 '+esc(t("first_bill_label"))+'</span>':"")+'</div>'
       +'<p><span class="money" style="font-size:24px;font-weight:800">'+esc(money(bill.amount_minor||bill.amountMinor||0,cur))+'</span></p>'
       + progressHtml(bill)
       +'<div class="kv"><span>'+esc(t("biller"))+'</span><b>'+esc(bill.company||"—")+'</b></div>'
@@ -1401,18 +1418,27 @@ function renderBill(id){
       +(bill.triedToPay?'<p><strong>'+esc(t("tried_pay_label"))+'</strong><br>'+esc(bill.triedToPay)+'</p>':"")
       +(bill.moneyMeans?'<p><strong>'+esc(t("money_means_label"))+'</strong><br>'+esc(bill.moneyMeans)+'</p>':"")
       +'<div class="row-card card" id="poster-row" tabindex="0" role="button" aria-label="'+esc(name)+'" style="margin-top:12px"><div class="avatar">'+(user.photo_url||user.photoUrl?'<img src="'+esc(user.photo_url||user.photoUrl)+'" alt="">':esc(initials(name)))+'</div><div class="grow"><div class="t">'+esc(name)+'</div><div class="s">@'+esc(uname)+' · '+esc(t("member_since"))+' '+esc((user.memberSince||user.created_at)?fmtDate(user.memberSince||user.created_at):"")+'</div></div><span>›</span></div>'
+      // Trust summary (item 309) + response time (item 397).
+      +(bill.trustSummary?'<div class="card" style="margin-top:12px"><h2>'+esc(t("trust_summary"))+'</h2>'
+        +'<div class="kv"><span>'+esc(t("account_age"))+'</span><b>'+esc(bill.trustSummary.accountAgeDays||0)+' '+esc(t("days"))+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("gifts_received"))+'</span><b>'+esc(bill.trustSummary.confirmedGiftsReceived||0)+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("bills_posted"))+'</span><b>'+esc(bill.trustSummary.approvedBills||0)+'</b></div>'
+        +(bill.trustSummary.responseTimeHours!=null?'<div class="kv"><span>'+esc(t("response_time"))+'</span><b>'+esc(bill.trustSummary.responseTimeHours)+'h</b></div>':"")
+        +'<p class="small">'+esc(t("trust_summary_note"))+'</p></div>':"")
       +'<div class="btn-row"><a class="btn" href="#/gift/'+encodeURIComponent(bill.id)+'">💙 '+esc(t("help_this_bill"))+'</a></div>'
       +((bill.pay_direct||bill.payDirect)?'<div class="btn-row"><button class="btn secondary" id="pay-direct-btn">'+esc(t("pay_direct"))+'</button></div>':"")
-      +'<div class="btn-row"><button class="btn secondary small" id="share-btn">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="save-btn">🔖 '+(isSaved(bill.id)?esc(t("saved_bill")):esc(t("save_bill")))+'</button><button class="btn secondary small" id="basket-btn">🧺 '+esc(t("add_basket"))+'</button><button class="btn secondary small" id="report-btn">🚩 '+esc(t("report"))+'</button></div>'
-      +(isOwner?'<div class="btn-row"><a class="btn secondary small" href="#/mybills">'+esc(t("my_bills"))+'</a></div>':"")
+      +'<div class="btn-row"><button class="btn secondary small" id="share-btn">🔗 '+esc(t("share"))+(bill.shareCount?' · '+esc(bill.shareCount):"")+'</button><button class="btn secondary small" id="save-btn">🔖 '+(isSaved(bill.id)?esc(t("saved_bill")):esc(t("save_bill")))+'</button><button class="btn secondary small" id="basket-btn">🧺 '+esc(t("add_basket"))+'</button><button class="btn secondary small" id="report-btn">🚩 '+esc(t("report"))+'</button></div>'
+      +(isOwner?'<div class="btn-row"><a class="btn secondary small" href="#/mybills">'+esc(t("my_bills"))+'</a>'+(bill.status==="completed"?'<button class="btn secondary small" id="story-btn">📖 '+esc(t("share_story"))+'</button>':"")+'</div>':"")
       +'</div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("supporters_title"))+' ('+supporters.length+')</h2>'
-      +(supporters.length? supporters.map(function(s){ return '<div class="kv"><span>'+esc(s.anonymous?t("anonymous"):(s.display_name||s.displayName||s.username||t("anonymous")))+'</span><b>'+esc(money(s.amount_minor||s.amountMinor||0,cur))+'</b></div>'; }).join("") : '<p>'+esc(t("no_supporters"))+'</p>')
+      +(supporters.length? supporters.map(function(s){ return '<div class="kv"><span>'+(s.topSupporter?"👑 ":"")+esc(s.anonymous?t("anonymous"):(s.displayName||s.display_name||s.username||t("anonymous")))+(s.tier?" "+esc(s.tier.icon)+" "+esc(s.tier.name):"")+'</span><b>'+esc(money(s.amountMinor||s.amount_minor||0,cur))+'</b></div>'; }).join("") : '<p>'+esc(t("no_supporters"))+'</p>')
       +'</div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("how_helping"))+'</h2><p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'</div>');
     $("#poster-row").onclick=function(){ if(uname) go("#/profile/"+encodeURIComponent(uname)); };
     $("#poster-row").addEventListener("keydown", function(e){ if((e.key==="Enter"||e.key===" ")&&uname){ e.preventDefault(); go("#/profile/"+encodeURIComponent(uname)); } });
-    $("#share-btn").onclick=function(){ copyText(location.origin+location.pathname+"#/bill/"+bill.id, t("copied_link")); };
+    // Share via the clean /share URL (item 438) + share counter (item 442).
+    $("#share-btn").onclick=function(){ api("/bills/"+encodeURIComponent(bill.id)+"/share", {method:"POST"}).catch(function(){}); copyText(location.origin+"/share/bill/"+bill.id, t("copied_link")); };
+    var storyBtn=$("#story-btn"); if(storyBtn) storyBtn.onclick=function(){ openStoryComposer(bill.id, bill.title); };
     $("#save-btn").onclick=function(){ var s=toggleSaved(bill); $("#save-btn").innerHTML="🔖 "+esc(s?t("saved_bill"):t("save_bill")); toast(s?t("saved_bill"):t("saved_unsaved")); };
     $("#basket-btn").onclick=function(){
       if(S.basket.indexOf(bill.id)<0){ S.basket.push(bill.id); saveBasket(); toast(t("add_to_basket_done")); } else toast(t("basket"));
@@ -1769,6 +1795,8 @@ function renderGift(billId, q){
         +'<div class="seg" id="tip-seg"><button type="button" data-tip="none" class="'+(g.tipChoice==="none"?"on":"")+'">'+esc(t("no_tip"))+'</button><button type="button" data-tip="5" class="'+(g.tipChoice==="5"?"on":"")+'">5%</button><button type="button" data-tip="10" class="'+(g.tipChoice==="10"?"on":"")+'">10%</button><button type="button" data-tip="custom" class="'+(g.tipChoice==="custom"?"on":"")+'">'+esc(t("custom"))+'</button></div>'
         +'<div id="tip-custom-wrap" '+(g.tipChoice==="custom"?"":"hidden")+'>'+'<label for="tip-custom">'+esc(t("tip_custom"))+' ('+esc(cur==="INR"?"₹":"रू")+')</label><input id="tip-custom" type="number" min="0" step="1" value="'+(g.tipChoice==="custom"&&g.tipMinor?fromMinor(g.tipMinor):"")+'"></div>'
         +'<p class="small">'+esc(t("tip_separate"))+'</p></div>'
+        // Anonymous gift toggle (item 452), defaulting to the user's pref.
+        +'<div class="card" style="margin-top:12px"><label class="check-row"><input type="checkbox" id="g-anon" '+((S.user&&S.user.prefs&&S.user.prefs.anonDefault)?"checked":"")+'> '+esc(t("give_anonymously"))+'</label><p class="small">'+esc(t("anon_gift_note"))+'</p></div>'
         +'<div class="card" style="margin-top:12px"><label class="check-row"><input type="checkbox" id="g-confirm-box"><span>'+esc(t("understand_gift"))+'</span></label>'
         +'<label class="check-row"><input type="checkbox" id="g-human"><span>'+esc(t("human_check"))+' — '+esc(t("turnstile_note"))+'</span></label>'
         +'<div class="field-err" id="g-err2" role="alert"></div>'
@@ -1795,8 +1823,9 @@ function renderGift(billId, q){
         var btn=$("#g-to-send"); btn.disabled=true; btn.textContent=t("loading");
         var op=NAV;
         try{
-          var created=await api("/gifts", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor, tipMinor:g.tipMinor||0}});
+          var created=await api("/gifts", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor, tipMinor:g.tipMinor||0, anonymous:$("#g-anon")?$("#g-anon").checked:undefined}});
           g.giftId=created.id||created.giftId||(created.gift&&created.gift.id);
+          g.firstGift=created.firstGift===true;
           var rev=await api("/gifts/"+encodeURIComponent(g.giftId)+"/reveal", {method:"POST"});
           // The server returns payoutMethods (array) + an optional payDirect block.
           g.payoutMethods=rev.payoutMethods||(rev.payoutMethod?[rev.payoutMethod]:(rev.payout?[rev.payout]:[]));
@@ -1853,7 +1882,10 @@ function renderGift(billId, q){
         +crossBorderHtml()
         +'<div class="card" style="margin-top:12px"><label for="g-ref">'+esc(t("reference_opt"))+'</label><input id="g-ref" maxlength="80">'
         +'<div class="btn-row"><button class="btn" id="g-sent">'+esc(t("i_sent_it"))+'</button></div>'
-        +'<button class="btn ghost" id="g-cancel">'+esc(t("couldnt_send"))+'</button></div>');
+        +'<button class="btn ghost" id="g-cancel">'+esc(t("couldnt_send"))+'</button>'
+        // Report button on the send step (item 346): something feels off
+        // about this bill? Report it before sending.
+        +'<p style="text-align:center;margin-top:10px"><button class="btn ghost small" id="g-report">🚩 '+esc(t("report_bill_concern"))+'</button></p></div>');
       $all("[data-copy]").forEach(function(b){ b.onclick=function(){ copyText(b.getAttribute("data-copy")||"", t("copied")); }; });
       var gc=$("#g-copy"); if(gc) gc.onclick=function(){ copyText(copyVal, t("copied")); };
       $("#g-sent").onclick=async function(){
@@ -1868,13 +1900,20 @@ function renderGift(billId, q){
       $("#g-cancel").onclick=function(){
         confirmDialog(t("couldnt_send"), t("send_failed_note"), t("yes"), function(){ go("#/bill/"+encodeURIComponent(bill.id)); });
       };
+      $("#g-report").onclick=function(){ openReportSheet("bill", bill.id); };
     }
     function drawConfirmed(){
+      // First-gift celebration (item 480) + share prompt (item 493) +
+      // help-again shortcut (item 485).
       view(stepHead()+'<div class="center-page"><div class="slide-ic">💙</div><h1>'+esc(t("thanks_helping",{name:name}))+'</h1>'
+        +(g.firstGift?'<div class="card" style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#fff"><h2 style="color:#fff;margin-top:0">🎉 '+esc(t("first_gift_title"))+'</h2><p>'+esc(t("first_gift_body"))+'</p></div>':"")
         +'<p>'+esc(t("recipient_confirm_pending"))+'</p><p class="small">'+esc(t("waiting_confirm"))+'</p>'
+        +'<div class="card" style="width:100%;max-width:360px"><h2>'+esc(t("share_prompt_title"))+'</h2><p class="small">'+esc(t("share_prompt_body"))+'</p><button class="btn secondary" id="g-share-bill">🔗 '+esc(t("share_bill"))+'</button></div>'
         +'<div style="width:100%;max-width:360px;display:grid;gap:10px"><a class="btn" href="#/founder-tip?gift='+encodeURIComponent(g.giftId||"")+'&amount='+g.amountMinor+'&currency='+cur+'">'+esc(t("founder_tip_title"))+'</a>'
+        +'<a class="btn secondary" href="#/category/'+encodeURIComponent(bill.category||"")+'">'+esc(t("help_similar"))+'</a>'
         +'<a class="btn secondary" href="#/swipe">'+esc(t("continue_helping"))+'</a>'
         +'<a class="btn secondary" href="#/mybills">'+esc(t("my_bills"))+'</a></div></div>');
+      $("#g-share-bill").onclick=function(){ api("/bills/"+encodeURIComponent(bill.id)+"/share", {method:"POST"}).catch(function(){}); copyText(location.origin+"/share/bill/"+bill.id, t("copied_link")); };
     }
   }).catch(function(e){
     if(tok!==NAV) return;
@@ -2695,24 +2734,37 @@ function renderPost(arg, q){
 }
 
 /* ---------- leaders ---------- */
-function renderLeaders(){
+function renderLeaders(arg, q){
+  // URL persistence (item 402): tab/period/scope live in the hash query.
+  var tab=(q&&q.tab)||S.leadersTab||"top_supporters";
+  var period=(q&&q.period)||S.leadersPeriod||"30d";
+  var scope=(q&&q.scope)||S.leadersScope||"all";
+  S.leadersTab=tab; S.leadersPeriod=period; S.leadersScope=scope;
   view('<h1>'+esc(t("leaders_title"))+'</h1><p class="small">'+esc(t("leaders_scope_note"))+'</p>'
     +'<div class="tabs" id="ld-tabs">'
-    +[["top_supporters",t("top_supporters")],["most_received",t("most_received")],["top_bills",t("top_bills")],["fully_paid",t("fully_paid")],["brands",t("leaders_brands")]].map(function(x){ return '<button class="tab-btn'+(S.leadersTab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")
+    +[["top_supporters",t("top_supporters")],["most_received",t("most_received")],["top_bills",t("top_bills")],["fully_paid",t("fully_paid")],["streak",t("tab_streak")],["most_thanked",t("tab_most_thanked")],["brands",t("leaders_brands")]].map(function(x){ return '<button class="tab-btn'+(tab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")
     +'</div>'
-    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="ld-period" aria-label="'+esc(t("posted"))+'" style="flex:1"><option value="7d" '+(S.leadersPeriod==="7d"?"selected":"")+'>'+esc(t("last_7"))+'</option><option value="30d" '+(S.leadersPeriod==="30d"?"selected":"")+'>'+esc(t("last_30"))+'</option><option value="all" '+(S.leadersPeriod==="all"?"selected":"")+'>'+esc(t("all_time"))+'</option></select>'
-    +'<select id="ld-scope" aria-label="'+esc(t("filter_country"))+'" style="flex:1"><option value="all" '+(S.leadersScope==="all"?"selected":"")+'>'+esc(t("scope_all"))+'</option><option value="NP" '+(S.leadersScope==="NP"?"selected":"")+'>🇳🇵 '+esc(t("nepal"))+'</option><option value="IN" '+(S.leadersScope==="IN"?"selected":"")+'>🇮🇳 '+esc(t("india"))+'</option></select></div>'
-    +'<div id="ld-body">'+skeleton(2)+'</div>');
-  $all("#ld-tabs .tab-btn").forEach(function(b){ b.onclick=function(){ S.leadersTab=b.getAttribute("data-t"); renderLeaders(); }; });
-  $("#ld-period").onchange=function(){ S.leadersPeriod=$("#ld-period").value; load(); };
-  $("#ld-scope").onchange=function(){ S.leadersScope=$("#ld-scope").value; load(); };
+    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="ld-period" aria-label="'+esc(t("posted"))+'" style="flex:1"><option value="7d" '+(period==="7d"?"selected":"")+'>'+esc(t("last_7"))+'</option><option value="30d" '+(period==="30d"?"selected":"")+'>'+esc(t("last_30"))+'</option><option value="all" '+(period==="all"?"selected":"")+'>'+esc(t("all_time"))+'</option></select>'
+    +'<select id="ld-scope" aria-label="'+esc(t("filter_country"))+'" style="flex:1"><option value="all" '+(scope==="all"?"selected":"")+'>'+esc(t("scope_all"))+'</option><option value="NP" '+(scope==="NP"?"selected":"")+'>🇳🇵 '+esc(t("nepal"))+'</option><option value="IN" '+(scope==="IN"?"selected":"")+'>🇮🇳 '+esc(t("india"))+'</option></select></div>'
+    +'<input id="ld-search" placeholder="'+esc(t("search_leaders"))+'" style="margin-bottom:10px">'
+    +'<div id="ld-body">'+skeleton(2)+'</div>'
+    +'<p class="small" style="margin-top:12px">'+esc(t("leaders_fairness"))+' <a href="#/help?topic=leaderboard">'+esc(t("how_leaderboard_works"))+'</a></p>');
+  function syncUrl(){
+    var h="#/leaders?tab="+encodeURIComponent(S.leadersTab)+"&period="+encodeURIComponent(S.leadersPeriod)+"&scope="+encodeURIComponent(S.leadersScope);
+    if(location.hash!==h) history.replaceState(null, "", h);
+  }
+  $all("#ld-tabs .tab-btn").forEach(function(b){ b.onclick=function(){ S.leadersTab=b.getAttribute("data-t"); syncUrl(); load(); }; });
+  $("#ld-period").onchange=function(){ S.leadersPeriod=$("#ld-period").value; syncUrl(); load(); };
+  $("#ld-scope").onchange=function(){ S.leadersScope=$("#ld-scope").value; syncUrl(); load(); };
+  var searchTimer=null;
+  $("#ld-search").addEventListener("input", function(){ clearTimeout(searchTimer); searchTimer=setTimeout(load, 300); });
   load();
   async function load(){
     var body=$("#ld-body"); if(!body) return;
     body.innerHTML=skeleton(2);
     try{
-      var q=new URLSearchParams({tab:S.leadersTab, period:S.leadersPeriod, scope:S.leadersScope});
-      var d=await api("/leaders?"+q.toString());
+      var q2=new URLSearchParams({tab:S.leadersTab, period:S.leadersPeriod, scope:S.leadersScope});
+      var d=await api("/leaders?"+q2.toString());
       // Brands tab returns two lists (mostResponded / mostAsked), not leaders.
       if(S.leadersTab==="brands"){
         var resp=pickList(d,["mostResponded"]), asked=pickList(d,["mostAsked"]);
@@ -2724,6 +2776,9 @@ function renderLeaders(){
         return;
       }
       var rows=pickList(d,["leaders","entries","rows"]);
+      // Search (item 477): client-side filter on the fetched page.
+      var s=($("#ld-search")||{value:""}).value.trim().toLowerCase();
+      if(s) rows=rows.filter(function(r){ return ((r.display_name||r.displayName||r.name||r.title||"")+" "+(r.username||"")).toLowerCase().indexOf(s)>=0; });
       if(!rows.length){ body.innerHTML=emptyState("🏆", t("empty_leaders"), t("leaders_scope_note")); return; }
       var top=rows.slice(0,3), rest=rows.slice(3);
       function amtOf(r){
@@ -2731,17 +2786,30 @@ function renderLeaders(){
         return minor!=null?money(minor, r.currency||"NPR"):"";
       }
       function helpedOf(r){
+        if(r.streakWeeks!=null) return r.streakWeeks+" "+t("week_streak");
+        if(r.thanksReceived!=null) return r.thanksReceived+" "+t("thanks_received");
         if(r.billsHelped!=null) return r.billsHelped;
         if(r.billsPaid!=null) return r.billsPaid;
         if(r.supporters!=null) return r.supporters;
         if(r.gifts!=null) return r.gifts;
         return r.helped;
       }
+      // Rank change vs previous equal period (item 475).
+      function rankChange(r){
+        if(r.rankChange==="new") return '<span class="chip">🆕</span>';
+        if(typeof r.rankChange==="number"&&r.rankChange!==0) return '<span class="chip">'+(r.rankChange>0?"▲ +"+r.rankChange:"▼ "+r.rankChange)+'</span>';
+        return "";
+      }
+      function isYou(r){ return S.user&&(r.username===S.user.username||r.userId===S.user.id); }
+      function followBtn(r){
+        if(r.anonymous||!r.username||isYou(r)||!S.user) return "";
+        return '<button class="btn secondary small" data-follow="'+esc(r.username)+'">'+esc(t("follow"))+'</button>';
+      }
       function pod(r, rank){
         var nm=r.anonymous? t("anonymous") : (r.display_name||r.displayName||r.name||r.title||"");
         var amt=amtOf(r);
         var helped=helpedOf(r);
-        return '<div class="pod card '+(rank===1?"first":rank===2?"second":"third")+'"><div class="rank">'+(rank===1?"🥇":rank===2?"🥈":"🥉")+'</div><div class="avatar" style="margin:6px auto">'+esc(initials(nm))+'</div><strong>'+esc(nm)+'</strong><div class="small">'+esc(amt)+'</div><div class="small muted">'+esc(helped!=null? helped+" "+t("leaders_helped") : "")+'</div></div>';
+        return '<div class="pod card '+(rank===1?"first":rank===2?"second":"third")+(isYou(r)?" you":"")+'"><div class="rank">'+(rank===1?"🥇":rank===2?"🥈":"🥉")+'</div><div class="avatar" style="margin:6px auto">'+esc(initials(nm))+'</div><strong>'+esc(nm)+(isYou(r)?" ("+esc(t("you"))+")":"")+'</strong><div class="small">'+esc(amt)+'</div><div class="small muted">'+esc(helped!=null? helped+(typeof helped==="number"?" "+t("leaders_helped"):"") : "")+'</div>'+rankChange(r)+'</div>';
       }
       var h='<div class="podium">'+(top[1]?pod(top[1],2):"")+(top[0]?pod(top[0],1):"")+(top[2]?pod(top[2],3):"")+'</div>';
       h+=rest.map(function(r,i){
@@ -2750,9 +2818,17 @@ function renderLeaders(){
         var helped=helpedOf(r);
         var link=!r.anonymous&&r.username? 'href="#/profile/'+encodeURIComponent(r.username)+'"' : "";
         var tag=link?"a":"div";
-        return '<'+tag+' class="card leader-row" '+link+'><span class="rank">'+(i+4)+'</span><div class="avatar">'+esc(initials(nm))+'</div><div class="grow" style="flex:1;min-width:0"><strong>'+esc(nm)+'</strong><div class="small">'+flag(r.country)+' '+esc(r.city||"")+(helped!=null?" · "+helped+" "+t("leaders_helped"):"")+'</div></div><strong class="money">'+esc(amt)+'</strong></'+tag+'>';
+        return '<'+tag+' class="card leader-row'+(isYou(r)?" you":"")+'" '+link+'><span class="rank">'+(i+4)+'</span><div class="avatar">'+esc(initials(nm))+'</div><div class="grow" style="flex:1;min-width:0"><strong>'+esc(nm)+(isYou(r)?" ("+esc(t("you"))+")":"")+'</strong><div class="small">'+flag(r.country)+' '+esc(r.city||"")+(helped!=null?" · "+helped+(typeof helped==="number"?" "+t("leaders_helped"):""):"")+'</div></div><strong class="money">'+esc(amt)+'</strong>'+rankChange(r)+'</'+tag+'>'
+          +followBtn(r);
       }).join("");
       body.innerHTML=h;
+      $all("[data-follow]", body).forEach(function(btn){
+        btn.onclick=async function(e){
+          e.preventDefault();
+          try{ await api("/social/follow/"+encodeURIComponent(btn.getAttribute("data-follow")), {method:"POST"}); btn.textContent=t("following"); btn.disabled=true; }
+          catch(err){ toast(err.message||t("err_generic"), true); }
+        };
+      });
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
   }
 }
@@ -2958,8 +3034,22 @@ function renderMyBills(){
   if(!S.user){ view(emptyState("📁", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
   var tabs=[["active",t("active")],["pending",t("pending_review")],["approved",t("approved")],["rejected",t("rejected")],["completed",t("completed")],["expired",t("expired_title")],["given",t("help_given")],["received",t("help_received")]];
   view('<h1>'+esc(t("my_bills"))+'</h1><p class="small">'+esc(t("mybills_tabs_note"))+'</p>'
+    +'<div id="mb-impact"></div>'
     +'<div class="tabs">'+tabs.map(function(x){ return '<button class="tab-btn'+(S.mybillsTab===x[0]?" on":"")+'" data-t="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")+'</div>'
     +'<div id="mb-body">'+skeleton(2)+'</div>');
+  // Lifetime impact card + tier progress (items 433/413).
+  api("/profile/"+encodeURIComponent(S.user.username)).then(function(d){
+    var el=$("#mb-impact"); if(!el) return;
+    var totals=d.totals||{}, tier=d.tier||{}, streak=d.streak||{};
+    el.innerHTML='<div class="card" style="margin-bottom:12px"><h2 style="margin-top:0">'+esc(t("lifetime_impact"))+'</h2>'
+      +'<div class="grid2"><div class="card stat"><div class="n">'+esc(money(totals.givenMinor||0, curOf(S.user.country)))+'</div><div class="l">'+esc(t("given"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(money(totals.receivedMinor||0, curOf(S.user.country)))+'</div><div class="l">'+esc(t("received_total"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.billsHelped||0)+'</div><div class="l">'+esc(t("bills_helped"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.peopleHelped||0)+'</div><div class="l">'+esc(t("people_helped"))+'</div></div></div>'
+      +(tier.tier?'<p style="margin-top:10px">'+esc(tier.tier.icon)+' <strong>'+esc(tier.tier.name)+'</strong>'+(streak.weeks?' · 🔥 '+esc(streak.weeks)+' '+esc(t("week_streak")):"")+'</p>':"")
+      +(tier.next?'<p class="small">'+esc(t("tier_next"))+': '+esc(tier.next.icon)+' '+esc(tier.next.name)+' — '+esc(tier.giftsToNext||0)+' '+esc(t("gifts_to_go"))+'</p><div class="bar"><div class="fill" style="width:'+Math.round((tier.progress||0)*100)+'%"></div></div>':"")
+      +'<p class="small" style="margin-top:8px"><a href="#/profile/'+encodeURIComponent(S.user.username)+'">'+esc(t("view_profile"))+'</a> · <a href="#/achievements">'+esc(t("achievements"))+'</a> · <a href="#/activity">'+esc(t("activity_feed"))+'</a></p></div>';
+  }).catch(function(){ /* impact card is best-effort */ });
   $all(".tab-btn").forEach(function(b){ b.onclick=function(){ S.mybillsTab=b.getAttribute("data-t"); renderMyBills(); }; });
   load();
   async function load(){
@@ -3001,6 +3091,8 @@ function renderMyBills(){
           +'<button class="btn secondary small" data-act="payout" data-id="'+esc(b.id)+'">'+esc(t("change_payout"))+'</button>'
           +'<button class="btn secondary small" data-act="docs" data-id="'+esc(b.id)+'">'+esc(t("upload_docs"))+'</button>'
           +(b.status==="approved"?'<button class="btn secondary small" data-act="share" data-id="'+esc(b.id)+'">'+esc(t("share"))+'</button>':"")
+          +(b.status==="completed"?'<button class="btn secondary small" data-act="story" data-id="'+esc(b.id)+'">📖 '+esc(t("share_story"))+'</button>':"")
+          +((b.status==="removed"||b.status==="rejected"||b.status==="under_investigation")?'<button class="btn secondary small" data-act="appeal" data-id="'+esc(b.id)+'">'+esc(t("appeal"))+'</button>':"")
           +(b.status==="approved"&&!b.extensionUsed?'<button class="btn secondary small" data-act="extend" data-id="'+esc(b.id)+'">'+esc(t("extend_btn"))+'</button>':"")
           +(b.status==="expired"&&((b.repostCount||0)<3)?'<button class="btn small" data-act="repost" data-id="'+esc(b.id)+'">'+esc(t("repost_btn"))+'</button><button class="btn secondary small" data-act="edit" data-id="'+esc(b.id)+'">'+esc(t("repost_with_changes"))+'</button>':"")
           +(b.status!=="completed"&&b.status!=="removed"&&b.status!=="expired"?'<button class="btn secondary small" data-act="complete" data-id="'+esc(b.id)+'">'+esc(t("mark_completed"))+'</button>':"")
@@ -3012,6 +3104,8 @@ function renderMyBills(){
           var act=btn.getAttribute("data-act"), id=btn.getAttribute("data-id");
           var bill=bills.find(function(x){ return String(x.id)===String(id); });
           if(act==="share") copyText(location.origin+location.pathname+"#/bill/"+id, t("copied_link"));
+          if(act==="story") openStoryComposer(id, bill.title);
+          if(act==="appeal") openBillAppeal(bill);
           if(act==="edit") go("#/post?edit="+encodeURIComponent(id));
           if(act==="history") openEditHistory(bill);
           if(act==="extend") confirmDialog(t("extend_btn"), t("expiry_warn_7"), t("extend_btn"), async function(){ try{ await api("/bills/"+encodeURIComponent(id)+"/extend", {method:"POST"}); toast(t("extended_done")); load(); }catch(e){ toast(e.message||t("err_generic"), true); } });
@@ -3037,6 +3131,8 @@ function giftRowHtml(g){
     +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
     +((g.billId||g.bill_id)?'<a class="btn secondary small" href="#/bill/'+encodeURIComponent(g.billId||g.bill_id)+'">'+esc(t("view_bill"))+'</a>':"")
     +(g.status==="donor_reported_sent"&&S.mybillsTab==="received"?'<button class="btn small" data-gift="confirm" data-id="'+esc(g.id)+'">'+esc(t("confirm_yes"))+'</button><button class="btn secondary small" data-gift="notreceived" data-id="'+esc(g.id)+'">'+esc(t("not_received"))+'</button>':"")
+    // Say thanks (item 424): received + confirmed + not anonymous.
+    +(g.status==="confirmed"&&S.mybillsTab==="received"&&!g.anonymous?'<button class="btn secondary small" data-gift="thanks" data-id="'+esc(g.id)+'" data-bill="'+esc(g.billId||g.bill_id||"")+'" data-name="'+esc(g.supporterName||"")+'">💛 '+esc(t("say_thanks"))+'</button>':"")
     +(g.status!=="confirmed"&&g.status!=="disputed"?'<button class="btn secondary small" data-gift="dispute" data-id="'+esc(g.id)+'">'+esc(t("dispute"))+'</button>':"")
     +'</div></div>';
 }
@@ -3044,6 +3140,7 @@ function bindGiftRows(root){
   $all("[data-gift]", root).forEach(function(btn){
     btn.onclick=async function(){
       var act=btn.getAttribute("data-gift"), id=btn.getAttribute("data-id");
+      if(act==="thanks"){ openThanksComposer(btn.getAttribute("data-bill"), id, btn.getAttribute("data-name")); return; }
       if(act!=="dispute") btn.disabled=true;
       try{
         if(act==="confirm"){ await api("/gifts/"+encodeURIComponent(id)+"/confirm", {method:"POST"}); toast(t("gift_confirmed_msg")); }
@@ -3126,36 +3223,411 @@ function openDocsUpload(bill){
   };
 }
 
+/* ---------- bill appeal (item 351) ---------- */
+function openBillAppeal(bill){
+  openSheet('<h2>'+esc(t("appeal_bill"))+'</h2><p class="small">'+esc(bill.title||"")+'</p>'
+    +'<label for="ap-reason">'+esc(t("appeal_reason"))+'</label><textarea id="ap-reason" maxlength="1000" rows="4"></textarea>'
+    +'<div class="btn-row"><button class="btn secondary" id="ap-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="ap-send">'+esc(t("submit_appeal"))+'</button></div>');
+  $("#ap-cancel").onclick=closeSheets;
+  $("#ap-send").onclick=async function(){
+    var reason=$("#ap-reason").value.trim();
+    if(reason.length<10){ toast(t("appeal_too_short"), true); return; }
+    try{
+      await api("/bills/"+encodeURIComponent(bill.id)+"/appeal", {method:"POST", body:{reason:reason}});
+      closeSheets(); toast(t("appeal_submitted"));
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+  };
+}
+
 /* ---------- public profile ---------- */
+/* ---------- impact card (items 434/435/437) ---------- */
+// Shareable 1080x1350 canvas card: name, totals, tier, streak. Downloaded
+// as a PNG the user can post anywhere; no tracking, no server round-trip.
+function downloadImpactCard(u, totals, tier, streak){
+  var c=document.createElement("canvas"); c.width=1080; c.height=1350;
+  var x=c.getContext("2d");
+  var g=x.createLinearGradient(0,0,0,1350); g.addColorStop(0,"#1d4ed8"); g.addColorStop(1,"#0ea5e9");
+  x.fillStyle=g; x.fillRect(0,0,1080,1350);
+  x.fillStyle="#ffffff"; x.textAlign="center";
+  x.font="700 44px system-ui, sans-serif"; x.fillText("Sahay Pay", 540, 110);
+  x.font="500 30px system-ui, sans-serif"; x.fillStyle="#dbeafe"; x.fillText(t("impact_card_tag"), 540, 160);
+  x.fillStyle="#ffffff"; x.font="700 64px system-ui, sans-serif";
+  x.fillText((u.displayName||u.display_name||"").slice(0,24), 540, 320);
+  x.font="500 32px system-ui, sans-serif"; x.fillStyle="#dbeafe";
+  x.fillText("@"+(u.username||""), 540, 375);
+  var stats=[
+    [t("given"), money(totals.givenMinor||0, curOf(u.country))],
+    [t("received_total"), money(totals.receivedMinor||0, curOf(u.country))],
+    [t("bills_helped"), String(totals.billsHelped||0)],
+    [t("people_helped"), String(totals.peopleHelped||0)]
+  ];
+  var y=520;
+  stats.forEach(function(s){
+    x.fillStyle="#ffffff"; x.font="700 56px system-ui, sans-serif"; x.fillText(s[1], 540, y);
+    x.fillStyle="#dbeafe"; x.font="500 30px system-ui, sans-serif"; x.fillText(s[0], 540, y+48);
+    y+=160;
+  });
+  if(tier&&tier.tier){ x.fillStyle="#fde68a"; x.font="700 40px system-ui, sans-serif"; x.fillText(tier.tier.icon+" "+tier.tier.name, 540, y+20); }
+  if(streak&&streak.weeks){ x.fillStyle="#ffffff"; x.font="500 32px system-ui, sans-serif"; x.fillText("🔥 "+streak.weeks+" "+t("week_streak"), 540, y+80); }
+  x.fillStyle="#dbeafe"; x.font="500 28px system-ui, sans-serif";
+  x.fillText("sahay-pay.netlify.app", 540, 1280);
+  c.toBlob(function(blob){
+    if(!blob){ toast(t("err_generic"), true); return; }
+    var a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download="sahay-pay-impact-"+(u.username||"card")+".png";
+    a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+    toast(t("impact_card_saved"));
+  }, "image/png");
+}
+
 function renderProfile(username){
   var tok=view(skeleton(2));
   api("/profile/"+encodeURIComponent(username)).then(function(d){
     if(tok!==NAV) return;
-    var u=d.profile||d.user||d;
-    var bills=pickList(d,["bills","liveAsks"])||[];
-    var blocked=S.blocked.indexOf(u.id||username)>=0;
-    view('<div class="card" style="text-align:center"><div class="avatar" style="width:84px;height:84px;font-size:32px;margin:0 auto">'+(u.photo_url||u.photoUrl?'<img src="'+esc(u.photo_url||u.photoUrl)+'" alt="">':esc(initials(u.display_name||u.displayName)))+'</div>'
-      +'<h1 style="margin-top:10px">'+esc(u.display_name||u.displayName||"")+'</h1><p class="small">@'+esc(u.username||username)+' · '+flag(u.country)+' '+esc(u.city||"")+'</p>'
+    // BUG FIX (items 431/462): the API sends totals:{givenMinor,
+    // receivedMinor} and badges:[...] — the old client read
+    // u.total_given_minor / u.verifications, so totals rendered 0 and
+    // badges never rendered.
+    var u=d.user||d.profile||d;
+    var totals=d.totals||{};
+    var badges=d.badges||[];
+    var bills=d.liveAsks||pickList(d,["bills","liveAsks"])||[];
+    var tier=d.tier||{};
+    var streak=d.streak||{};
+    var achievements=d.achievements||[];
+    var isSelf=S.user&&(u.username===S.user.username);
+    var cur=curOf(u.country);
+    var blockedByViewer=d.isBlockedByViewer===true;
+    // Completeness meter (item 463) — self only.
+    var comp=0, compTotal=5;
+    if(u.photoUrl) comp++;
+    if(u.about) comp++;
+    if(u.city) comp++;
+    if(u.coverUrl) comp++;
+    if(badges.length) comp++;
+    var h='<div class="card" style="text-align:center;position:relative;overflow:hidden">'
+      +(u.coverUrl?'<div style="margin:-16px -16px 12px;height:120px;background:url(\''+esc(u.coverUrl)+'\') center/cover"></div>':"")
+      +'<div class="avatar" style="width:84px;height:84px;font-size:32px;margin:0 auto">'+(u.photoUrl?'<img src="'+esc(u.photoUrl)+'" alt="">':esc(initials(u.displayName||u.display_name)))+'</div>'
+      +'<h1 style="margin-top:10px">'+esc(u.displayName||u.display_name||"")+'</h1>'
+      +'<p class="small">@'+esc(u.username||username)+' · '+flag(u.country)+' '+esc(u.city||"")+'</p>'
+      +(d.verifiedHelper?'<p><span class="chip">✅ '+esc(t("verified_helper"))+'</span></p>':"")
+      +(tier.tier?'<p><span class="chip">'+esc(tier.tier.icon)+' '+esc(tier.tier.name)+'</span>'+(streak.weeks? ' <span class="chip">🔥 '+esc(streak.weeks)+' '+esc(t("week_streak"))+'</span>':"")+'</p>':"")
       +'<p>'+esc(u.about||"")+'</p>'
-      +'<p class="small">'+esc(t("member_since"))+' '+esc(u.created_at?fmtDate(u.created_at):"")+'</p>'
-      +'<div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">'+(u.verifications?badgesHtml({verifications:u.verifications}):"")+'</div>'
-      +'<div class="grid2" style="margin-top:12px"><div class="card stat"><div class="n">'+esc(u.live_asks!=null?u.live_asks:bills.length)+'</div><div class="l">'+esc(t("live_asks"))+'</div></div>'
-      +'<div class="card stat"><div class="n">'+esc(u.completed_asks||0)+'</div><div class="l">'+esc(t("completed_asks"))+'</div></div></div>'
-      +(S.user&&(u.username===S.user.username||u.id===S.user.id)?'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(S.saved.length)+'</div><div class="l">'+esc(t("saved_title"))+'</div></div><div class="card stat"><div class="n">'+esc(loadDrafts().length)+'</div><div class="l">'+esc(t("drafts_title"))+'</div></div></div>':"")
-      +(u.show_totals===false?'<p class="small">'+esc(t("totals_private"))+'</p>':'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(money(u.total_given_minor||0, curOf(u.country)))+'</div><div class="l">'+esc(t("given"))+'</div></div><div class="card stat"><div class="n">'+esc(money(u.total_received_minor||0, curOf(u.country)))+'</div><div class="l">'+esc(t("received_total"))+'</div></div></div>')
-      +'<div class="btn-row"><button class="btn secondary small" id="pf-share">🔗 '+esc(t("share_profile"))+'</button><button class="btn secondary small" id="pf-report">🚩 '+esc(t("report_user"))+'</button><button class="btn secondary small" id="pf-block">'+esc(blocked?t("unblock"):t("block_user"))+'</button></div></div>'
-      +'<h2>'+esc(t("live_asks"))+'</h2><div id="pf-bills">'
-      +(bills.length? bills.map(function(b){ return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amount_minor||b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.category||"")+'</div></div><span>›</span></a>'; }).join("") : '<p>'+esc(t("empty_mybills"))+'</p>')
-      +'</div>');
-    $("#pf-share").onclick=function(){ copyText(location.origin+location.pathname+"#/profile/"+(u.username||username), t("copy_profile_link")); };
+      +'<p class="small">'+esc(t("member_since"))+' '+esc(u.memberSince?fmtDate(u.memberSince):"")+'</p>'
+      +(badges.length?'<div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">'+badgesHtml({verifications:badges})+'</div>':"")
+      +(isSelf?'<div style="margin-top:10px"><p class="small">'+esc(t("profile_complete"))+' '+Math.round(comp/compTotal*100)+'%</p><div class="bar"><div class="fill" style="width:'+Math.round(comp/compTotal*100)+'%"></div></div></div>':"")
+      // Impact stats (items 431/432/470/471).
+      +'<div class="grid2" style="margin-top:12px">'
+      +'<div class="card stat"><div class="n">'+esc(totals.billsPosted||0)+'</div><div class="l">'+esc(t("bills_posted"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.billsCompleted||0)+'</div><div class="l">'+esc(t("bills_completed"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.billsHelped||0)+'</div><div class="l">'+esc(t("bills_helped"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(totals.peopleHelped||0)+'</div><div class="l">'+esc(t("people_helped"))+'</div></div></div>'
+      +(d.showTotals===false&&!isSelf?'<p class="small">'+esc(t("totals_private"))+'</p>':'<div class="grid2" style="margin-top:10px"><div class="card stat"><div class="n">'+esc(money(totals.givenMinor||0, cur))+'</div><div class="l">'+esc(t("given"))+'</div></div><div class="card stat"><div class="n">'+esc(money(totals.receivedMinor||0, cur))+'</div><div class="l">'+esc(t("received_total"))+'</div></div></div>')
+      +(d.bestWeekMinor?'<p class="small" style="margin-top:8px">📅 '+esc(t("best_week"))+': '+esc(money(d.bestWeekMinor, cur))+(d.bestWeek?' ('+esc(d.bestWeek)+')':"")+'</p>':"")
+      +(d.responseTimeHours!=null?'<p class="small">⏱️ '+esc(t("response_time"))+': '+esc(d.responseTimeHours)+'h</p>':"")
+      +(d.thankYouRate!=null?'<p class="small">💛 '+esc(t("thank_you_rate"))+': '+esc(d.thankYouRate)+'%</p>':"")
+      +(tier.next?'<p class="small" style="margin-top:8px">'+esc(t("tier_next"))+': '+esc(tier.next.icon)+' '+esc(tier.next.name)+' — '+esc(tier.giftsToNext||0)+' '+esc(t("gifts_to_go"))+'</p><div class="bar"><div class="fill" style="width:'+Math.round((tier.progress||0)*100)+'%"></div></div>':"")
+      +(d.followers!=null?'<p class="small" style="margin-top:10px"><a href="#/profile/'+encodeURIComponent(u.username)+'/followers">'+esc(d.followers)+' '+esc(t("followers"))+'</a> · <a href="#/profile/'+encodeURIComponent(u.username)+'/following">'+esc(d.followingCount||0)+' '+esc(t("following"))+'</a></p>':"")
+      +'<div class="btn-row">'
+      +'<button class="btn secondary small" id="pf-share">🔗 '+esc(t("share_profile"))+'</button>'
+      +'<button class="btn secondary small" id="pf-card">🖼️ '+esc(t("impact_card"))+'</button>'
+      +(S.user&&!isSelf?'<button class="btn secondary small" id="pf-follow">'+(d.isFollowing?esc(t("unfollow")):esc(t("follow")))+'</button>':"")
+      +'<button class="btn secondary small" id="pf-report">🚩 '+esc(t("report_user"))+'</button>'
+      +(S.user&&!isSelf?'<button class="btn secondary small" id="pf-block">'+(blockedByViewer?esc(t("unblock")):esc(t("block_user")))+'</button>':"")
+      +'</div></div>';
+    // Achievements row (items 415/417).
+    if(achievements.length){
+      h+='<h2>'+esc(t("achievements"))+'</h2><div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap">'
+        +achievements.map(function(a){ return '<span class="chip" title="'+esc(a.desc||"")+'">'+esc(a.icon||"🏅")+' '+esc(a.name||a.key)+'</span>'; }).join("")
+        +'</div><p class="small" style="margin-top:8px"><a href="#/achievements">'+esc(t("all_achievements"))+'</a></p></div>';
+    }
+    // Thank-you wall (item 423).
+    if((d.thankYouWall||[]).length){
+      h+='<h2>'+esc(t("thank_you_wall"))+'</h2><div id="pf-thanks">'
+        +d.thankYouWall.map(function(th){
+          return '<div class="card"><p>'+esc(th.body||"")+'</p>'
+            +(th.videoUrl?'<video src="'+esc(th.videoUrl)+'" controls style="max-width:100%;margin-top:8px"></video>':"")
+            +'<p class="small">— '+esc(th.receiverName||"")+' · '+esc(th.billTitle||"")+' · '+esc(fmtDate(th.createdAt))+(th.reactions?' · ❤️ '+esc(th.reactions):"")+'</p></div>';
+        }).join("")+'</div>';
+    }
+    // Gift history (item 469) — amount bands, never exact recipients.
+    if((d.giftHistory||[]).length){
+      h+='<h2>'+esc(t("gift_history"))+'</h2><div class="card">'
+        +d.giftHistory.slice(0,20).map(function(g){
+          return '<div class="row"><span>'+esc(fmtDate(g.confirmedAt))+' · '+esc(g.category||"")+'</span><span class="chip">'+esc(t("band_"+g.amountBand))+'</span></div>';
+        }).join("")+'</div>';
+    } else if(d.hideGiftHistory&&!isSelf){
+      h+='<p class="small">'+esc(t("gift_history_private"))+'</p>';
+    }
+    // Live asks with progress bars (item 468).
+    h+='<h2>'+esc(t("live_asks"))+'</h2><div id="pf-bills">'
+      +(bills.length? bills.map(function(b){
+        var pct=b.amountMinor?Math.min(100,Math.round((b.coveredMinor||0)/b.amountMinor*100)):0;
+        return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.category||"")+'</div><div class="bar" style="margin-top:6px"><div class="fill" style="width:'+pct+'%"></div></div><div class="small">'+pct+'% '+esc(t("covered"))+'</div></div><span>›</span></a>';
+      }).join("") : '<p>'+esc(t("empty_mybills"))+'</p>')
+      +'</div>';
+    view(h);
+    // Share via the clean /share URL (items 439/440) so crawlers see OG meta.
+    $("#pf-share").onclick=function(){ copyText(location.origin+"/share/profile/"+encodeURIComponent(u.username||username), t("copy_profile_link")); };
+    $("#pf-card").onclick=function(){ downloadImpactCard(u, totals, tier, streak); };
+    var followBtn=$("#pf-follow");
+    if(followBtn){
+      followBtn.onclick=async function(){
+        try{
+          if(d.isFollowing){ await api("/social/follow/"+encodeURIComponent(u.username), {method:"DELETE"}); d.isFollowing=false; }
+          else { await api("/social/follow/"+encodeURIComponent(u.username), {method:"POST"}); d.isFollowing=true; }
+          route();
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
     $("#pf-report").onclick=function(){ openReportSheet("user", u.id||username); };
-    $("#pf-block").onclick=function(){
-      var key=u.id||username;
-      var i=S.blocked.indexOf(key);
-      if(i>=0){ S.blocked.splice(i,1); } else { S.blocked.push(key); }
-      saveBlocked(); toast(t("blocked")); route();
-    };
+    var blockBtn=$("#pf-block");
+    if(blockBtn){
+      blockBtn.onclick=async function(){
+        try{
+          if(blockedByViewer){ await api("/social/block/"+encodeURIComponent(u.username), {method:"DELETE"}); }
+          else { await api("/social/block/"+encodeURIComponent(u.username), {method:"POST"}); }
+          toast(t("blocked")); route();
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
   }).catch(function(e){ if(tok!==NAV) return; view(emptyState("👤", t("profile_not_found"), e.message||"", "", "h1")); });
+}
+
+/* ---------- hall of fame (items 407/408/409/439/497) ---------- */
+function renderHallOfFame(arg, q){
+  var month=(q&&q.month)||"all";
+  view('<h1>'+esc(t("hall_of_fame"))+'</h1><p class="small">'+esc(t("hof_intro"))+'</p>'
+    +'<div class="btn-row" style="margin-bottom:10px"><button class="btn secondary small" id="hof-share">🔗 '+esc(t("share"))+'</button></div>'
+    +'<div id="hof-months" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>'
+    +'<div id="hof-body">'+skeleton(2)+'</div>');
+  $("#hof-share").onclick=function(){ copyText(location.origin+"/share/hof", t("copied")); };
+  load();
+  async function load(){
+    var body=$("#hof-body"); if(!body) return;
+    try{
+      var d=await api("/hall-of-fame"+(month!=="all"?"?month="+encodeURIComponent(month):""));
+      var months=d.months||[];
+      $("#hof-months").innerHTML='<button class="chip'+(month==="all"?" on":"")+'" data-m="all">'+esc(t("all_time"))+'</button>'
+        +months.map(function(m){ return '<button class="chip'+(month===m?" on":"")+'" data-m="'+esc(m)+'">'+esc(m)+'</button>'; }).join("");
+      $all("#hof-months [data-m]").forEach(function(b){ b.onclick=function(){ month=b.getAttribute("data-m"); load(); }; });
+      var entries=d.entries||[];
+      if(!entries.length){ body.innerHTML=emptyState("🏆", t("empty_hof"), d.emptyMessage||""); return; }
+      var h='<div class="podium">'+entries.slice(0,3).map(function(e,i){
+        return '<div class="pod card '+(i===0?"first":i===1?"second":"third")+'"><div class="rank">'+(i===0?"🥇":i===1?"🥈":"🥉")+'</div><div class="avatar" style="margin:6px auto">'+esc(initials(e.displayName||""))+'</div><a href="#/profile/'+encodeURIComponent(e.username||"")+'"><strong>'+esc(e.displayName||"")+'</strong></a><div class="small">'+esc(money(e.totalMinor||0, e.currency||"NPR"))+'</div><div class="small muted">'+esc(e.billsPaid||0)+' '+esc(t("bills_paid"))+' · '+esc(e.gifts||0)+' '+esc(t("gifts"))+'</div></div>';
+      }).join("")+'</div>';
+      h+=entries.slice(3).map(function(e){
+        return '<a class="card leader-row" href="#/profile/'+encodeURIComponent(e.username||"")+'"><span class="rank">'+esc(e.rank)+'</span><div class="avatar">'+esc(initials(e.displayName||""))+'</div><div class="grow" style="flex:1;min-width:0"><strong>'+esc(e.displayName||"")+'</strong><div class="small">'+esc(t("first_helped"))+' '+esc(e.firstHelped?fmtDate(e.firstHelped):"")+(e.tier?" · "+esc(e.tier.icon)+" "+esc(e.tier.name):"")+'</div></div><strong class="money">'+esc(money(e.totalMinor||0, e.currency||"NPR"))+'</strong></a>';
+      }).join("");
+      if((d.fullyPaid||[]).length){
+        h+='<h2 style="margin-top:16px">'+esc(t("most_bills_paid"))+'</h2>'
+          +d.fullyPaid.map(function(b){ return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.helpers||0)+' '+esc(t("helpers"))+'</div></div><span>›</span></a>'; }).join("");
+      }
+      body.innerHTML=h;
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
+  }
+}
+
+/* ---------- community (items 458–461, 478, 481, 484, 544/546, 549) ---------- */
+function renderCommunity(){
+  var tok=view(skeleton(3));
+  api("/community").then(function(d){
+    if(tok!==NAV) return;
+    var h='<h1>'+esc(t("community_title"))+'</h1>';
+    // Community banner (item 459) + milestone banner (item 478).
+    var dg=d.digest||{};
+    h+='<div class="card" style="background:linear-gradient(135deg,#1d4ed8,#0ea5e9);color:#fff"><h2 style="color:#fff;margin-top:0">'+esc(t("community_banner"))+'</h2>'
+      +'<p>'+esc(dg.giftsWeek||0)+' '+esc(t("gifts_this_week"))+' · '+esc(dg.paidWeek||0)+' '+esc(t("bills_paid_this_week"))+'</p>'
+      +'<p class="small" style="color:#dbeafe">'+esc(t("all_time"))+': '+esc(dg.giftsAll||0)+' '+esc(t("gifts"))+' · '+esc(dg.paidAll||0)+' '+esc(t("bills_paid"))+'</p>'
+      +'<p><a href="#/milestones" style="color:#fff;text-decoration:underline">'+esc(t("milestones"))+' →</a></p></div>';
+    // Featured brand of the week (items 544/546).
+    if(d.featured){
+      h+='<h2>'+esc(t("featured_brand"))+'</h2><a class="card row-card" href="#/brand-directory/'+encodeURIComponent(d.featured.id)+'"><div class="grow"><div class="t">'+esc(d.featured.name)+(d.featured.verified?" ✅":"")+'</div><div class="s">'+esc(d.featured.industry||"")+' · '+esc(d.featured.city||"")+'</div><p class="small">'+esc((d.featured.description||"").slice(0,160))+'</p></div><span>›</span></a>'
+        +'<p class="small"><a href="#/help?topic=featured-brand">'+esc(t("how_featured_chosen"))+'</a></p>';
+    }
+    // Giver of the week (item 481).
+    if(d.giverOfWeek){
+      var g=d.giverOfWeek;
+      h+='<h2>⭐ '+esc(t("giver_of_week"))+'</h2><a class="card row-card" href="#/profile/'+encodeURIComponent(g.username||"")+'"><div class="avatar">'+esc(initials(g.displayName||""))+'</div><div class="grow"><div class="t">'+esc(g.displayName||"")+'</div><div class="s">'+esc(money(g.totalMinor||0, g.currency||"NPR"))+' · '+esc(g.gifts||0)+' '+esc(t("gifts"))+'</div></div><span>›</span></a>';
+    }
+    if((d.newestBills||[]).length){
+      h+='<h2>'+esc(t("newest_asks"))+'</h2>'+d.newestBills.map(function(b){
+        return '<a class="card row-card" href="#/bill/'+encodeURIComponent(b.id)+'"><div class="grow"><div class="t">'+esc(b.title||"")+'</div><div class="s">'+esc(money(b.amountMinor||0, b.currency||"NPR"))+' · '+esc(b.category||"")+' · '+esc(b.posterName||"")+'</div></div><span>›</span></a>';
+      }).join("");
+    }
+    if((d.thanks||[]).length){
+      h+='<h2>'+esc(t("recent_thanks"))+'</h2>'+d.thanks.map(function(th){
+        return '<div class="card"><p>'+esc(th.body||"")+'</p><p class="small">— '+esc(th.receiverName||"")+' '+esc(t("to"))+' '+esc(th.giverName||"")+' · '+esc(th.billTitle||"")+'</p></div>';
+      }).join("")+'<p><a href="#/thanks">'+esc(t("all_thanks"))+' →</a></p>';
+    }
+    if((d.newestHelpers||[]).length){
+      h+='<h2>'+esc(t("newest_helpers"))+'</h2><div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap">'
+        +d.newestHelpers.map(function(u){ return '<a class="chip" href="#/profile/'+encodeURIComponent(u.username||"")+'">'+esc(u.displayName||"")+'</a>'; }).join("")
+        +'</div></div>';
+    }
+    if((d.stories||[]).length){
+      h+='<h2>'+esc(t("receiver_stories"))+'</h2>'+d.stories.map(function(s){
+        return '<div class="card"><p>'+esc(s.body||"")+'</p><p class="small">— '+esc(s.authorName||"")+' · <a href="#/bill/'+encodeURIComponent(s.billId)+'">'+esc(s.billTitle||"")+'</a></p></div>';
+      }).join("");
+    }
+    if((d.csrStories||[]).length){
+      h+='<h2>'+esc(t("csr_stories"))+'</h2>'+d.csrStories.map(function(c){
+        return '<div class="card"><strong>'+esc(c.title||"")+'</strong><p>'+esc((c.body||"").slice(0,300))+'</p><p class="small">'+esc(c.brandName||"")+' · '+esc(fmtDate(c.createdAt))+'</p></div>';
+      }).join("");
+    }
+    view(h);
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderCommunity); });
+}
+
+/* ---------- milestones (items 478/479) ---------- */
+function renderMilestones(){
+  var tok=view(skeleton(2));
+  api("/milestones").then(function(d){
+    if(tok!==NAV) return;
+    var tot=d.totals||{};
+    var h='<h1>'+esc(t("milestones"))+'</h1>'
+      +'<div class="grid2"><div class="card stat"><div class="n">'+esc(tot.gifts||0)+'</div><div class="l">'+esc(t("gifts"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(tot.billsPaid||0)+'</div><div class="l">'+esc(t("bills_paid"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(tot.helpers||0)+'</div><div class="l">'+esc(t("helpers"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(money(tot.totalNprMinor||0,"NPR"))+'</div><div class="l">'+esc(t("total_npr"))+'</div></div></div>'
+      +(d.nextGiftMilestone?'<p class="small" style="margin-top:10px">🎯 '+esc(t("next_milestone"))+': '+esc(d.nextGiftMilestone)+' '+esc(t("gifts"))+' ('+esc(d.nextGiftMilestone-(tot.gifts||0))+' '+esc(t("to_go"))+')</p>':"")
+      +'<h2 style="margin-top:14px">'+esc(t("reached"))+'</h2>'
+      +((d.milestones||[]).length? d.milestones.map(function(m){
+        return '<div class="card row-card"><div class="grow"><div class="t">🎉 '+esc(m.threshold)+' '+(m.kind==="gifts"?esc(t("gifts")):esc(t("bills_paid")))+'</div><div class="s">'+esc(fmtDate(m.reachedAt))+'</div></div></div>';
+      }).join("") : '<p>'+esc(t("no_milestones_yet"))+'</p>');
+    view(h);
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderMilestones); });
+}
+
+/* ---------- activity feed (item 447) ---------- */
+function renderActivity(){
+  if(!S.user){ view(emptyState("📰", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  var tok=view(skeleton(2));
+  api("/social/activity").then(function(d){
+    if(tok!==NAV) return;
+    var items=d.activity||[];
+    view('<h1>'+esc(t("activity_feed"))+'</h1><p class="small">'+esc(t("activity_intro"))+'</p>'
+      +(items.length? items.map(function(a){
+        return '<a class="card row-card" href="#/bill/'+encodeURIComponent(a.billId)+'"><div class="grow"><div class="t">'+esc(a.actorName||"")+' '+(a.kind==="gift_confirmed"?esc(t("helped")):esc(t("bill_completed")))+'</div><div class="s">'+esc(a.billTitle||"")+(a.amountMinor? ' · '+esc(money(a.amountMinor, a.currency||"NPR")):"")+' · '+esc(fmtDate(a.createdAt))+'</div></div><span>›</span></a>';
+      }).join("") : emptyState("📰", t("empty_activity"), t("activity_empty_hint"))));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderActivity); });
+}
+
+/* ---------- thank-you feed (items 424–430) ---------- */
+function renderThanksFeed(){
+  var tok=view(skeleton(2));
+  api("/social/thanks/feed").then(function(d){
+    if(tok!==NAV) return;
+    var items=d.thanks||[];
+    view('<h1>'+esc(t("thank_you_wall"))+'</h1>'
+      +(items.length? items.map(function(th){
+        return '<div class="card"><p>'+esc(th.body||"")+'</p>'
+          +(th.videoUrl?'<video src="'+esc(th.videoUrl)+'" controls style="max-width:100%;margin-top:8px"></video>':"")
+          +'<p class="small">— '+esc(th.receiverName||"")+' '+esc(t("to"))+' <a href="#/profile/'+encodeURIComponent(th.giverUsername||"")+'">'+esc(th.giverName||"")+'</a> · '+esc(th.billTitle||"")+'</p>'
+          +'<div class="btn-row"><button class="btn secondary small" data-react="'+esc(th.id)+'" data-k="heart">❤️ '+(th.reactions&&th.reactions.heart?esc(th.reactions.heart):"")+'</button><button class="btn secondary small" data-react="'+esc(th.id)+'" data-k="clap">👏 '+(th.reactions&&th.reactions.clap?esc(th.reactions.clap):"")+'</button><button class="btn secondary small" data-react="'+esc(th.id)+'" data-k="legend">🏆 '+(th.reactions&&th.reactions.legend?esc(th.reactions.legend):"")+'</button></div></div>';
+      }).join("") : emptyState("💛", t("empty_thanks"), "")));
+    $all("[data-react]").forEach(function(btn){
+      btn.onclick=async function(){
+        if(!S.user){ toast(t("need_profile"), true); return; }
+        try{ await api("/social/thanks/"+encodeURIComponent(btn.getAttribute("data-react"))+"/react", {method:"POST", body:{kind:btn.getAttribute("data-k")}}); route(); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    });
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderThanksFeed); });
+}
+
+/* ---------- achievements catalogue (item 417) ---------- */
+function renderAchievements(){
+  var tok=view(skeleton(2));
+  api("/social/achievements/definitions").then(function(d){
+    if(tok!==NAV) return;
+    var defs=d.definitions||[];
+    view('<h1>'+esc(t("achievements"))+'</h1><p class="small">'+esc(t("achievements_intro"))+'</p>'
+      +defs.map(function(a){
+        return '<div class="card row-card"><span style="font-size:28px">'+esc(a.icon||"🏅")+'</span><div class="grow"><div class="t">'+esc(a.name||"")+'</div><div class="s">'+esc(a.desc||"")+'</div></div><span class="chip">'+esc(a.holders||0)+' '+esc(t("holders"))+'</span></div>';
+      }).join(""));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderAchievements); });
+}
+
+/* ---------- follower lists (item 444) ---------- */
+function renderFollowList(username, kind){
+  if(!S.user){ view(emptyState("👥", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  var tok=view(skeleton(2));
+  api("/social/"+encodeURIComponent(username)+"/"+kind).then(function(d){
+    if(tok!==NAV) return;
+    var users=d.users||[];
+    view('<h1>'+esc(kind==="followers"?t("followers"):t("following"))+'</h1><p class="small">@'+esc(username)+'</p>'
+      +(users.length? users.map(function(u){
+        return '<a class="card row-card" href="#/profile/'+encodeURIComponent(u.username||"")+'"><div class="avatar">'+esc(initials(u.displayName||""))+'</div><div class="grow"><div class="t">'+esc(u.displayName||"")+'</div><div class="s">@'+esc(u.username||"")+'</div></div><span>›</span></a>';
+      }).join("") : '<p>'+esc(t("empty_followers"))+'</p>'));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(function(){ renderFollowList(username, kind); }); });
+}
+
+/* ---------- changelog feed (item 492) ---------- */
+// Served from a static public/changelog.json (the Netlify function bundle
+// does not include CHANGELOG.md, so the app cannot read it at runtime).
+function renderChangelog(){
+  var tok=view(skeleton(2));
+  fetch("changelog.json").then(function(r){ return r.json(); }).then(function(d){
+    if(tok!==NAV) return;
+    var entries=d.entries||[];
+    view('<h1>'+esc(t("changelog"))+'</h1>'
+      +(entries.length? entries.map(function(e){
+        return '<div class="card"><strong>'+esc(e.version||"")+'</strong> <span class="small">'+esc(e.date||"")+'</span><ul>'+(e.changes||[]).map(function(c){ return '<li>'+esc(c)+'</li>'; }).join("")+'</ul></div>';
+      }).join("") : '<p>'+esc(t("empty_changelog"))+'</p>'));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); });
+}
+
+/* ---------- thank-you composer (items 424–428) ---------- */
+function openThanksComposer(billId, giftId, giverName){
+  var videoUrl=null, videoDurationSec=null;
+  openSheet('<h2>'+esc(t("say_thanks"))+'</h2><p class="small">'+esc(t("thanks_intro"))+' '+esc(giverName||"")+'</p>'
+    +'<label for="th-body">'+esc(t("your_message"))+'</label><textarea id="th-body" maxlength="1000" rows="4"></textarea>'
+    +'<label for="th-video">'+esc(t("video_thanks"))+' ('+esc(t("video_60s"))+')</label><input type="file" id="th-video" accept="video/*"><p class="small">'+esc(t("video_thanks_note"))+'</p>'
+    +'<div class="btn-row"><button class="btn secondary" id="th-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="th-send">'+esc(t("send_thanks"))+'</button></div>');
+  $("#th-cancel").onclick=closeSheets;
+  $("#th-send").onclick=async function(){
+    var body=$("#th-body").value.trim();
+    var f=$("#th-video").files[0];
+    if(!body && !f){ toast(t("thanks_empty"), true); return; }
+    try{
+      if(f){
+        // ≤60s enforcement (item 426): the server has no video decoder,
+        // so duration is checked from the file's metadata in the browser
+        // before upload (the 5 MB server cap still applies).
+        var dur=await new Promise(function(resolve){
+          var v=document.createElement("video");
+          v.preload="metadata";
+          v.onloadedmetadata=function(){ resolve(v.duration); URL.revokeObjectURL(v.src); };
+          v.onerror=function(){ resolve(null); URL.revokeObjectURL(v.src); };
+          v.src=URL.createObjectURL(f);
+        });
+        if(dur!==null&&dur>60){ toast(t("video_too_long"), true); return; }
+        videoDurationSec=dur===null?null:Math.ceil(dur);
+        var up=await uploadFile(f, "thanks_video");
+        videoUrl=up.url||up.fileUrl||up.path;
+      }
+      await api("/social/thanks", {method:"POST", body:{billId:billId, giftId:giftId, body:body, videoUrl:videoUrl, videoDurationSec:videoDurationSec}});
+      closeSheets(); toast(t("thanks_sent_review"));
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+  };
+}
+
+/* ---------- receiver story composer (items 482/483) ---------- */
+function openStoryComposer(billId, billTitle){
+  openSheet('<h2>'+esc(t("share_story"))+'</h2><p class="small">'+esc(t("story_intro"))+' — '+esc(billTitle||"")+'</p>'
+    +'<label for="st-story">'+esc(t("your_story"))+'</label><textarea id="st-story" maxlength="5000" rows="6"></textarea>'
+    +'<div class="btn-row"><button class="btn secondary" id="st-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="st-send">'+esc(t("submit_story"))+'</button></div>');
+  $("#st-cancel").onclick=closeSheets;
+  $("#st-send").onclick=async function(){
+    var body=$("#st-story").value.trim();
+    if(body.length<20){ toast(t("story_too_short"), true); return; }
+    try{
+      await api("/social/stories", {method:"POST", body:{billId:billId, body:body}});
+      closeSheets(); toast(t("story_sent_review"));
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+  };
 }
 
 /* ---------- settings ---------- */

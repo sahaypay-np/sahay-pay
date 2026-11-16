@@ -90,11 +90,13 @@ function decryptAccount(blob) {
 
 // ---- Uploads (multer) ----
 
-const PUBLIC_KINDS = new Set(['public_bill', 'support', 'avatar', 'qr']);
+const PUBLIC_KINDS = new Set(['public_bill', 'support', 'avatar', 'qr', 'cover', 'thanks_video']);
 const PRIVATE_KINDS = new Set(['private_proof', 'id_doc']);
 const ALLOWED_MIME = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'application/pdf',
 ]);
+// Video MIME types — only for the thanks_video kind (see fileFilter).
+const VIDEO_MIME = new Set(['video/mp4', 'video/webm']);
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 const storage = multer.diskStorage({
@@ -104,7 +106,7 @@ const storage = multer.diskStorage({
   },
   filename(req, file, cb) {
     const ext = path.extname(file.originalname || '').toLowerCase();
-    const safeExt = ['.jpg', '.jpeg', '.png', '.webp', '.pdf'].includes(ext) ? ext : '.bin';
+    const safeExt = ['.jpg', '.jpeg', '.png', '.webp', '.pdf', '.mp4', '.webm'].includes(ext) ? ext : '.bin';
     cb(null, `${crypto.randomUUID()}${safeExt}`);
   },
 });
@@ -113,6 +115,13 @@ const upload = multer({
   storage,
   limits: { fileSize: MAX_FILE_BYTES },
   fileFilter(req, file, cb) {
+    // Video is only ever accepted for video thank-yous (items 425/426);
+    // every other kind takes images/PDF only.
+    const kind = req.body?.kind || 'public_bill';
+    if (VIDEO_MIME.has(file.mimetype)) {
+      if (kind === 'thanks_video') return cb(null, true);
+      return cb(new Error('Video files are only accepted for video thank-yous.'));
+    }
     if (!ALLOWED_MIME.has(file.mimetype)) {
       return cb(new Error('Only images (jpg/png/webp) and PDF files are allowed.'));
     }
@@ -124,7 +133,7 @@ const upload = multer({
 // The multer fileFilter only sees the client-claimed MIME type, which is
 // trivially faked. After the file lands on disk, sniff its real signature
 // and require it to match the declared MIME type.
-// Returns 'jpeg' | 'png' | 'webp' | 'pdf' | null.
+// Returns 'jpeg' | 'png' | 'webp' | 'pdf' | 'mp4' | 'webm' | null.
 function sniffFileType(filePath) {
   let head;
   try {
@@ -148,6 +157,9 @@ function sniffFileType(filePath) {
     head.subarray(8, 12).toString('latin1') === 'WEBP'
   ) return 'webp';
   if (head.length >= 5 && head.subarray(0, 5).toString('latin1') === '%PDF-') return 'pdf';
+  // MP4: 'ftyp' box at offset 4. WebM: EBML header 1A 45 DF A3.
+  if (head.length >= 8 && head.subarray(4, 8).toString('latin1') === 'ftyp') return 'mp4';
+  if (head.length >= 4 && head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) return 'webm';
   return null;
 }
 
@@ -156,6 +168,8 @@ const MIME_TO_TYPE = {
   'image/png': 'png',
   'image/webp': 'webp',
   'application/pdf': 'pdf',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
 };
 
 // True when the file's real signature matches its declared MIME type.

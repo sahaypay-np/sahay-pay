@@ -147,7 +147,13 @@ router.post('/', requireActive, rateLimit('gift-create', 20, 60 * 60 * 1000), as
     );
     const gift = await db.get('SELECT * FROM gifts WHERE id = $1', [id]);
     await logAudit('user', req.user.id, 'gift_created', 'gift', id, { billId: bill.id, amountMinor });
-    res.status(201).json({ gift: publicGift(gift), feeMode: q.feeMode, demoMode: true });
+    // First-gift celebration (item 480): the client celebrates when this
+    // is the supporter's first-ever gift.
+    const priorGifts = Number((await db.get(
+      'SELECT COUNT(*) AS c FROM gifts WHERE supporter_id = $1 AND id != $2',
+      [req.user.id, id]
+    ))?.c || 0);
+    res.status(201).json({ gift: publicGift(gift), feeMode: q.feeMode, demoMode: true, firstGift: priorGifts === 0 });
   } catch (err) {
     next(err);
   }
