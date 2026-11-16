@@ -14,7 +14,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const { logAudit, nowIso } = require('../lib/audit');
-const { requireActive, rateLimit } = require('../lib/auth');
+const { requireAuth, requireActive, rateLimit } = require('../lib/auth');
 const { cleanStr } = require('../lib/validate');
 const { createNotification } = require('../lib/notify');
 
