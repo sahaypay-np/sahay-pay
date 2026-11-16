@@ -1,0 +1,32 @@
+# Sahay Pay — Netlify deploy config.
+# Static SPA served from public/ by the CDN; the Express app runs as a
+# Function (netlify/functions/api.js) for /api/* and uploaded files.
+# No build step.
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+
+[functions]
+  # The function loads its SQL schema at runtime (see server/db.js); ship
+  # the schema files into the bundle (they land at <bundle>/server/).
+  included_files = ["server/schema.postgres.sql", "server/schema.sqlite.sql"]
+
+# API + uploaded files go to the Express function. The original path is
+# kept after the function prefix so the wrapper can restore it whichever
+# path form Netlify passes in event.path.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/api/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/uploads/public/*"
+  to = "/.netlify/functions/api/uploads/public/:splat"
+  status = 200
+
+# Everything else is the SPA (hash-routed; static files in public/ are
+# served directly before this rule).
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

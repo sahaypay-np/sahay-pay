@@ -133,13 +133,17 @@ migration is needed. **First run against Postgres must be smoke-tested**
 — the Postgres path is code-reviewed but has never been executed (see
 "Known gaps").
 
-### 2. Host — Vercel free (Hobby)
+### 2. Host — Netlify free (Starter)
 
-**Vercel** (current route, Mon 2026-11-16): import this repo from GitHub
-in the Vercel dashboard. No build step — `api/index.js` runs the same
-Express app as a serverless function and `vercel.json` routes everything
-to it. Sessions are DB-backed, so logins survive across invocations.
-Set in the dashboard (never in the repo):
+**Netlify** (current route, Mon 2026-11-16): import this repo from GitHub
+in the Netlify dashboard under a FRESH account created via GitHub — do
+NOT use the old danishkhan97045 account, whose deploy credits are
+exhausted (blocked until the cycle resets Nov 22). No build step —
+`netlify.toml` serves the SPA from `public/` and routes `/api/*` and
+`/uploads/public/*` to the Express app running as a Function
+(`netlify/functions/api.js`, serverless-http). Sessions are DB-backed,
+so logins survive across invocations. Set in the dashboard (never in
+the repo):
 
 - `DATABASE_URL` — the Supabase/Neon string
 - `SESSION_SECRET` — a base64 48-byte secret (see above)
@@ -149,10 +153,16 @@ Set in the dashboard (never in the repo):
 - `OWNER_NOTIFICATION_WEBHOOK_URL` — optional (owner review-packet webhook)
 - `APP_BASE_URL` — the public URL once assigned
 
-Vercel gives a free subdomain (`https://sahay-pay.vercel.app`, name
-permitting). Uploads go to `/tmp` on Vercel and are ephemeral —
+Netlify gives a free subdomain (`https://sahay-pay.netlify.app`, name
+permitting). Uploads go to `/tmp` on Netlify and are ephemeral —
 **uploaded photos do not persist** (see "Known gaps") until object
-storage lands.
+storage lands. The function loads its SQL schema at runtime from
+`server/*.sql`, shipped via `included_files` in `netlify.toml`.
+
+**Vercel** (blocked 2026-11-16): account created via GitHub, but the
+dashboard requires SMS phone verification and no number can receive SMS
+right now. `api/index.js` + `vercel.json` are kept in the repo but
+unused.
 
 **Render** (blocked 2026-11-16): demands a credit card for identity
 verification before creating even a free $0 service. `render.yaml` is

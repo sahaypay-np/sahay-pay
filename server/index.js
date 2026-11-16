@@ -104,7 +104,14 @@ async function start() {
   }
   console.log(`[sahay-pay] payout encryption key source: ${payoutKeySource}`);
   console.log(`[sahay-pay] demo mode: ON (no real payment integration)`);
-  app.listen(PORT, () => {
+  // Express wires this callback to both 'listening' and 'error' (once):
+  // on a bind failure (e.g. port already in use) it receives the error —
+  // fail loudly instead of printing "listening" and exiting 0.
+  app.listen(PORT, (err) => {
+    if (err) {
+      console.error(`[sahay-pay] FATAL: could not listen on port ${PORT}: ${err.message}`);
+      process.exit(1);
+    }
     console.log(`[sahay-pay] listening on http://localhost:${PORT} (db: ${db.isPostgres ? 'postgres' : 'sqlite'})`);
   });
 }

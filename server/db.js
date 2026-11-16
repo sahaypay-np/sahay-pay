@@ -142,9 +142,27 @@ async function setSetting(key, value) {
   );
 }
 
+// Load a schema file, tolerating serverless bundlers that relocate files:
+// locally (and on Vercel) it sits next to this file; on Netlify Functions
+// the .sql files ship via netlify.toml included_files at <bundle>/server/,
+// and the function runs with cwd = the bundle dir.
+function loadSchema(filename) {
+  const candidates = [
+    path.join(__dirname, filename),
+    path.join(process.cwd(), 'server', filename),
+    path.join(process.cwd(), filename),
+  ];
+  for (const p of candidates) {
+    try {
+      return fs.readFileSync(p, 'utf8');
+    } catch { /* try next */ }
+  }
+  throw new Error(`schema file not found: ${filename}`);
+}
+
 async function migrate() {
   const schemaFile = usePostgres ? 'schema.postgres.sql' : 'schema.sqlite.sql';
-  const sql = fs.readFileSync(path.join(__dirname, schemaFile), 'utf8');
+  const sql = loadSchema(schemaFile);
   if (usePostgres) {
     await pool.query(sql);
   } else {

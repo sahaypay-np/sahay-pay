@@ -18,10 +18,14 @@ const path = require('path');
 const multer = require('multer');
 
 const ROOT = path.join(__dirname, '..', '..');
-// Vercel serverless: the project filesystem is read-only at runtime; only
-// /tmp is writable. Uploads there are ephemeral (lost between invocations)
-// until object storage lands — same caveat as redeploys on other hosts.
-const UPLOAD_BASE = process.env.VERCEL
+// Serverless (Vercel / Netlify Functions): the project filesystem is
+// read-only at runtime; only /tmp is writable. Uploads there are ephemeral
+// (lost between invocations) until object storage lands — same caveat as
+// redeploys on other hosts.
+const IS_SERVERLESS = Boolean(
+  process.env.VERCEL || process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME
+);
+const UPLOAD_BASE = IS_SERVERLESS
   ? path.join(os.tmpdir(), 'sahay-pay-uploads')
   : path.join(ROOT, 'uploads');
 const PUBLIC_DIR = path.join(UPLOAD_BASE, 'public');
