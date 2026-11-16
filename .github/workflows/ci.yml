@@ -1,0 +1,88 @@
+# Sahay Pay CI (checklist items 152/155/163/195).
+# On every push and pull request: install, run all three test suites against
+# a fresh local server each (the suites set the admin PIN and flip the fee
+# mode, so they cannot share one server/DB), run npm audit, run the secret
+# scan, and check the Express server sends no X-Powered-By header.
+# Netlify CDN headers (CSP etc.) cannot be tested here — they are verified
+# after deploy with tests/check-live.sh (see docs/RUNBOOK.md).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # Test-only bridge secret. This is the documented default the suites
+      # themselves use (see tests/smoke.sh); it is not a production secret.
+      TEST_BRIDGE_SECRET: test-bridge-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm install --no-save jsdom
+
+      - name: Start fresh test server (helper)
+        run: |
+          cat > /tmp/start-server.sh <<'EOS'
+          #!/bin/bash
+          # Restart a FRESH server on 3101: kill the old one, wipe the DB,
+          # start with throwaway secrets, wait for /api/health.
+          pkill -f "node server/index.js" 2>/dev/null || true
+          sleep 1
+          rm -rf data
+          PORT=3101 CLAUDE_APPROVAL_BRIDGE_SECRET="$TEST_BRIDGE_SECRET" \
+            SESSION_SECRET=$(openssl rand -base64 48) \
+            PAYOUT_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+            nohup node server/index.js > /tmp/server.log 2>&1 &
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:3101/api/health >/dev/null && exit 0
+            sleep 1
+          done
+          echo "server did not come up"; cat /tmp/server.log; exit 1
+          EOS
+          chmod +x /tmp/start-server.sh
+
+      - name: Smoke suite (57)
+        run: |
+          /tmp/start-server.sh
+          BASE=http://localhost:3101 ./tests/smoke.sh
+
+      - name: Contract suite (73)
+        run: |
+          /tmp/start-server.sh
+          BASE=http://localhost:3101 ./tests/contract.sh
+
+      - name: SPA harness (20)
+        run: |
+          /tmp/start-server.sh
+          BASE=http://localhost:3101 node tests/spa-harness.js
+
+      - name: X-Powered-By must be absent (item 13)
+        run: |
+          /tmp/start-server.sh
+          if curl -s -i http://localhost:3101/api/health | grep -qi '^X-Powered-By:'; then
+            echo "FAIL: /api/health still sends X-Powered-By"
+            exit 1
+          fi
+          echo "X-Powered-By: absent (OK)"
+
+      - name: npm audit (production deps)
+        run: npm audit --omit=dev
+
+      - name: Secret scan
+        run: bash scripts/check-secrets.sh
+
+      - name: Server log (on failure)
+        if: failure()
+        run: cat /tmp/server.log

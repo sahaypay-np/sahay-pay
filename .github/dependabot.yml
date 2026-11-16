@@ -1,0 +1,11 @@
+# Dependabot (checklist item 88): weekly npm updates against main.
+# The owner reviews and merges; CI runs on every Dependabot PR.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    target-branch: main
+    open-pull-requests-limit: 5

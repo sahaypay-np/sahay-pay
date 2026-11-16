@@ -11,6 +11,21 @@
   # the schema files into the bundle (they land at <bundle>/server/).
   included_files = ["server/schema.postgres.sql", "server/schema.sqlite.sql"]
 
+# Security headers for every static response (checklist items 8–12).
+# NOTE: the SPA uses inline onclick handlers + inline styles, so the CSP
+# must keep 'unsafe-inline' for script-src and style-src or the app breaks.
+# These headers apply to CDN-served files; /api/* responses come from the
+# Express function (which disables X-Powered-By in server/index.js).
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+
 # API + uploaded files go to the Express function. The original path is
 # kept after the function prefix so the wrapper can restore it whichever
 # path form Netlify passes in event.path.

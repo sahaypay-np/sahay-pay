@@ -18,6 +18,7 @@ const ROOT = path.join(__dirname, '..');
 const PORT = Number(process.env.PORT) || 3000;
 
 const app = express();
+app.disable('x-powered-by');
 app.set('trust proxy', 1); // Render/Koyeb sit behind a proxy; req.ip is the client
 
 // Minimal cookie parsing (no cookie-parser dependency — only express, pg, multer).
