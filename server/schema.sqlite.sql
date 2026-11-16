@@ -201,6 +201,7 @@ CREATE TABLE IF NOT EXISTS brand_connects (
   industry TEXT DEFAULT '',
   offer TEXT DEFAULT '',
   work_email TEXT DEFAULT '',
+  requester_id TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL
 );

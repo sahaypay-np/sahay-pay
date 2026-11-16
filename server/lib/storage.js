@@ -202,12 +202,36 @@ function privateRefFor(filename) {
   return `/api/uploads/private/${filename}`;
 }
 
+// Resolve a stored upload reference (/uploads/public/<file> or
+// /api/uploads/private/<file>) to its on-disk path, or null when the ref
+// is not a well-formed upload reference. Used for server-side hashing
+// (items 324/338): the hash is computed from the stored file, never
+// trusted from the client.
+function pathForUploadRef(ref) {
+  if (typeof ref !== 'string') return null;
+  let dir = null;
+  let file = null;
+  if (ref.startsWith('/uploads/public/')) {
+    dir = PUBLIC_DIR;
+    file = ref.slice('/uploads/public/'.length);
+  } else if (ref.startsWith('/api/uploads/private/')) {
+    dir = PRIVATE_DIR;
+    file = ref.slice('/api/uploads/private/'.length);
+  } else {
+    return null;
+  }
+  if (!file || file.includes('/') || file.includes('\\') || file.includes('..')) return null;
+  const full = path.join(dir, file);
+  return fs.existsSync(full) ? full : null;
+}
+
 module.exports = {
   upload,
   isPrivateKind,
   isKnownKind,
   publicUrlFor,
   privateRefFor,
+  pathForUploadRef,
   encryptAccount,
   decryptAccount,
   sniffFileType,

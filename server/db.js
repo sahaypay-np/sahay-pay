@@ -240,6 +240,7 @@ const EXTRA_COLUMNS = [
   ['brand_connects', 'industry', "TEXT DEFAULT ''"],
   ['brand_connects', 'offer', "TEXT DEFAULT ''"],
   ['brand_connects', 'work_email', "TEXT DEFAULT ''"],
+  ['brand_connects', 'requester_id', 'TEXT'],
   ['auctions', 'min_increment_minor', 'INTEGER'],
   ['auctions', 'buyer_settled', 'INTEGER NOT NULL DEFAULT 0'],
   ['auctions', 'seller_settled', 'INTEGER NOT NULL DEFAULT 0'],
