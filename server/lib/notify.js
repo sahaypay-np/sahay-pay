@@ -130,10 +130,12 @@ async function applyReviewDecision(packetId, decision, reason, actorType, actorI
     const bill = await db.get('SELECT * FROM bills WHERE id = $1', [packet.target_id]);
     if (!bill) return { ok: false, status: 404, error: 'Bill not found.' };
     if (decision === 'approve') {
+      // Phase 2 (item 181): 30-day expiry starts at approval.
+      const expiresAt = new Date(Date.now() + 30 * 24 * 3600000).toISOString();
       await db.run(
         `UPDATE bills SET status = 'approved', approved_at = $1, approved_by = $2,
-         rejection_reason = '', changes_note = '', updated_at = $4 WHERE id = $3`,
-        [now, actorId, bill.id, now]
+         rejection_reason = '', changes_note = '', expires_at = $5, updated_at = $4 WHERE id = $3`,
+        [now, actorId, bill.id, now, expiresAt]
       );
       await createNotification(
         bill.user_id, 'post_approved', 'Your request is live',

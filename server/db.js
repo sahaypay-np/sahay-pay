@@ -186,6 +186,27 @@ const EXTRA_COLUMNS = [
   ['sessions', 'user_agent', 'TEXT'],
   ['admin_sessions', 'csrf_token', 'TEXT'],
   ['admin_sessions', 'last_seen_at', 'TEXT'],
+  // Phase 2 (sections 1–2): posting + expiry + ask types.
+  ['bills', 'for_whom', "TEXT DEFAULT 'myself'"],
+  ['bills', 'relationship', "TEXT DEFAULT ''"],
+  ['bills', 'for_other_consent', 'INTEGER NOT NULL DEFAULT 0'],
+  ['bills', 'about_me', "TEXT DEFAULT ''"],
+  ['bills', 'biller_instructions', "TEXT DEFAULT ''"],
+  ['bills', 'photos_json', "TEXT DEFAULT '[]'"],
+  ['bills', 'story_lang', "TEXT DEFAULT 'en'"],
+  ['bills', 'not_paid_consequence', "TEXT DEFAULT ''"],
+  ['bills', 'tried_to_pay', "TEXT DEFAULT ''"],
+  ['bills', 'money_means', "TEXT DEFAULT ''"],
+  ['bills', 'bill_type_other', "TEXT DEFAULT ''"],
+  ['bills', 'charity_name', "TEXT DEFAULT ''"],
+  ['bills', 'business', 'INTEGER NOT NULL DEFAULT 0'],
+  ['bills', 'business_name', "TEXT DEFAULT ''"],
+  ['bills', 'business_desc', "TEXT DEFAULT ''"],
+  ['bills', 'dream', 'INTEGER NOT NULL DEFAULT 0'],
+  ['bills', 'dream_desc', "TEXT DEFAULT ''"],
+  ['bills', 'expires_at', 'TEXT'],
+  ['bills', 'extension_used', 'INTEGER NOT NULL DEFAULT 0'],
+  ['bills', 'repost_count', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 // Cold-start mitigation (checklist priority fix (g)): the full migrate is
@@ -230,6 +251,16 @@ async function migrate() {
   // not-yet-added column fails the whole migrate — this 502'd every live
   // API route on 2026-11-16 (idx_users_recovery ran before the ALTERs).
   await run('CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_code_lookup)');
+  // Phase 2: bill edit history (new table — CREATE TABLE IF NOT EXISTS is
+  // safe on old DBs; its index is created after the table, same rule).
+  await run(`CREATE TABLE IF NOT EXISTS bill_edits (
+    id TEXT PRIMARY KEY,
+    bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    changed_fields TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+  )`);
+  await run('CREATE INDEX IF NOT EXISTS idx_bill_edits_bill ON bill_edits(bill_id, created_at)');
   // Seed config defaults only (no content rows, ever).
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     await run(

@@ -26,7 +26,10 @@ const { createReviewPacket, billPacketPayload } = require('../lib/notify');
 
 const router = express.Router();
 
-const MATERIAL_FIELDS = ['title', 'category', 'amountMinor', 'story', 'details', 'photoUrl', 'supportPhotoUrl', 'company', 'charity', 'payDirect'];
+const MATERIAL_FIELDS = ['title', 'category', 'amountMinor', 'story', 'details', 'photoUrl', 'photos', 'supportPhotoUrl', 'company', 'charity', 'business', 'dream', 'forWhom', 'payDirect'];
+
+// Phase 2: maximum bill amount (item 107) — NPR/INR 10,00,000 (10 lakh).
+const MAX_AMOUNT_MINOR = 100000000;
 
 function generateRequestCode() {
   return `SP-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
@@ -39,6 +42,43 @@ async function uniqueRequestCode() {
     if (!existing) return code;
   }
   return `SP-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+}
+
+// Ask type (items 191–199): charity > business > dream > plain bill.
+// A bill can carry several flags; the first match wins for display/filtering.
+function askTypeOf(row) {
+  if (row.charity === 1) return 'charity';
+  if (row.business === 1) return 'business';
+  if (row.dream === 1) return 'dream';
+  return 'bill';
+}
+
+// Expiry (item 181): 30 days from approval, evaluated LAZILY on read —
+// there is no scheduler. Bills approved before expiry existed derive it
+// from approved_at; unapproved bills have no expiry.
+function expiryOf(row) {
+  if (row.expires_at) return row.expires_at;
+  if (row.approved_at) return new Date(new Date(row.approved_at).getTime() + 30 * 24 * 3600000).toISOString();
+  return null;
+}
+
+function isExpired(row, nowMs) {
+  if (row.status !== 'approved') return false;
+  const exp = expiryOf(row);
+  return exp ? new Date(exp).getTime() <= (nowMs || Date.now()) : false;
+}
+
+function effectiveStatus(row, nowMs) {
+  return isExpired(row, nowMs) ? 'expired' : row.status;
+}
+
+function parsePhotos(row) {
+  try {
+    const arr = JSON.parse(row.photos_json || '[]');
+    return Array.isArray(arr) ? arr.filter((u) => typeof u === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 function publicBill(row, poster, maskPoster) {
@@ -57,6 +97,9 @@ function publicBill(row, poster, maskPoster) {
           memberSince: poster.created_at,
         }
     : undefined;
+  const expiresAt = expiryOf(row);
+  const expired = isExpired(row);
+  const photos = parsePhotos(row);
   return {
     id: row.id,
     requestCode: row.request_code,
@@ -70,16 +113,39 @@ function publicBill(row, poster, maskPoster) {
     story: row.story,
     details: row.details,
     charity: row.charity === 1,
+    charityName: row.charity_name || '',
+    business: row.business === 1,
+    businessName: row.business_name || '',
+    businessDesc: row.business_desc || '',
+    dream: row.dream === 1,
+    dreamDesc: row.dream_desc || '',
+    askType: askTypeOf(row),
     anonymous,
-    status: row.status,
+    status: effectiveStatus(row),
+    storedStatus: row.status,
     city: row.city,
     country: row.country,
     photoUrl: row.photo_url,
+    photos: photos.length ? photos : (row.photo_url ? [row.photo_url] : []),
     supportPhotoUrl: row.support_photo_url,
     payDirect: row.pay_direct === 1,
     billerName: row.biller_name,
     billerRef: row.biller_ref,
     billerDestination: row.biller_destination,
+    billerInstructions: row.biller_instructions || '',
+    forWhom: row.for_whom || 'myself',
+    relationship: row.relationship || '',
+    aboutMe: row.about_me || '',
+    storyLang: row.story_lang || 'en',
+    notPaidConsequence: row.not_paid_consequence || '',
+    triedToPay: row.tried_to_pay || '',
+    moneyMeans: row.money_means || '',
+    billTypeOther: row.bill_type_other || '',
+    expiresAt,
+    expired,
+    daysLeft: expiresAt ? Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 86400000)) : null,
+    extensionUsed: row.extension_used === 1,
+    repostCount: Number(row.repost_count) || 0,
     views: row.views,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -116,8 +182,8 @@ async function getPayoutHints(billId) {
 }
 
 function validateBillFields(body, categories) {
-  const title = cleanStr(body.title, 80);
-  if (title.length < 3) return { error: 'Please give your request a title (3–80 characters).' };
+  const title = cleanStr(body.title, 60);
+  if (title.length < 3) return { error: 'Please give your request a title (3–60 characters).' };
   if (!categories.includes(body.category)) return { error: 'Please choose a valid category.' };
   const story = cleanStr(body.story, 280);
   if (story.length < 10) return { error: 'Please tell your story (at least 10 characters, max 280).' };
@@ -125,9 +191,37 @@ function validateBillFields(body, categories) {
     ? body.amountMinor
     : parseMajorToMinor(body.amount);
   if (!isMinorAmount(amountMinor)) return { error: 'Please enter a valid amount greater than zero.' };
+  if (amountMinor > MAX_AMOUNT_MINOR) return { error: 'The maximum bill amount is रू/₹ 10,00,000.' };
   const details = cleanStr(body.details || '', 1500);
   const company = cleanStr(body.company || '', 120);
   return { ok: true, title, story, details, company, amountMinor };
+}
+
+// Clean + validate the optional phase-2 fields shared by POST and PATCH.
+function cleanExtraFields(body) {
+  const forWhom = ['myself', 'family', 'other'].includes(body.forWhom) ? body.forWhom : 'myself';
+  const photos = Array.isArray(body.photos)
+    ? body.photos.map((u) => cleanStr(u, 500)).filter(Boolean).slice(0, 4)
+    : null;
+  return {
+    forWhom,
+    relationship: cleanStr(body.relationship || '', 80),
+    forOtherConsent: body.forOtherConsent === true ? 1 : 0,
+    aboutMe: cleanStr(body.aboutMe || '', 500),
+    billerInstructions: cleanStr(body.billerInstructions || '', 600),
+    photos,
+    storyLang: ['en', 'ne', 'hi'].includes(body.storyLang) ? body.storyLang : 'en',
+    notPaidConsequence: cleanStr(body.notPaidConsequence || '', 300),
+    triedToPay: cleanStr(body.triedToPay || '', 300),
+    moneyMeans: cleanStr(body.moneyMeans || '', 300),
+    billTypeOther: cleanStr(body.billTypeOther || '', 120),
+    charityName: cleanStr(body.charityName || '', 120),
+    business: body.business === true ? 1 : 0,
+    businessName: cleanStr(body.businessName || '', 120),
+    businessDesc: cleanStr(body.businessDesc || '', 500),
+    dream: body.dream === true ? 1 : 0,
+    dreamDesc: cleanStr(body.dreamDesc || '', 500),
+  };
 }
 
 // POST /api/bills — create a draft, or create + submit when submit=true.
@@ -158,25 +252,35 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
     const id = crypto.randomUUID();
     const now = nowIso();
     const status = submit ? 'pending_review' : 'draft';
+    const extra = cleanExtraFields(body);
+    const photoUrl = body.photoUrl ? cleanStr(body.photoUrl, 500) : (extra.photos && extra.photos[0]) || null;
     await db.run(
       `INSERT INTO bills (id, user_id, request_code, title, category, company, amount_minor, currency,
         covered_minor, due_date, story, details, charity, anonymous, status, city, country, photo_url,
         support_photo_url, private_proof_url, pay_direct, biller_name, biller_ref, biller_destination,
         views, report_count, rejection_reason, changes_note, approved_at, approved_by, completed_at,
+        for_whom, relationship, for_other_consent, about_me, biller_instructions, photos_json,
+        story_lang, not_paid_consequence, tried_to_pay, money_means, bill_type_other, charity_name,
+        business, business_name, business_desc, dream, dream_desc,
         created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 0, 0, '', '', NULL, NULL, NULL, $24, $25)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 0, 0, '', '', NULL, NULL, NULL, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42)`,
       [
         id, req.user.id, await uniqueRequestCode(), v.title, body.category, v.company,
         v.amountMinor, currency, body.dueDate ? cleanStr(body.dueDate, 10) : null,
         v.story, v.details, body.charity === true ? 1 : 0, body.anonymous === true ? 1 : 0, status,
         cleanStr(body.city || req.user.city, 120), req.user.country,
-        body.photoUrl ? cleanStr(body.photoUrl, 500) : null,
+        photoUrl,
         body.supportPhotoUrl ? cleanStr(body.supportPhotoUrl, 500) : null,
         body.privateProofUrl ? cleanStr(body.privateProofUrl, 500) : null,
         payDirect ? 1 : 0,
         cleanStr(body.billerName || '', 120),
         cleanStr(body.billerRef || '', 120),
         cleanStr(body.billerDestination || '', 500),
+        extra.forWhom, extra.relationship, extra.forOtherConsent, extra.aboutMe,
+        extra.billerInstructions, JSON.stringify(extra.photos || (photoUrl ? [photoUrl] : [])),
+        extra.storyLang, extra.notPaidConsequence, extra.triedToPay, extra.moneyMeans,
+        extra.billTypeOther, extra.charityName,
+        extra.business, extra.businessName, extra.businessDesc, extra.dream, extra.dreamDesc,
         now, now,
       ]
     );
@@ -209,7 +313,8 @@ router.get('/mine', requireAuth, async (req, res, next) => {
     const status = req.query.status;
     const params = [req.user.id];
     let where = 'user_id = $1';
-    if (status) { params.push(status); where += ` AND status = $${params.length}`; }
+    // 'expired' is a derived (lazy) status, not a stored one — filter in JS.
+    if (status && status !== 'expired') { params.push(status); where += ` AND status = $${params.length}`; }
     const { rows } = await db.query(
       `SELECT b.*,
               (SELECT COUNT(*) FROM gifts g WHERE g.bill_id = b.id AND g.status = 'confirmed') AS supporter_count
@@ -219,6 +324,8 @@ router.get('/mine', requireAuth, async (req, res, next) => {
     const bills = [];
     for (const r of rows) {
       const b = publicBill(r, req.user);
+      if (status === 'expired' && b.status !== 'expired') continue;
+      if (status === 'approved' && b.status === 'expired') continue;
       b.supporterCount = Number(r.supporter_count);
       b.payoutHints = await getPayoutHints(r.id);
       b.rejectionReason = r.rejection_reason;
@@ -273,30 +380,58 @@ router.patch('/:id', requireActive, async (req, res, next) => {
     }
     const body = req.body || {};
     const categories = await db.getSettingJson('categories', []);
+    const extra = cleanExtraFields(body);
     const fieldMap = {
-      title: (v) => cleanStr(v, 80),
+      title: (v) => cleanStr(v, 60),
       category: (v) => v,
       amountMinor: (v) => v,
       story: (v) => cleanStr(v, 280),
       details: (v) => cleanStr(v, 1500),
       photoUrl: (v) => cleanStr(v, 500),
+      photos: () => JSON.stringify(extra.photos || []),
       supportPhotoUrl: (v) => cleanStr(v, 500),
       privateProofUrl: (v) => cleanStr(v, 500),
       company: (v) => cleanStr(v, 120),
       dueDate: (v) => cleanStr(v, 10),
       charity: (v) => (v === true ? 1 : 0),
+      charityName: () => extra.charityName,
+      business: (v) => (v === true ? 1 : 0),
+      businessName: () => extra.businessName,
+      businessDesc: () => extra.businessDesc,
+      dream: (v) => (v === true ? 1 : 0),
+      dreamDesc: () => extra.dreamDesc,
       anonymous: (v) => (v === true ? 1 : 0),
       payDirect: (v) => (v === true ? 1 : 0),
+      billerName: (v) => cleanStr(v, 120),
+      billerRef: (v) => cleanStr(v, 120),
+      billerDestination: (v) => cleanStr(v, 500),
+      billerInstructions: () => extra.billerInstructions,
+      forWhom: () => extra.forWhom,
+      relationship: () => extra.relationship,
+      aboutMe: () => extra.aboutMe,
+      storyLang: () => extra.storyLang,
+      notPaidConsequence: () => extra.notPaidConsequence,
+      triedToPay: () => extra.triedToPay,
+      moneyMeans: () => extra.moneyMeans,
+      billTypeOther: () => extra.billTypeOther,
     };
     const colMap = {
       title: 'title', category: 'category', amountMinor: 'amount_minor', story: 'story',
-      details: 'details', photoUrl: 'photo_url', supportPhotoUrl: 'support_photo_url',
+      details: 'details', photoUrl: 'photo_url', photos: 'photos_json', supportPhotoUrl: 'support_photo_url',
       privateProofUrl: 'private_proof_url',
-      company: 'company', dueDate: 'due_date', charity: 'charity', anonymous: 'anonymous', payDirect: 'pay_direct',
+      company: 'company', dueDate: 'due_date', charity: 'charity', charityName: 'charity_name',
+      business: 'business', businessName: 'business_name', businessDesc: 'business_desc',
+      dream: 'dream', dreamDesc: 'dream_desc',
+      anonymous: 'anonymous', payDirect: 'pay_direct',
+      billerName: 'biller_name', billerRef: 'biller_ref', billerDestination: 'biller_destination',
+      billerInstructions: 'biller_instructions', forWhom: 'for_whom', relationship: 'relationship',
+      aboutMe: 'about_me', storyLang: 'story_lang', notPaidConsequence: 'not_paid_consequence',
+      triedToPay: 'tried_to_pay', moneyMeans: 'money_means', billTypeOther: 'bill_type_other',
     };
     const updates = [];
     const params = [];
     let material = false;
+    const changedFields = [];
     for (const [key, fn] of Object.entries(fieldMap)) {
       if (body[key] === undefined) continue;
       const value = fn(body[key]);
@@ -306,14 +441,18 @@ router.patch('/:id', requireActive, async (req, res, next) => {
       if (key === 'amountMinor' && !isMinorAmount(value)) {
         return res.status(400).json({ error: { code: 'VALIDATION', message: 'Amount must be a positive number of minor units.' } });
       }
+      if (key === 'amountMinor' && value > MAX_AMOUNT_MINOR) {
+        return res.status(400).json({ error: { code: 'VALIDATION', message: 'The maximum bill amount is रू/₹ 10,00,000.' } });
+      }
       if (key === 'title' && value.length < 3) {
-        return res.status(400).json({ error: { code: 'VALIDATION', message: 'Title must be 3–80 characters.' } });
+        return res.status(400).json({ error: { code: 'VALIDATION', message: 'Title must be 3–60 characters.' } });
       }
       if (key === 'story' && value.length < 10) {
         return res.status(400).json({ error: { code: 'VALIDATION', message: 'Story must be at least 10 characters.' } });
       }
       params.push(value);
       updates.push(`${colMap[key]} = $${params.length}`);
+      changedFields.push(key);
       if (MATERIAL_FIELDS.includes(key)) material = true;
     }
     if (!updates.length) {
@@ -331,6 +470,14 @@ router.patch('/:id', requireActive, async (req, res, next) => {
     updates.push(`updated_at = $${params.length}`);
     params.push(bill.id);
     await db.run(`UPDATE bills SET ${updates.join(', ')} WHERE id = $${params.length}`, params);
+    // Edit history (item 180): what changed, when. Best-effort — never
+    // fails the edit itself.
+    try {
+      await db.run(
+        `INSERT INTO bill_edits (id, bill_id, user_id, changed_fields, created_at) VALUES ($1, $2, $3, $4, $5)`,
+        [crypto.randomUUID(), bill.id, req.user.id, JSON.stringify(changedFields), nowIso()]
+      );
+    } catch { /* history is advisory */ }
     const updated = await db.get('SELECT * FROM bills WHERE id = $1', [bill.id]);
     if (backToReview) {
       packet = await createReviewPacket('bill', bill.id, await billPacketPayload(updated, await getPayoutHints(bill.id)));
@@ -341,6 +488,90 @@ router.patch('/:id', requireActive, async (req, res, next) => {
       backToReview,
       reviewPacketId: packet ? packet.id : null,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/bills/:id/history — edit history (item 180), owner only.
+router.get('/:id/history', requireAuth, async (req, res, next) => {
+  try {
+    const bill = await db.get('SELECT * FROM bills WHERE id = $1', [req.params.id]);
+    if (!bill || bill.user_id !== req.user.id) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Bill not found.' } });
+    }
+    const { rows } = await db.query(
+      'SELECT * FROM bill_edits WHERE bill_id = $1 ORDER BY created_at DESC LIMIT 50',
+      [bill.id]
+    );
+    res.json({
+      edits: rows.map((r) => {
+        let fields = [];
+        try { fields = JSON.parse(r.changed_fields || '[]'); } catch { /* keep [] */ }
+        return { id: r.id, changedFields: fields, createdAt: r.created_at };
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/bills/:id/extend — one 14-day expiry extension per bill (item 184).
+router.post('/:id/extend', requireActive, async (req, res, next) => {
+  try {
+    const bill = await db.get('SELECT * FROM bills WHERE id = $1', [req.params.id]);
+    if (!bill || bill.user_id !== req.user.id) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Bill not found.' } });
+    }
+    if (bill.status !== 'approved' || isExpired(bill)) {
+      return res.status(409).json({ error: { code: 'INVALID_STATE', message: 'Only a live approved bill can be extended.' } });
+    }
+    if (bill.extension_used === 1) {
+      return res.status(409).json({ error: { code: 'INVALID_STATE', message: 'This bill already used its one 14-day extension.' } });
+    }
+    const current = expiryOf(bill) || new Date(Date.now() + 30 * 24 * 3600000).toISOString();
+    const next = new Date(new Date(current).getTime() + 14 * 24 * 3600000).toISOString();
+    await db.run(
+      `UPDATE bills SET expires_at = $1, extension_used = 1, updated_at = $2 WHERE id = $3`,
+      [next, nowIso(), bill.id]
+    );
+    await logAudit('user', req.user.id, 'bill_extended', 'bill', bill.id, { expiresAt: next });
+    const updated = await db.get('SELECT * FROM bills WHERE id = $1', [bill.id]);
+    res.json({ bill: publicBill(updated, req.user) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/bills/:id/repost — resubmit an expired bill for review (item 186).
+// Limit 3 reposts per bill (item 190).
+router.post('/:id/repost', requireActive, async (req, res, next) => {
+  try {
+    const bill = await db.get('SELECT * FROM bills WHERE id = $1', [req.params.id]);
+    if (!bill || bill.user_id !== req.user.id) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Bill not found.' } });
+    }
+    if (!isExpired(bill) && bill.status !== 'expired') {
+      return res.status(409).json({ error: { code: 'INVALID_STATE', message: 'Only an expired bill can be reposted.' } });
+    }
+    if ((Number(bill.repost_count) || 0) >= 3) {
+      return res.status(409).json({ error: { code: 'INVALID_STATE', message: 'This bill has reached the limit of 3 reposts.' } });
+    }
+    const hints = await getPayoutHints(bill.id);
+    if (bill.pay_direct !== 1 && hints.length === 0) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION', message: 'Add at least one valid payout method before reposting.' },
+      });
+    }
+    await db.run(
+      `UPDATE bills SET status = 'pending_review', expires_at = NULL, extension_used = 0,
+       repost_count = repost_count + 1, rejection_reason = '', changes_note = '', updated_at = $1 WHERE id = $2`,
+      [nowIso(), bill.id]
+    );
+    const updated = await db.get('SELECT * FROM bills WHERE id = $1', [bill.id]);
+    const packet = await createReviewPacket('bill', bill.id, await billPacketPayload(updated, hints));
+    await logAudit('user', req.user.id, 'bill_reposted', 'bill', bill.id, { repostCount: (Number(bill.repost_count) || 0) + 1 });
+    res.json({ bill: publicBill(updated, req.user), reviewPacketId: packet.id });
   } catch (err) {
     next(err);
   }
@@ -538,7 +769,7 @@ router.get('/:id', async (req, res, next) => {
     if (req.cookies?.sp_admin) {
       isAdmin = Boolean(await lookupAdminSession(req.cookies.sp_admin));
     }
-    if (bill.status !== 'approved' && !isOwner && !isAdmin) {
+    if (effectiveStatus(bill) !== 'approved' && !isOwner && !isAdmin) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Bill not found.' } });
     }
     const poster = await db.get('SELECT * FROM users WHERE id = $1', [bill.user_id]);
@@ -581,3 +812,9 @@ module.exports = router;
 module.exports.uploadsRouter = uploadsRouter;
 module.exports.publicBill = publicBill;
 module.exports.getPayoutHints = getPayoutHints;
+module.exports.askTypeOf = askTypeOf;
+module.exports.expiryOf = expiryOf;
+module.exports.isExpired = isExpired;
+module.exports.effectiveStatus = effectiveStatus;
+module.exports.parsePhotos = parsePhotos;
+module.exports.MAX_AMOUNT_MINOR = MAX_AMOUNT_MINOR;
