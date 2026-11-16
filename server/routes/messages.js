@@ -213,7 +213,7 @@ router.get('/:threadId', requireAuth, async (req, res, next) => {
     const { rows } = await db.query(
       `SELECT m.*, u.display_name AS sender_name
        FROM messages m JOIN users u ON u.id = m.sender_id
-       WHERE m.thread_id = $1 AND m.hidden = 0 ORDER BY m.created_at ASC LIMIT 200`,
+       WHERE m.thread_id = $1 ORDER BY m.created_at ASC LIMIT 200`,
       [thread.id]
     );
     res.json({
@@ -222,7 +222,10 @@ router.get('/:threadId', requireAuth, async (req, res, next) => {
         id: m.id,
         senderId: m.sender_id,
         senderName: m.sender_name,
-        body: m.body,
+        // Item 690: hidden messages stay in the thread as placeholders
+        // (the body is masked; the audit trail keeps the original).
+        body: m.hidden === 1 ? '' : m.body,
+        hidden: m.hidden === 1,
         isRead: m.is_read === 1,
         mine: m.sender_id === req.user.id,
         createdAt: m.created_at,

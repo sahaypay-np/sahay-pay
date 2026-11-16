@@ -3808,8 +3808,9 @@ function renderMessages(){
       var threads=pickList(d,["threads"]);
       if(!threads.length){ body.innerHTML=emptyState("💬", t("messages_empty"), ""); return; }
       body.innerHTML=threads.map(function(th){
-        var other=th.other||{};
-        return '<a class="card row-card" href="#/messages/'+encodeURIComponent(th.id)+'"><div class="grow"><div class="t">'+esc(other.displayName||other.username||"")+'</div><div class="small">'+esc(th.billTitle||"")+'</div><div class="small muted">'+esc(th.lastMessage?th.lastMessage.slice(0,80):"")+'</div></div>'+(th.unreadCount?'<span class="chip on">'+esc(th.unreadCount)+'</span>':"")+'<span>›</span></a>';
+        var other=th.otherUser||th.other||{};
+        var last=th.lastMessage&&th.lastMessage.body?th.lastMessage.body.slice(0,80):"";
+        return '<a class="card row-card" href="#/messages/'+encodeURIComponent(th.id)+'"><div class="grow"><div class="t">'+esc(other.displayName||other.username||"")+'</div><div class="small">'+esc(th.billTitle||"")+'</div><div class="small muted">'+esc(last)+'</div></div>'+(th.unreadCount?'<span class="chip on">'+esc(th.unreadCount)+'</span>':"")+'<span>›</span></a>';
       }).join("");
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(renderMessages); }
   })();
@@ -3825,7 +3826,7 @@ function renderMessageThread(threadId){
     try{
       var d=await api("/messages/"+encodeURIComponent(threadId));
       var th=d.thread||{};
-      var other=th.other||{};
+      var other=th.otherUser||th.other||{};
       $("#msg-title").textContent=other.displayName||other.username||t("messages");
       blocked=!!th.blockedBy;
       $("#msg-block").textContent=th.blockedBy?(th.blockedBy===S.user.id?t("message_unblock"):t("message_blocked")):t("message_block");
@@ -3834,7 +3835,7 @@ function renderMessageThread(threadId){
       body.innerHTML=msgs.map(function(m){
         var mine=m.senderId===S.user.id;
         return '<div class="card list-item" style="'+(mine?"margin-left:24px":"margin-right:24px")+'">'
-          +(m.hidden?'<p class="small muted">— '+esc(t("message_report"))+' —</p>':'<p style="margin:0">'+esc(m.body)+'</p>')
+          +(m.hidden?'<p class="small muted">— '+esc(t("message_hidden"))+' —</p>':'<p style="margin:0">'+esc(m.body)+'</p>')
           +'<p class="small muted" style="margin:4px 0 0">'+esc(timeAgo(m.createdAt))+(mine?"":" · <button class=\"btn secondary small\" data-rep-msg=\""+esc(m.id)+"\">"+esc(t("message_report"))+"</button>")+'</p></div>';
       }).join("");
       $all("[data-rep-msg]", body).forEach(function(b){
@@ -3889,9 +3890,9 @@ function renderReferrals(){
         +'<p class="small" style="word-break:break-all;text-align:center">'+esc(link)+'</p>'
         +'<div class="btn-row"><button class="btn" id="ref-copy">'+esc(t("copy_link"))+'</button><button class="btn secondary" id="ref-share">'+esc(t("referral_share"))+'</button><a class="btn secondary" target="_blank" rel="noopener" href="https://wa.me/?text='+encodeURIComponent(t("referral_landing_body")+" "+link)+'">WhatsApp</a></div></div>'
         +'<div class="card" style="margin-top:12px"><h2>'+esc(t("referral_stats"))+'</h2><div class="grid2">'
-        +'<div class="card stat"><div class="n">'+esc(me.totalCount||0)+'</div><div class="l">'+esc(t("referral_stats"))+'</div></div>'
-        +'<div class="card stat"><div class="n">'+esc(me.activeCount||0)+'</div><div class="l">'+esc(t("referral_active"))+'</div></div></div>'
-        +'<p style="margin-top:10px"><strong>'+esc(t("referral_badges"))+':</strong> '+(badges.length?badges.map(function(b){ return esc(t("referral_badge_"+b.threshold)||(""+b.threshold)); }).join(" · "):"—")+'</p>'
+        +'<div class="card stat"><div class="n">'+esc(me.totalReferrals!=null?me.totalReferrals:me.totalCount||0)+'</div><div class="l">'+esc(t("referral_stats"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(me.activeReferrals!=null?me.activeReferrals:me.activeCount||0)+'</div><div class="l">'+esc(t("referral_active"))+'</div></div></div>'
+        +'<p style="margin-top:10px"><strong>'+esc(t("referral_badges"))+':</strong> '+(badges.length?badges.map(function(b){ var th=(typeof b==="number"?b:b.threshold); return esc(t("referral_badge_"+th)||(""+th)); }).join(" · "):"—")+'</p>'
         +'<button class="btn secondary small" id="ref-opt" style="margin-top:8px">'+esc(me.optedOut?t("referral_opt_in"):t("referral_opt_out"))+'</button></div>'
         +'<div class="card" style="margin-top:12px"><h2>'+esc(t("referral_leaders"))+'</h2><div id="ref-leaders">'+esc(t("loading"))+'</div></div>';
       $("#ref-copy").onclick=function(){
@@ -3910,7 +3911,7 @@ function renderReferrals(){
       try{
         var l=await api("/referrals/leaders");
         var leaders=pickList(l,["leaders"]);
-        $("#ref-leaders").innerHTML=leaders.length?leaders.map(function(x, i){ return '<div class="kv"><span>'+(i+1)+'. '+esc(x.displayName||x.username||"")+'</span><b>'+esc(x.activeCount)+' '+esc(t("referral_active"))+'</b></div>'; }).join(""):'<p class="small">—</p>';
+        $("#ref-leaders").innerHTML=leaders.length?leaders.map(function(x, i){ return '<div class="kv"><span>'+(i+1)+'. '+esc(x.displayName||x.username||"")+'</span><b>'+esc(x.activeReferrals!=null?x.activeReferrals:x.activeCount)+' '+esc(t("referral_active"))+'</b></div>'; }).join(""):'<p class="small">—</p>';
       }catch(e){ var rl=$("#ref-leaders"); if(rl) rl.innerHTML='<p class="small">'+esc(e.message||"")+'</p>'; }
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(renderReferrals); }
   })();
@@ -3959,20 +3960,29 @@ function renderSummary(){
       var w=await api("/digest/weekly");
       var m=await api("/digest/monthly");
       var html="";
+      if(w.optedOut||m.optedOut){
+        html+='<div class="notice info"><strong>'+esc(t("digest_opted_out"))+'</strong><p style="margin:4px 0 0"><button class="btn secondary small" id="sum-opt-in">'+esc(t("digest_opt_in"))+'</button></p></div>';
+        body.innerHTML=html;
+        $("#sum-opt-in").onclick=async function(){ try{ await api("/digest/opt-in", {method:"POST"}); renderSummary(); }catch(e){ toast(e.message||t("err_generic"), true); } };
+        return;
+      }
+      var wg=w.given||{}, wr=w.received||{}, mg=m.given||{}, mr=m.received||{};
+      var cur=S.user.country==="IN"?"INR":"NPR";
       html+='<div class="card"><h2>'+esc(t("summary_weekly"))+'</h2>'
-        +'<p>'+esc(t("summary_bills_new"))+': <strong>'+esc((w.newBillsNear||[]).length)+'</strong></p>'
-        +'<p>'+esc(t("summary_gifts"))+': <strong>'+esc((w.giftsGiven||[]).length)+'</strong></p>'
-        +'<p>'+esc(t("summary_received"))+': <strong>'+esc((w.giftsReceived||[]).length)+'</strong></p>'
-        +(w.newBillsNear||[]).slice(0,5).map(function(b){ return '<div class="kv"><span><a href="#/bill/'+esc(b.id)+'">'+esc(b.title)+'</a></span><b>'+esc(money(b.amountMinor, b.currency))+'</b></div>'; }).join("")
+        +'<p>'+esc(t("summary_bills_new"))+': <strong>'+esc(w.newBillsInCity||0)+'</strong></p>'
+        +'<p>'+esc(t("summary_gifts"))+': <strong>'+esc(wg.count||0)+'</strong> · '+esc(money(wg.totalMinor||0, cur))+'</p>'
+        +'<p>'+esc(t("summary_received"))+': <strong>'+esc(wr.count||0)+'</strong> · '+esc(money(wr.totalMinor||0, cur))+'</p>'
+        +'<p>'+esc(t("summary_bills_helped"))+': <strong>'+esc(w.billsHelped||0)+'</strong></p>'
         +'</div>';
       html+='<div class="card" style="margin-top:12px"><h2>'+esc(t("summary_monthly"))+'</h2>'
-        +'<p>'+esc(t("summary_gifts"))+': <strong>'+esc(m.givenCount||0)+'</strong> · '+esc(money(m.givenTotalMinor||0, S.user.country==="IN"?"INR":"NPR"))+'</p>'
-        +'<p>'+esc(t("summary_received"))+': <strong>'+esc(m.receivedCount||0)+'</strong> · '+esc(money(m.receivedTotalMinor||0, S.user.country==="IN"?"INR":"NPR"))+'</p>'
-        +'<p>'+esc(t("summary_rank"))+': <strong>'+(m.rank?("#"+esc(m.rank)):"—")+'</strong></p></div>';
+        +'<p>'+esc(t("summary_gifts"))+': <strong>'+esc(mg.count||0)+'</strong> · '+esc(money(mg.totalMinor||0, cur))+'</p>'
+        +'<p>'+esc(t("summary_received"))+': <strong>'+esc(mr.count||0)+'</strong> · '+esc(money(mr.totalMinor||0, cur))+'</p>'
+        +'<p>'+esc(t("summary_bills_helped"))+': <strong>'+esc(m.billsHelped||0)+'</strong></p>'
+        +'<p>'+esc(t("summary_rank"))+': <strong>'+(m.leaderboardRank?("#"+esc(m.leaderboardRank)+" "+esc(t("summary_rank_of"))+" "+esc(m.leaderboardTotal||0)):"—")+'</strong></p></div>';
       html+='<div class="card" style="margin-top:12px"><button class="btn secondary" id="sum-opt">'+esc(t("digest_opt_out"))+'</button></div>';
       body.innerHTML=html;
       $("#sum-opt").onclick=async function(){
-        try{ await api("/digest/opt-out", {method:"POST"}); toast(t("saved")); }
+        try{ await api("/digest/opt-out", {method:"POST"}); toast(t("saved")); renderSummary(); }
         catch(e){ toast(e.message||t("err_generic"), true); }
       };
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(renderSummary); }
@@ -5002,7 +5012,7 @@ function renderAdminAppeals(){
       body.innerHTML=list.map(function(a){
         return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(a.target_type||"")+' '+esc(a.target_id||"")+'</strong><span class="chip">'+esc(a.status||"")+'</span></div>'
           +'<p class="small">'+esc(a.user_name||a.user_username||"")+' · '+esc(timeAgo(a.created_at))+'</p>'
-          +'<p>'+esc(a.reason||a.body||"")+'</p>'
+          +'<p>'+esc(a.explanation||a.reason||a.body||"")+'</p>'
           +(a.decision_note?'<p class="small">'+esc(t("appeal_decision_note"))+': '+esc(a.decision_note)+'</p>':"")
           +(a.target_type==="bill"?'<p><a class="btn secondary small" href="#/bill/'+encodeURIComponent(a.target_id)+'">'+esc(t("view_bill"))+'</a></p>':"")
           +(a.target_type==="user"?'<p><a class="btn secondary small" href="#/admin/users/'+encodeURIComponent(a.target_id)+'">'+esc(t("user_detail"))+'</a></p>':"")
@@ -5552,7 +5562,8 @@ function renderAdminWebhookLog(){
         : "")
         +'<div class="card" style="margin-top:12px"><h2>'+esc(t("webhook_log"))+' ('+list.length+')</h2>'
         +(list.map(function(w){
-          return '<div class="kv"><span>'+esc(w.event_type||w.event||"")+' · '+esc(timeAgo(w.created_at))+'</span><b>'+esc(w.status||"")+(w.status_code!=null?" ("+esc(w.status_code)+")":"")+'</b></div>'
+          var ok=w.status_code!=null&&w.status_code>=200&&w.status_code<300;
+          return '<div class="kv"><span>'+esc(w.payload_kind||"")+' · '+esc(timeAgo(w.created_at))+' · '+esc(w.target_url||"")+'</span><b>'+(ok?esc(t("webhook_delivered")):esc(t("webhook_failed")))+(w.status_code!=null?" ("+esc(w.status_code)+")":"")+'</b></div>'
             +(w.error?'<p class="small" style="color:var(--bad)">'+esc(w.error)+'</p>':"");
         }).join("")||'<p>'+esc(t("webhook_none"))+'</p>')
         +'</div>';
