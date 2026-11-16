@@ -414,13 +414,92 @@ function updateTopbar(){
 async function loadUnread(){
   var me=S.user&&S.user.id;
   try{
-    var d=await api("/notifications");
+    var d=await api("/notifications?limit=1");
     if(!S.user || S.user.id!==me) return; // user logged out / switched while loading
-    var list=pickList(d,["notifications"]);
-    var n=list.filter(function(x){ return !x.is_read && !x.isRead; }).length;
+    var n=(d&&d.unreadCount!=null)?d.unreadCount:0;
     var b=$("#bell-badge");
     if(n>0){ b.hidden=false; b.textContent=n>99?"99+":String(n); } else b.hidden=true;
+    // Item 611: live toast when a NEW notification arrives while the app
+    // is open (unread count went up since the last poll).
+    if(S.lastUnread!=null && n>S.lastUnread){
+      try{
+        var fresh=await api("/notifications?limit=1");
+        var list=pickList(fresh,["notifications"]);
+        if(list.length && !list[0].is_read && !list[0].isRead){
+          toast(list[0].title||t("notifications"));
+          playNotifSound();
+        }
+      }catch(e){ /* toast is best-effort */ }
+    }
+    S.lastUnread=n;
   }catch(e){ /* bell stays quiet on failure */ }
+}
+// Item 610: notification sound (Web Audio, two soft tones). Off by
+// default — enabled in Settings → notification preferences.
+function playNotifSound(){
+  try{
+    if(!(S.user&&S.user.prefs&&S.user.prefs.soundEnabled)) return;
+    var AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC) return;
+    var ctx=new AC();
+    [660, 880].forEach(function(freq, i){
+      var o=ctx.createOscillator(), g=ctx.createGain();
+      o.type="sine"; o.frequency.value=freq;
+      g.gain.setValueAtTime(0.12, ctx.currentTime+i*0.15);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+i*0.15+0.25);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(ctx.currentTime+i*0.15); o.stop(ctx.currentTime+i*0.15+0.3);
+    });
+  }catch(e){ /* sound is best-effort */ }
+}
+// Item 618: notification language. Stored notification text is English;
+// when the user picked a notification language, the client re-renders the
+// common kinds from templates in that language (falling back to the
+// stored text for kinds without a template).
+var NOTIF_TEMPLATES={
+  ne:{
+    post_approved:{title:"तपाईंको अनुरोध लाइभ भयो", body:"तपाईंको बिल स्वीकृत भयो र अब फिडमा छ।"},
+    post_rejected:{title:"तपाईंको अनुरोध स्वीकृत भएन", body:"तपाईंको बिल स्वीकृत भएन। तपाईं सहायता केन्द्रबाट अपिल गर्न सक्नुहुन्छ।"},
+    changes_requested:{title:"तपाईंको पोस्टमा परिवर्तन मागियो", body:"मालिकले तपाईंको पोस्ट लाइभ हुनुअघि केही परिवर्तन माग्नुभयो।"},
+    gift_started:{title:"कसैले सहयोग सुरु गरे", body:"कसैले तपाईंको बिलमा सहयोग गर्न सुरु गरे।"},
+    gift_confirmed:{title:"तपाईंको सहयोग पुग्यो", body:"तपाईंको सहयोग पुष्टि भयो। धन्यवाद — तपाईंले सहयोग गर्नुभयो।"},
+    gift_reported_sent:{title:"कसैले पैसा पठाएको बताए", body:"कसैले तपाईंलाई पैसा पठाएको बताए — के आयो?"},
+    message_received:{title:"नयाँ सन्देश", body:"तपाईंलाई नयाँ सन्देश आयो।"},
+    thank_you_received:{title:"धन्यवाद सन्देश", body:"कसैले तपाईंलाई धन्यवाद सन्देश पठाए।"},
+    verification_approved:{title:"प्रमाणीकरण स्वीकृत भयो", body:"तपाईंको प्रमाणीकरण स्वीकृत भयो।"},
+    bill_paused:{title:"तपाईंको बिल रोकियो", body:"तपाईंको बिल जाँच हुँदासम्म रोकिएको छ।"},
+    bill_removed:{title:"तपाईंको बिल हटाइयो", body:"रिपोर्ट समीक्षापछि तपाईंको बिल हटाइयो।"},
+    bill_restored:{title:"तपाईंको बिल फेरि लाइभ भयो", body:"तपाईंको बिल समीक्षा भयो र फिडमा फर्कियो।"},
+    complaint_resolved:{title:"तपाईंको गुनासो समाधान भयो", body:"तपाईंको गुनासो समाधान भयो।"},
+    appeal_decided:{title:"तपाईंको अपिलमा निर्णय भयो", body:"तपाईंको अपिलबारे निर्णय भयो।"},
+    gift_fully_funded:{title:"पूर्ण रूपमा सहयोग भयो!", body:"एउटा बिल पूर्ण रूपमा सहयोग भयो।"},
+    first_gift:{title:"पहिलो सहयोग आयो!", body:"तपाईंको बिलमा पहिलो सहयोग आयो।"}
+  },
+  hi:{
+    post_approved:{title:"आपका अनुरोध लाइव हो गया", body:"आपका बिल स्वीकृत हुआ और अब फ़ीड में है।"},
+    post_rejected:{title:"आपका अनुरोध स्वीकृत नहीं हुआ", body:"आपका बिल स्वीकृत नहीं हुआ। आप सहायता केंद्र से अपील कर सकते हैं।"},
+    changes_requested:{title:"आपके पोस्ट में बदलाव माँगे गए", body:"मालिक ने आपके पोस्ट के लाइव होने से पहले कुछ बदलाव माँगे हैं।"},
+    gift_started:{title:"किसी ने मदद शुरू की", body:"किसी ने आपके बिल में मदद शुरू की।"},
+    gift_confirmed:{title:"आपकी मदद पहुँच गई", body:"आपकी मदद की पुष्टि हो गई। धन्यवाद — आपने मदद की।"},
+    gift_reported_sent:{title:"किसी ने पैसा भेजने की बात कही", body:"किसी ने कहा कि उन्होंने आपको पैसा भेजा है — क्या आया?"},
+    message_received:{title:"नया संदेश", body:"आपको एक नया संदेश आया है।"},
+    thank_you_received:{title:"धन्यवाद नोट", body:"किसी ने आपको धन्यवाद नोट भेजा है।"},
+    verification_approved:{title:"सत्यापन स्वीकृत हुआ", body:"आपका सत्यापन स्वीकृत हो गया।"},
+    bill_paused:{title:"आपका बिल रोका गया", body:"आपका बिल जाँच के दौरान रोका गया है।"},
+    bill_removed:{title:"आपका बिल हटाया गया", body:"रिपोर्ट की समीक्षा के बाद आपका बिल हटा दिया गया।"},
+    bill_restored:{title:"आपका बिल फिर लाइव हो गया", body:"आपका बिल समीक्षा के बाद फ़ीड में वापस आ गया।"},
+    complaint_resolved:{title:"आपकी शिकायत सुलझ गई", body:"आपकी शिकायत सुलझ गई है।"},
+    appeal_decided:{title:"आपकी अपील पर फ़ैसला हुआ", body:"आपकी अपील पर फ़ैसला हो गया है।"},
+    gift_fully_funded:{title:"पूरी तरह मदद मिली!", body:"एक बिल को पूरी मदद मिल गई।"},
+    first_gift:{title:"पहली मदद आई!", body:"आपके बिल पर पहली मदद आई।"}
+  }
+};
+function renderNotificationText(n){
+  var lang=S.user&&S.user.prefs&&S.user.prefs.notifyLang;
+  if(lang && lang!=="en" && NOTIF_TEMPLATES[lang] && NOTIF_TEMPLATES[lang][n.kind]){
+    return NOTIF_TEMPLATES[lang][n.kind];
+  }
+  return {title:n.title||t("unknown_notif"), body:n.body||""};
 }
 function setActiveTab(tab){
   $all(".dock-tab").forEach(function(a){ a.classList.toggle("active", a.getAttribute("data-tab")===tab); });
@@ -466,6 +545,10 @@ $("#avatar-btn").addEventListener("click", function(){
   openSheet('<h2>'+esc(S.user.display_name||S.user.displayName||"")+'</h2><p class="small">@'+esc(S.user.username||"")+' · '+esc(S.user.city||"")+'</p>'
     +'<div style="display:grid;gap:8px;margin-top:10px">'
     +'<a class="btn secondary" href="#/profile/'+encodeURIComponent(S.user.username||"")+'">'+esc(t("my_profile"))+'</a>'
+    +'<a class="btn secondary" href="#/messages">'+esc(t("open_messages"))+'</a>'
+    +'<a class="btn secondary" href="#/referrals">'+esc(t("referrals"))+'</a>'
+    +'<a class="btn secondary" href="#/updates">'+esc(t("updates"))+'</a>'
+    +'<a class="btn secondary" href="#/summary">'+esc(t("summary"))+'</a>'
     +'<a class="btn secondary" href="#/settings">'+esc(t("settings"))+'</a>'
     +'<a class="btn secondary" href="#/verify">'+esc(t("verify_centre"))+'</a>'
     +'<a class="btn secondary" href="#/help">'+esc(t("help_centre"))+'</a>'
@@ -560,6 +643,13 @@ var ROUTES = [
   {re:/^#\/settings$/, fn:renderSettings, chrome:true},
   {re:/^#\/help$/, fn:renderHelp, chrome:true},
   {re:/^#\/notifications$/, fn:renderNotifications, chrome:true},
+  {re:/^#\/notifications\/([^\/\?]+)$/, fn:renderNotificationDetail, chrome:true},
+  {re:/^#\/messages$/, fn:renderMessages, chrome:true},
+  {re:/^#\/messages\/([^\/\?]+)$/, fn:renderMessageThread, chrome:true},
+  {re:/^#\/referrals$/, fn:renderReferrals, chrome:true},
+  {re:/^#\/r\/([^\/\?]+)$/, fn:renderReferralLanding, chrome:false},
+  {re:/^#\/updates$/, fn:renderUpdates, chrome:true},
+  {re:/^#\/summary$/, fn:renderSummary, chrome:true},
   {re:/^#\/verify$/, fn:renderVerify, chrome:true},
   {re:/^#\/gift\/([^\/\?]+)$/, fn:renderGift, chrome:true},
   {re:/^#\/founder-tip$/, fn:renderFounderTip, chrome:true},
@@ -567,8 +657,25 @@ var ROUTES = [
   {re:/^#\/admin\/dashboard$/, fn:renderAdminDashboard, chrome:true},
   {re:/^#\/admin\/queue$/, fn:renderAdminQueue, chrome:true},
   {re:/^#\/admin\/users$/, fn:renderAdminUsers, chrome:true},
+  {re:/^#\/admin\/users\/([^\/\?]+)$/, fn:renderAdminUserDetail, chrome:true},
   {re:/^#\/admin\/verifications$/, fn:renderAdminVerifications, chrome:true},
   {re:/^#\/admin\/reports$/, fn:renderAdminReports, chrome:true},
+  {re:/^#\/admin\/reports\/([^\/\?]+)$/, fn:renderAdminReportDetail, chrome:true},
+  {re:/^#\/admin\/complaints$/, fn:renderAdminComplaints, chrome:true},
+  {re:/^#\/admin\/appeals$/, fn:renderAdminAppeals, chrome:true},
+  {re:/^#\/admin\/disputes$/, fn:renderAdminDisputes, chrome:true},
+  {re:/^#\/admin\/analytics$/, fn:renderAdminAnalytics, chrome:true},
+  {re:/^#\/admin\/payouts$/, fn:renderAdminPayouts, chrome:true},
+  {re:/^#\/admin\/broadcasts$/, fn:renderAdminBroadcasts, chrome:true},
+  {re:/^#\/admin\/announcements$/, fn:renderAdminAnnouncements, chrome:true},
+  {re:/^#\/admin\/activity$/, fn:renderAdminActivity, chrome:true},
+  {re:/^#\/admin\/admins$/, fn:renderAdminAdmins, chrome:true},
+  {re:/^#\/admin\/security$/, fn:renderAdminSecurity, chrome:true},
+  {re:/^#\/admin\/escalations$/, fn:renderAdminEscalations, chrome:true},
+  {re:/^#\/admin\/weekly-report$/, fn:renderAdminWeeklyReport, chrome:true},
+  {re:/^#\/admin\/bridge-history$/, fn:renderAdminBridgeHistory, chrome:true},
+  {re:/^#\/admin\/webhook-log$/, fn:renderAdminWebhookLog, chrome:true},
+  {re:/^#\/admin\/leaderboard-audit$/, fn:renderAdminLeaderboardAudit, chrome:true},
   {re:/^#\/admin\/fees$/, fn:renderAdminFees, chrome:true},
   {re:/^#\/admin\/audit$/, fn:renderAdminAudit, chrome:true}
 ];
@@ -710,6 +817,8 @@ function renderOnboarding(){
       }
       var payload={displayName:name, age:age, country:chosenCountry, city:city, about:about, language:chosenLang, termsAccepted:true, privacyAccepted:true};
       if(photoUrl) payload.photoUrl=photoUrl;
+      // Item 673: referral code from the landing page (#/r/:code).
+      try{ var refCode=localStorage.getItem("sp_ref"); if(refCode) payload.ref=refCode; }catch(e){}
       var res=await api("/auth/onboard", {method:"POST", body:payload});
       S.user=res.user||res;
       if(res.csrfToken) S.csrfToken=res.csrfToken;
@@ -3168,6 +3277,19 @@ function renderSettings(){
   var showTotals=prefs.showTotals!==false && u.show_totals!==false;
   var anonDefault=prefs.anonDefault===true || u.anon_default===true;
   var themePref="system"; try{ themePref=localStorage.getItem("sp_theme")||"system"; }catch(e){}
+  // Phase 2 §7 notification preferences (610–618).
+  var nt=prefs.notifyTypes||{};
+  var NOTIF_EVENTS=["bill_approved","bill_rejected","changes_requested","gift_received","gift_confirmed","milestones","verification","messages","thanks","referral","digest","announcements","account","bills","gifts"];
+  var paused=prefs.pauseUntil && Date.parse(prefs.pauseUntil)>Date.now();
+  var qh=prefs.quietHours||null;
+  var qhStart=qh?qh.start:"", qhEnd=qh?qh.end:"";
+  var nLang=prefs.notifyLang||"en";
+  var soundOn=prefs.soundEnabled===true;
+  function hourOpts(sel){
+    var h='<option value="">—</option>';
+    for(var i=0;i<24;i++) h+='<option value="'+i+'"'+(String(sel)===String(i)?" selected":"")+'>'+String(i).padStart(2,"0")+":00</option>";
+    return h;
+  }
   view('<h1>'+esc(t("settings"))+'</h1>'
     +'<div class="card"><h2>'+esc(t("edit_profile"))+'</h2>'
     +'<label for="st-name">'+esc(t("display_name"))+'</label><input id="st-name" maxlength="60" value="'+esc(u.display_name||u.displayName||"")+'" autocomplete="name">'
@@ -3185,6 +3307,15 @@ function renderSettings(){
     +'<label class="check-row"><input type="checkbox" id="st-n2" '+(npGifts?"checked":"")+'> '+esc(t("notif_gift_sent"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="st-n3" '+(npBrands?"checked":"")+'> '+esc(t("notif_brand"))+' / '+esc(t("notif_auction"))+'</label>'
     +'<button class="btn secondary" id="st-save-prefs" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("notif_prefs_title"))+'</h2>'
+    +'<p class="small">'+esc(t("notif_security_note"))+'</p>'
+    +NOTIF_EVENTS.map(function(ev){ return '<label class="check-row"><input type="checkbox" data-nt-ev="'+esc(ev)+'" '+(nt[ev]===false?"":"checked")+'> '+esc(t("notif_event_"+ev))+'</label>'; }).join("")
+    +'<label class="check-row"><input type="checkbox" id="st-pause" '+(paused?"checked":"")+'> '+esc(t("notif_pause"))+'</label>'
+    +(paused?'<p class="small">'+esc(t("notif_pause_on", {date:fmtDate(prefs.pauseUntil)}))+'</p>':"")
+    +'<label>'+esc(t("notif_quiet_hours"))+'</label><div style="display:flex;gap:8px;align-items:center"><span class="small">'+esc(t("notif_quiet_start"))+'</span><select id="st-qh-start" style="flex:1">'+hourOpts(qhStart)+'</select><span class="small">'+esc(t("notif_quiet_end"))+'</span><select id="st-qh-end" style="flex:1">'+hourOpts(qhEnd)+'</select></div><p class="small">'+esc(t("notif_quiet_note"))+'</p>'
+    +'<label class="check-row"><input type="checkbox" id="st-sound" '+(soundOn?"checked":"")+'> '+esc(t("notif_sound"))+'</label>'
+    +'<label>'+esc(t("notif_lang"))+'</label><div class="seg" id="st-nlang"><button type="button" data-l="en" class="'+(nLang==="en"?"on":"")+'">English</button><button type="button" data-l="ne" class="'+(nLang==="ne"?"on":"")+'">नेपाली</button><button type="button" data-l="hi" class="'+(nLang==="hi"?"on":"")+'">हिन्दी</button></div>'
+    +'<button class="btn secondary" id="st-save-nt" style="margin-top:8px">'+esc(t("save"))+'</button></div>'
     +'<div class="card" style="margin-top:12px"><h2>'+esc(t("privacy_section"))+'</h2>'
     +'<label class="check-row"><input type="checkbox" id="st-show" '+(showTotals?"checked":"")+'> '+esc(t("show_history"))+'</label>'
     +'<label class="check-row"><input type="checkbox" id="st-anon" '+(anonDefault?"checked":"")+'> '+esc(t("anon_default"))+'</label>'
@@ -3260,6 +3391,29 @@ function renderSettings(){
     var b=$("#st-save-prefs"); b.disabled=true; b.textContent=t("loading");
     try{ await api("/profile/me", {method:"PATCH", body:{notifyPrefs:{posts:$("#st-n1").checked, gifts:$("#st-n2").checked, brands:$("#st-n3").checked}}}); toast(t("notification_prefs_saved")); }
     catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ b.disabled=false; b.textContent=t("save"); }
+  };
+  var newNlang=nLang;
+  $all("#st-nlang button").forEach(function(b){ b.onclick=function(){ newNlang=b.getAttribute("data-l"); $all("#st-nlang button").forEach(function(x){ x.classList.toggle("on", x===b); }); }; });
+  $("#st-save-nt").onclick=async function(){
+    var b=$("#st-save-nt"); b.disabled=true; b.textContent=t("loading");
+    try{
+      var types={};
+      $all("[data-nt-ev]").forEach(function(cb){ types[cb.getAttribute("data-nt-ev")]=cb.checked; });
+      var qs=$("#st-qh-start").value, qe=$("#st-qh-end").value;
+      var body={
+        notifyTypes:types,
+        pauseUntil:$("#st-pause").checked?new Date(Date.now()+7*24*3600000).toISOString():null,
+        quietHours:(qs!==""&&qe!=="")?{start:Number(qs), end:Number(qe)}:null,
+        tzOffsetMinutes:-new Date().getTimezoneOffset(),
+        notifyLang:newNlang,
+        soundEnabled:$("#st-sound").checked
+      };
+      var res=await api("/profile/me", {method:"PATCH", body:body});
+      if(res&&res.user) S.user=res.user;
+      toast(t("notif_prefs_saved"));
+      route();
+    }catch(e){ toast(e.message||t("err_generic"), true); }
     finally{ b.disabled=false; b.textContent=t("save"); }
   };
   $("#st-save-priv").onclick=async function(){
@@ -3358,6 +3512,10 @@ var CONTENT_RULES_HTML=
 var HELP_TOPICS=[
   {id:"about", titleKey:"topic_about", body:function(){ return '<p>'+esc(t("about_body"))+'</p>'+ABOUT_HTML; }},
   {id:"helping", titleKey:"topic_helping", body:function(){ return '<p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'<p class="small">'+esc(t("fee_sentence_supporter"))+' '+esc(t("fee_sentence_zero"))+'</p>'+crossBorderHtml(); }},
+  {id:"how-direct-payments-work", titleKey:"topic_direct_payments", body:function(){ return '<p>'+esc(t("direct_payments_body"))+'</p>'+neverHoldsHtml(); }},
+  {id:"referrals", titleKey:"topic_referrals", body:function(){ return '<p>'+esc(t("referrals_topic_body"))+'</p><a class="btn secondary" href="#/referrals">'+esc(t("referrals"))+'</a>'; }},
+  {id:"how-moderation-works", titleKey:"topic_moderation", body:function(){ return '<p>'+esc(t("moderation_topic_body"))+'</p>'; }},
+  {id:"install", titleKey:"topic_install", body:function(){ return '<p>'+esc(t("install_body"))+'</p><button class="btn secondary" id="help-install-btn">'+esc(t("install_now"))+'</button>'; }},
   {id:"posting", titleKey:"topic_posting", body:function(){ return '<p>'+esc(t("how_posting_body"))+'</p><p>'+esc(t("owner_approval_note"))+'</p>'; }},
   {id:"ranking", titleKey:"topic_ranking", body:function(){ return '<p>'+esc(t("ranking_body"))+'</p><p class="small">'+esc(t("ranking_note_settings"))+'</p>'; }},
   {id:"faq", titleKey:"topic_faq", body:function(){
@@ -3383,6 +3541,10 @@ function renderHelp(id, q){
     var tp=HELP_TOPICS.find(function(x){ return x.id===topic; });
     if(!tp){ go("#/help"); return; }
     view('<a href="#/help" class="small">← '+esc(t("back_to_help"))+'</a><h1 style="margin-top:8px">'+esc(t(tp.titleKey))+'</h1><div class="card">'+tp.body()+'</div>');
+    if(topic==="install"){
+      var ib=$("#help-install-btn");
+      if(ib) ib.onclick=function(){ promptInstall(); };
+    }
     if(topic==="complaints"){
       var form=$("#complaint-form");
       // Honeypot (item 788): hidden "website" field no human ever sees —
@@ -3413,35 +3575,298 @@ function renderHelp(id, q){
 }
 
 /* ---------- notifications ---------- */
+// Items 603/604/606/609: filter tabs, dismiss, detail view, load-more.
 function renderNotifications(){
   if(!S.user){ view(emptyState("🔔", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
-  view('<h1>'+esc(t("notifications"))+'</h1><button class="btn secondary small" id="nt-readall" style="margin-bottom:12px">'+esc(t("mark_all_read"))+'</button><div id="nt-body">'+skeleton(2)+'</div>');
-  $("#nt-readall").onclick=async function(){ var b=$("#nt-readall"); b.disabled=true; try{ await api("/notifications/read-all", {method:"POST"}); toast(t("all_read")); load(); updateTopbar(); }catch(e){ toast(e.message||t("err_generic"), true); } finally{ b.disabled=false; } };
+  view('<h1>'+esc(t("notifications"))+'</h1><button class="btn secondary small" id="nt-readall" style="margin-bottom:12px">'+esc(t("mark_all_read"))+'</button>'
+    +'<div class="tabs" id="nt-tabs"><button class="tab-btn on" data-g="">'+esc(t("notif_filter_all"))+'</button><button class="tab-btn" data-g="gifts">'+esc(t("notif_filter_gifts"))+'</button><button class="tab-btn" data-g="bills">'+esc(t("notif_filter_bills"))+'</button><button class="tab-btn" data-g="account">'+esc(t("notif_filter_account"))+'</button></div>'
+    +'<div id="nt-body">'+skeleton(2)+'</div><div id="nt-more"></div>');
+  var group="", cursor=null, loading=false;
+  $("#nt-readall").onclick=async function(){ var b=$("#nt-readall"); b.disabled=true; try{ await api("/notifications/read-all", {method:"POST"}); toast(t("all_read")); S.lastUnread=0; load(true); updateTopbar(); }catch(e){ toast(e.message||t("err_generic"), true); } finally{ b.disabled=false; } };
+  $all("#nt-tabs .tab-btn").forEach(function(b){ b.onclick=function(){ group=b.getAttribute("data-g"); $all("#nt-tabs .tab-btn").forEach(function(x){ x.classList.toggle("on", x===b); }); load(true); }; });
+  load(true);
+  async function load(reset){
+    if(loading) return;
+    loading=true;
+    var body=$("#nt-body"); if(!body){ loading=false; return; }
+    if(reset){ body.innerHTML=skeleton(2); cursor=null; $("#nt-more").innerHTML=""; }
+    try{
+      var qs="?limit=20"+(group?"&group="+encodeURIComponent(group):"")+(cursor?"&cursor="+encodeURIComponent(cursor):"");
+      var d=await api("/notifications"+qs);
+      var list=pickList(d,["notifications"]);
+      S.notifCache=reset?list:(S.notifCache||[]).concat(list);
+      cursor=d.nextCursor||null;
+      if(reset && !list.length){ body.innerHTML=emptyState("🔔", t("empty_notifications"), t("notifications_empty_action")); $("#nt-more").innerHTML=""; loading=false; return; }
+      var html=list.map(notifCardHtml).join("");
+      if(reset) body.innerHTML=html; else body.insertAdjacentHTML("beforeend", html);
+      $("#nt-more").innerHTML=cursor?'<button class="btn secondary" id="nt-loadmore">'+esc(t("notif_load_more"))+'</button>':"";
+      var lm=$("#nt-loadmore"); if(lm) lm.onclick=function(){ load(false); };
+      bindCards(body);
+    }catch(e){ if(reset){ body.innerHTML=errBox(e.message); bindErrRetry(function(){ load(true); }); } else toast(e.message||t("err_generic"), true); }
+    loading=false;
+  }
+  function bindCards(scope){
+    $all("[data-nt]", scope).forEach(function(card){
+      if(card.getAttribute("data-bound")) return;
+      card.setAttribute("data-bound","1");
+      card.onclick=async function(e){
+        if(e.target.closest("[data-dismiss]")) return;
+        var id=card.getAttribute("data-nt");
+        go("#/notifications/"+encodeURIComponent(id));
+      };
+      card.addEventListener("keydown", function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); card.click(); } });
+    });
+    $all("[data-dismiss]", scope).forEach(function(btn){
+      if(btn.getAttribute("data-bound")) return;
+      btn.setAttribute("data-bound","1");
+      btn.onclick=async function(e){
+        e.stopPropagation();
+        var id=btn.getAttribute("data-dismiss");
+        try{ await api("/notifications/"+encodeURIComponent(id), {method:"DELETE"}); var card=btn.closest("[data-nt]"); if(card) card.remove(); updateTopbar(); }
+        catch(err){ toast(err.message||t("err_generic"), true); }
+      };
+    });
+  }
+  function notifCardHtml(n){
+    var unread=!n.is_read&&!n.isRead;
+    var txt=renderNotificationText(n);
+    return '<div class="card list-item" data-nt="'+esc(n.id)+'" tabindex="0" role="button" style="'+(unread?"border-left:3px solid var(--accent)":"opacity:.75")+'">'+(unread?'<span class="chip on" style="margin-bottom:6px">'+esc(t("notif_new"))+'</span>':"")+'<strong>'+esc(txt.title)+'</strong><p class="small" style="margin:4px 0">'+esc(txt.body)+'</p><p class="small muted">'+esc(timeAgo(n.created_at||n.createdAt))+(n.link?' · <a href="'+esc(n.link)+'">'+esc(t("tap_to_open"))+'</a>':"")+'</p><button class="btn secondary small" data-dismiss="'+esc(n.id)+'" style="margin-top:6px">'+esc(t("notif_dismiss"))+'</button></div>';
+  }
+}
+// Item 606: notification detail view (marks the notification read).
+function renderNotificationDetail(id){
+  if(!S.user){ view(emptyState("🔔", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<a href="#/notifications" class="small">← '+esc(t("notifications"))+'</a><h1 style="margin-top:8px">'+esc(t("notif_detail"))+'</h1><div id="nt1-body">'+skeleton(1)+'</div>');
+  (async function(){
+    var body=$("#nt1-body"); if(!body) return;
+    try{
+      var d=await api("/notifications/"+encodeURIComponent(id));
+      var n=d.notification||d;
+      if(!n||!n.id){ body.innerHTML=emptyState("🔔", t("empty_notifications"), ""); return; }
+      var txt=renderNotificationText(n);
+      try{ await api("/notifications/"+encodeURIComponent(id)+"/read", {method:"POST"}); }catch(e){}
+      updateTopbar();
+      body.innerHTML='<div class="card"><p class="small muted">'+esc(timeAgo(n.created_at||n.createdAt))+' · '+esc(n.kind||"")+'</p><h2>'+esc(txt.title)+'</h2><p>'+esc(txt.body)+'</p>'
+        +(n.link?'<a class="btn" href="'+esc(n.link)+'">'+esc(t("tap_to_open"))+'</a>':"")
+        +'<button class="btn secondary" id="nt1-del" style="margin-top:10px">'+esc(t("notif_dismiss"))+'</button></div>';
+      $("#nt1-del").onclick=async function(){
+        try{ await api("/notifications/"+encodeURIComponent(id), {method:"DELETE"}); go("#/notifications"); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(function(){ renderNotificationDetail(id); }); }
+  })();
+}
+
+/* ---------- install prompt (item 699) ---------- */
+// PWA install: capture beforeinstallprompt; offer it after the 3rd visit
+// (a sheet, once per device, dismissible). iOS has no prompt event, so
+// the Help topic carries the manual steps instead.
+var deferredInstallPrompt=null;
+window.addEventListener("beforeinstallprompt", function(e){
+  e.preventDefault();
+  deferredInstallPrompt=e;
+  maybeShowInstall();
+});
+function maybeShowInstall(){
+  try{
+    if(!deferredInstallPrompt) return;
+    if(localStorage.getItem("sp_install_dismissed")) return;
+    var visits=Number(localStorage.getItem("sp_visits")||0);
+    if(visits<3) return;
+    if(document.getElementById("sheet-root")&&document.getElementById("sheet-root").innerHTML) return;
+    openSheet('<h2>'+esc(t("install_title"))+'</h2><p>'+esc(t("install_prompt_body"))+'</p><div class="btn-row"><button class="btn" id="in-install">'+esc(t("install_now"))+'</button><button class="btn secondary" id="in-later">'+esc(t("install_later"))+'</button></div>');
+    $("#in-install").onclick=function(){ promptInstall(); closeSheets(); };
+    $("#in-later").onclick=function(){ try{ localStorage.setItem("sp_install_dismissed","1"); }catch(e){} closeSheets(); };
+  }catch(e){ /* install prompt is best-effort */ }
+}
+async function promptInstall(){
+  if(deferredInstallPrompt){
+    try{ deferredInstallPrompt.prompt(); await deferredInstallPrompt.userChoice; deferredInstallPrompt=null; return; }
+    catch(e){ /* fall through to the Help topic */ }
+  }
+  go("#/help?topic=install");
+}
+
+/* ---------- messages (items 681–691) ---------- */
+function renderMessages(){
+  if(!S.user){ view(emptyState("💬", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<h1>'+esc(t("messages"))+'</h1><p class="small">'+esc(t("message_filter_note"))+'</p><div id="msg-body">'+skeleton(2)+'</div>');
+  (async function(){
+    var body=$("#msg-body"); if(!body) return;
+    try{
+      var d=await api("/messages");
+      var threads=pickList(d,["threads"]);
+      if(!threads.length){ body.innerHTML=emptyState("💬", t("messages_empty"), ""); return; }
+      body.innerHTML=threads.map(function(th){
+        var other=th.other||{};
+        return '<a class="card row-card" href="#/messages/'+encodeURIComponent(th.id)+'"><div class="grow"><div class="t">'+esc(other.displayName||other.username||"")+'</div><div class="small">'+esc(th.billTitle||"")+'</div><div class="small muted">'+esc(th.lastMessage?th.lastMessage.slice(0,80):"")+'</div></div>'+(th.unreadCount?'<span class="chip on">'+esc(th.unreadCount)+'</span>':"")+'<span>›</span></a>';
+      }).join("");
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(renderMessages); }
+  })();
+}
+function renderMessageThread(threadId){
+  if(!S.user){ view(emptyState("💬", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<a href="#/messages" class="small">← '+esc(t("messages"))+'</a><h1 id="msg-title" style="margin-top:8px">'+esc(t("messages"))+'</h1><div id="msg-body">'+skeleton(2)+'</div>'
+    +'<div class="card" style="margin-top:12px"><p class="small">'+esc(t("message_filter_note"))+'</p><label class="sr-only" for="msg-input">'+esc(t("message_placeholder"))+'</label><textarea id="msg-input" maxlength="2000" rows="2" placeholder="'+esc(t("message_placeholder"))+'"></textarea><div class="btn-row" style="margin-top:8px"><button class="btn" id="msg-send">'+esc(t("message_send"))+'</button><button class="btn secondary" id="msg-block">'+esc(t("message_block"))+'</button></div></div>');
+  var blocked=false;
   load();
   async function load(){
-    var body=$("#nt-body"); if(!body) return;
+    var body=$("#msg-body"); if(!body) return;
     try{
-      var d=await api("/notifications");
-      var list=pickList(d,["notifications"]);
-      S.notifCache=list;
-      if(!list.length){ body.innerHTML=emptyState("🔔", t("empty_notifications"), t("notifications_empty_action")); return; }
-      body.innerHTML=list.map(function(n){
-        var unread=!n.is_read&&!n.isRead;
-        return '<div class="card list-item" data-nt="'+esc(n.id)+'" tabindex="0" role="button" style="'+(unread?"border-left:3px solid var(--accent)":"opacity:.75")+'">'+(unread?'<span class="chip on" style="margin-bottom:6px">'+esc(t("notif_new"))+'</span>':"")+'<strong>'+esc(n.title||t("unknown_notif"))+'</strong><p class="small" style="margin:4px 0">'+esc(n.body||"")+'</p><p class="small muted">'+esc(timeAgo(n.created_at||n.createdAt))+(n.link?' · <a href="'+esc(n.link)+'">'+esc(t("tap_to_open"))+'</a>':"")+'</p></div>';
+      var d=await api("/messages/"+encodeURIComponent(threadId));
+      var th=d.thread||{};
+      var other=th.other||{};
+      $("#msg-title").textContent=other.displayName||other.username||t("messages");
+      blocked=!!th.blockedBy;
+      $("#msg-block").textContent=th.blockedBy?(th.blockedBy===S.user.id?t("message_unblock"):t("message_blocked")):t("message_block");
+      var msgs=pickList(d,["messages"]);
+      if(!msgs.length){ body.innerHTML='<p class="small">'+esc(t("messages_empty"))+'</p>'; return; }
+      body.innerHTML=msgs.map(function(m){
+        var mine=m.senderId===S.user.id;
+        return '<div class="card list-item" style="'+(mine?"margin-left:24px":"margin-right:24px")+'">'
+          +(m.hidden?'<p class="small muted">— '+esc(t("message_report"))+' —</p>':'<p style="margin:0">'+esc(m.body)+'</p>')
+          +'<p class="small muted" style="margin:4px 0 0">'+esc(timeAgo(m.createdAt))+(mine?"":" · <button class=\"btn secondary small\" data-rep-msg=\""+esc(m.id)+"\">"+esc(t("message_report"))+"</button>")+'</p></div>';
       }).join("");
-      $all("[data-nt]", body).forEach(function(card){
-        card.onclick=async function(){
-          var id=card.getAttribute("data-nt");
-          var n=list.find(function(x){ return String(x.id)===String(id); });
-          try{ await api("/notifications/"+encodeURIComponent(id)+"/read", {method:"POST"}); }catch(e){}
-          updateTopbar();
-          if(n&&n.link) go(n.link.replace(/^.*(#\/.*)$/,"$1"));
-          else load();
+      $all("[data-rep-msg]", body).forEach(function(b){
+        b.onclick=async function(){
+          try{ await api("/reports", {method:"POST", body:{targetType:"message", targetId:b.getAttribute("data-rep-msg"), reason:"offensive", note:"Reported from a message thread."}}); toast(t("report_sent")||"Report sent."); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
         };
-        card.addEventListener("keydown", function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); card.click(); } });
       });
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
   }
+  $("#msg-send").onclick=async function(){
+    var inp=$("#msg-input");
+    var text=inp.value.trim();
+    if(!text) return;
+    if(blocked){ toast(t("message_blocked"), true); return; }
+    var btn=$("#msg-send"); btn.disabled=true;
+    try{
+      await api("/messages/"+encodeURIComponent(threadId), {method:"POST", body:{body:text}});
+      inp.value="";
+      load();
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+    finally{ btn.disabled=false; }
+  };
+  $("#msg-block").onclick=async function(){
+    try{
+      if(blocked && $("#msg-block").textContent===t("message_unblock")){
+        await api("/messages/"+encodeURIComponent(threadId)+"/unblock", {method:"POST"});
+        toast(t("message_unblock"));
+      } else if(!blocked){
+        await api("/messages/"+encodeURIComponent(threadId)+"/block", {method:"POST"});
+        toast(t("message_block"));
+      }
+      load();
+    }catch(e){ toast(e.message||t("err_generic"), true); }
+  };
+  // Poll for new messages while the thread is open (15s).
+  var iv=setInterval(function(){ if(!document.getElementById("msg-body")){ clearInterval(iv); return; } load(); }, 15000);
+}
+
+/* ---------- referrals (items 671–680) ---------- */
+function renderReferrals(){
+  if(!S.user){ view(emptyState("🔗", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<h1>'+esc(t("referrals"))+'</h1><p class="small">'+esc(t("referrals_topic_body"))+'</p><div id="ref-body">'+skeleton(2)+'</div>');
+  (async function(){
+    var body=$("#ref-body"); if(!body) return;
+    try{
+      var d=await api("/referrals/me");
+      var me=d||{};
+      var link=location.origin+"/#/r/"+encodeURIComponent(me.code||"");
+      var badges=me.badges||[];
+      body.innerHTML='<div class="card"><h2>'+esc(t("referral_code"))+'</h2><p style="font-size:22px;font-weight:700;letter-spacing:2px;text-align:center">'+esc(me.code||"—")+'</p>'
+        +'<p class="small" style="word-break:break-all;text-align:center">'+esc(link)+'</p>'
+        +'<div class="btn-row"><button class="btn" id="ref-copy">'+esc(t("copy_link"))+'</button><button class="btn secondary" id="ref-share">'+esc(t("referral_share"))+'</button><a class="btn secondary" target="_blank" rel="noopener" href="https://wa.me/?text='+encodeURIComponent(t("referral_landing_body")+" "+link)+'">WhatsApp</a></div></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("referral_stats"))+'</h2><div class="grid2">'
+        +'<div class="card stat"><div class="n">'+esc(me.totalCount||0)+'</div><div class="l">'+esc(t("referral_stats"))+'</div></div>'
+        +'<div class="card stat"><div class="n">'+esc(me.activeCount||0)+'</div><div class="l">'+esc(t("referral_active"))+'</div></div></div>'
+        +'<p style="margin-top:10px"><strong>'+esc(t("referral_badges"))+':</strong> '+(badges.length?badges.map(function(b){ return esc(t("referral_badge_"+b.threshold)||(""+b.threshold)); }).join(" · "):"—")+'</p>'
+        +'<button class="btn secondary small" id="ref-opt" style="margin-top:8px">'+esc(me.optedOut?t("referral_opt_in"):t("referral_opt_out"))+'</button></div>'
+        +'<div class="card" style="margin-top:12px"><h2>'+esc(t("referral_leaders"))+'</h2><div id="ref-leaders">'+esc(t("loading"))+'</div></div>';
+      $("#ref-copy").onclick=function(){
+        var done=function(){ toast(t("referral_copied")); };
+        if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(link).then(done, function(){ toast(link); });
+        else done();
+      };
+      $("#ref-share").onclick=async function(){
+        if(navigator.share){ try{ await navigator.share({title:"Sahay Pay", text:t("referral_landing_body"), url:link}); }catch(e){} }
+        else $("#ref-copy").click();
+      };
+      $("#ref-opt").onclick=async function(){
+        try{ await api("/referrals/"+(me.optedOut?"opt-in":"opt-out"), {method:"POST"}); toast(t("saved")); renderReferrals(); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+      try{
+        var l=await api("/referrals/leaders");
+        var leaders=pickList(l,["leaders"]);
+        $("#ref-leaders").innerHTML=leaders.length?leaders.map(function(x, i){ return '<div class="kv"><span>'+(i+1)+'. '+esc(x.displayName||x.username||"")+'</span><b>'+esc(x.activeCount)+' '+esc(t("referral_active"))+'</b></div>'; }).join(""):'<p class="small">—</p>';
+      }catch(e){ var rl=$("#ref-leaders"); if(rl) rl.innerHTML='<p class="small">'+esc(e.message||"")+'</p>'; }
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(renderReferrals); }
+  })();
+}
+// Item 672: public referral landing page (no login needed).
+function renderReferralLanding(code){
+  view('<div class="center-page"><div class="slide-ic">🔗</div><h1 id="rl-title">'+esc(t("loading"))+'</h1><p id="rl-body"></p><div id="rl-cta"></div></div>');
+  (async function(){
+    try{
+      var d=await api("/referrals/landing/"+encodeURIComponent(code));
+      try{ localStorage.setItem("sp_ref", code); }catch(e){}
+      $("#rl-title").textContent=t("referral_landing_title", {name:d.referrerName||""});
+      $("#rl-body").textContent=t("referral_landing_body");
+      $("#rl-cta").innerHTML='<a class="btn" href="#/country">'+esc(t("get_started"))+'</a>';
+    }catch(e){
+      $("#rl-title").textContent=t("referrals");
+      $("#rl-body").textContent=e.message||t("err_generic");
+      $("#rl-cta").innerHTML='<a class="btn secondary" href="#/welcome">'+esc(t("back"))+'</a>';
+    }
+  })();
+}
+
+/* ---------- updates (items 696–698) ---------- */
+function renderUpdates(){
+  view('<h1>'+esc(t("updates"))+'</h1><div id="up-body">'+skeleton(2)+'</div>');
+  (async function(){
+    var body=$("#up-body"); if(!body) return;
+    try{
+      var d=await api("/announcements");
+      var list=pickList(d,["announcements"]);
+      if(!list.length){ body.innerHTML=emptyState("📣", t("updates_empty"), ""); return; }
+      body.innerHTML=list.map(function(a){
+        return '<div class="card list-item"><strong>'+esc(a.title)+'</strong><p class="small muted">'+esc(timeAgo(a.publishAt||a.publish_at||a.createdAt))+'</p><p>'+esc(a.body)+'</p></div>';
+      }).join("");
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(renderUpdates); }
+  })();
+}
+
+/* ---------- summary (items 654–658) ---------- */
+function renderSummary(){
+  if(!S.user){ view(emptyState("📊", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<h1>'+esc(t("summary"))+'</h1><div id="sum-body">'+skeleton(2)+'</div>');
+  (async function(){
+    var body=$("#sum-body"); if(!body) return;
+    try{
+      var w=await api("/digest/weekly");
+      var m=await api("/digest/monthly");
+      var html="";
+      html+='<div class="card"><h2>'+esc(t("summary_weekly"))+'</h2>'
+        +'<p>'+esc(t("summary_bills_new"))+': <strong>'+esc((w.newBillsNear||[]).length)+'</strong></p>'
+        +'<p>'+esc(t("summary_gifts"))+': <strong>'+esc((w.giftsGiven||[]).length)+'</strong></p>'
+        +'<p>'+esc(t("summary_received"))+': <strong>'+esc((w.giftsReceived||[]).length)+'</strong></p>'
+        +(w.newBillsNear||[]).slice(0,5).map(function(b){ return '<div class="kv"><span><a href="#/bill/'+esc(b.id)+'">'+esc(b.title)+'</a></span><b>'+esc(money(b.amountMinor, b.currency))+'</b></div>'; }).join("")
+        +'</div>';
+      html+='<div class="card" style="margin-top:12px"><h2>'+esc(t("summary_monthly"))+'</h2>'
+        +'<p>'+esc(t("summary_gifts"))+': <strong>'+esc(m.givenCount||0)+'</strong> · '+esc(money(m.givenTotalMinor||0, S.user.country==="IN"?"INR":"NPR"))+'</p>'
+        +'<p>'+esc(t("summary_received"))+': <strong>'+esc(m.receivedCount||0)+'</strong> · '+esc(money(m.receivedTotalMinor||0, S.user.country==="IN"?"INR":"NPR"))+'</p>'
+        +'<p>'+esc(t("summary_rank"))+': <strong>'+(m.rank?("#"+esc(m.rank)):"—")+'</strong></p></div>';
+      html+='<div class="card" style="margin-top:12px"><button class="btn secondary" id="sum-opt">'+esc(t("digest_opt_out"))+'</button></div>';
+      body.innerHTML=html;
+      $("#sum-opt").onclick=async function(){
+        try{ await api("/digest/opt-out", {method:"POST"}); toast(t("saved")); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(renderSummary); }
+  })();
 }
 
 /* ---------- verification centre ---------- */
@@ -4017,6 +4442,16 @@ async function boot(){
 
   if(!location.hash) location.hash="#/splash";
   updateSavedBadge();
+  // Item 699: visit counter (install prompt after the 3rd visit).
+  // Items 666/668: last-visit tracking for re-engagement cards.
+  try{
+    localStorage.setItem("sp_visits", String(Number(localStorage.getItem("sp_visits")||0)+1));
+    var lastVisit=Number(localStorage.getItem("sp_last_visit")||0);
+    S.lastVisitMs=lastVisit||null;
+    localStorage.setItem("sp_last_visit", String(Date.now()));
+  }catch(e){}
+  // Item 611: poll for new notifications every 60s (live toast + badge).
+  setInterval(function(){ if(S.user) loadUnread(); }, 60000);
   route();
   window.addEventListener("online", function(){ hideOfflineBanner(); toast(t("session_restored")); });
   window.addEventListener("offline", function(){ showOfflineBanner(true); });

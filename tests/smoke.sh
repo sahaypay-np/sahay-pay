@@ -290,7 +290,7 @@ r=$(curl -s -w '\n%{http_code}' "$B/feed"); c=$(code "$r")
 t "feed after maintenance off -> 200" 200 "$c"
 
 # --- DB-backed rate limiting: 429 + Retry-After (LAST: burns the admin-login bucket) ---
-# admin-login hits so far: before-setup(1) + wrong(1) + correct(1) + re-login(1) = 4 of 10.
+# admin-login hits so far: before-setup(1) + wrong(1) + correct(1) + re-login(1) = 4 of 5 (item 777).
 for i in 1 2 3 4 5 6 7 8; do curl -s -o /dev/null -X POST "$B/admin/login" $J -d '{"pin":"wrongpin"}'; done
 r=$(curl -s -i -X POST "$B/admin/login" $J -d '{"pin":"wrongpin"}')
 echo "$r" | grep -qi '429' && { echo "PASS: 13th admin login -> 429"; pass=$((pass+1)); } || { echo "FAIL: expected 429"; fail=$((fail+1)); }
