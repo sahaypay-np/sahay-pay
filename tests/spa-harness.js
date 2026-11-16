@@ -104,6 +104,10 @@ async function main() {
   check('leaders empty state', await waitFor(() => text().includes('No confirmed') || !!doc.querySelector('.empty'), 5000, 'leaders empty'));
   window.location.hash = '#/help';
   check('help centre renders', await waitFor(() => text().includes('Help Centre') || text().includes('Help Center'), 5000, 'help'));
+  window.location.hash = '#/help?topic=terms';
+  check('terms page renders full text', await waitFor(() => text().includes('Governing law and contact') && text().includes('Demo Mode'), 5000, 'terms'));
+  window.location.hash = '#/help?topic=privacy';
+  check('privacy page renders full text', await waitFor(() => text().includes('Your rights') && text().includes('Individual Privacy Act 2075'), 5000, 'privacy'));
   window.location.hash = '#/settings';
   check('settings renders with prefs', await waitFor(() => !!$('#st-save-prefs') && !!$('#st-save-priv'), 5000, 'settings'));
   window.location.hash = '#/mybills';
