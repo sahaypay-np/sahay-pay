@@ -10,6 +10,8 @@ const express = require('express');
 const db = require('../db');
 const { feeModelSentence } = require('../lib/fees');
 const { TERMS_VERSION, PRIVACY_VERSION, POLICY_EFFECTIVE_DATE } = require('../lib/policy');
+const { CITIES, findCity, haversineKm } = require('../lib/cities');
+const { askTypeOf, expiryOf, isExpired } = require('./bills');
 
 const router = express.Router();
 
@@ -51,6 +53,7 @@ router.get('/config', async (req, res, next) => {
       paymentMethods,
       categories,
       minGiftMinor,
+      cities: CITIES,
       policyVersion: { terms: TERMS_VERSION, privacy: PRIVACY_VERSION, effective: POLICY_EFFECTIVE_DATE },
       crossBorderNote: CROSS_BORDER_NOTE,
       giftAmountChips: { NPR: [10000, 50000, 100000], INR: [10000, 50000, 100000] },
@@ -66,7 +69,8 @@ const AMOUNT_BANDS = {
   small: [0, 500000], // up to NPR/INR 5,000
   medium: [500001, 2500000],
   large: [2500001, 10000000],
-  huge: [10000001, Infinity],
+  huge: [10000001, 50000000],
+  humongous: [50000001, Infinity], // phase 2 (item 28): Humongous split
 };
 
 function parseCursor(cursor) {
@@ -83,48 +87,142 @@ function encodeCursor(offset) {
   return Buffer.from(JSON.stringify({ offset })).toString('base64url');
 }
 
-function scoreBill(bill, viewerCountry, nowMs) {
-  let score = 0;
-  if (bill.verifiedCount > 0) score += 40; // verified boost
-  if (viewerCountry && bill.country === viewerCountry) score += 25; // same-country boost
+// Ranking factors, each with a stable key used for the "why am I seeing
+// this" note (item 16) and the ranking explainer (item 62).
+function scoreBill(bill, viewerCountry, viewerCity, nowMs) {
+  const factors = [];
+  if (bill.verifiedCount > 0) factors.push(['verified', 40]);
+  if (viewerCountry && bill.country === viewerCountry) factors.push(['same_country', 25]);
+  if (viewerCity && bill.city && bill.city.toLowerCase() === viewerCity.toLowerCase()) {
+    factors.push(['same_city', 15]); // item 44
+  }
   const ageHours = (nowMs - new Date(bill.created_at).getTime()) / 3600000;
-  if (ageHours < 24) score += 20; // recency boost
-  else if (ageHours < 72) score += 10;
-  else if (ageHours < 168) score += 5;
-  if (bill.supporterCount === 0) score += 15; // fewer-supporters boost
-  else if (bill.supporterCount < 3) score += 8;
-  if (bill.posterApprovedCount <= 1) score += 10; // new-poster fairness boost
-  return score;
+  if (ageHours < 24) factors.push(['recent', 20]);
+  else if (ageHours < 72) factors.push(['recent', 10]);
+  else if (ageHours < 168) factors.push(['recent', 5]);
+  if (bill.supporterCount === 0) factors.push(['few_supporters', 15]);
+  else if (bill.supporterCount < 3) factors.push(['few_supporters', 8]);
+  if (bill.posterApprovedCount <= 1) factors.push(['new_poster', 10]);
+  // Staleness boost (item 60): old + barely seen bills get a second chance.
+  // No per-view timestamps exist, so approximate from age + low view count.
+  if (ageHours >= 168 && (bill.views || 0) < 5) factors.push(['stale', 10]);
+  let score = 0;
+  let top = null;
+  for (const [key, pts] of factors) {
+    score += pts;
+    if (!top || pts > top.pts) top = { key, pts };
+  }
+  return { score, topFactor: top ? top.key : 'recent' };
+}
+
+// --- Typo-tolerant search (item 74) ---
+function normText(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  const prev = [];
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let up = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = prev[j];
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, up + (a[i - 1] === b[j - 1] ? 0 : 1));
+      up = tmp;
+    }
+  }
+  return prev[b.length];
+}
+
+// Every query token must match some haystack token: substring, or (for
+// tokens of 4+ chars) within edit distance 2.
+function matchesSearch(haystackTokens, queryTokens) {
+  return queryTokens.every((q) => haystackTokens.some((h) =>
+    h.includes(q) || (q.length >= 4 && h.length >= 4 && editDistance(q, h) <= 2)
+  ));
+}
+
+// Ranking post-pass (items 59 + 64): at most one bill per poster in the
+// top 10, and no category fills more than half of the first 20 cards.
+// Stable: only demotes a card to the first later slot that keeps the rules.
+function applyRankingRules(bills) {
+  const out = [];
+  const deferred = [];
+  const posterInTop10 = new Set();
+  const catInFirst20 = new Map();
+  for (const b of bills) {
+    const pos = out.length;
+    const posterKey = b.posterId || b.poster?.username || b.id;
+    const catCount = catInFirst20.get(b.category) || 0;
+    const breaksRotation = pos < 10 && posterInTop10.has(posterKey);
+    const breaksCap = pos < 20 && catCount >= 10;
+    if (breaksRotation || breaksCap) {
+      deferred.push(b);
+      continue;
+    }
+    out.push(b);
+    if (pos < 10) posterInTop10.add(posterKey);
+    if (pos < 20) catInFirst20.set(b.category, catCount + 1);
+  }
+  return out.concat(deferred);
 }
 
 router.get('/feed', async (req, res, next) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
     const offset = parseCursor(req.query.cursor);
-    const sort = ['recommended', 'newest', 'almost_funded', 'most_supported'].includes(req.query.sort)
+    const sort = ['recommended', 'newest', 'almost_funded', 'most_supported', 'fewest_supported', 'largest', 'smallest', 'needs_most'].includes(req.query.sort)
       ? req.query.sort
       : 'recommended';
     const viewerCountry = req.user?.country || (['NP', 'IN'].includes(req.query.country) ? req.query.country : null);
+    const viewerCity = req.user?.city || (typeof req.query.homeCity === 'string' ? req.query.homeCity.trim() : '');
     const filterCountry = ['NP', 'IN'].includes(req.query.country) ? req.query.country : null;
     const categories = typeof req.query.category === 'string'
       ? req.query.category.split(',').map((c) => c.trim()).filter(Boolean)
       : [];
     const band = AMOUNT_BANDS[req.query.amountBand || req.query.band];
+    const amountMin = Number(req.query.amountMin) > 0 ? Math.floor(Number(req.query.amountMin)) : null;
+    const amountMax = Number(req.query.amountMax) > 0 ? Math.floor(Number(req.query.amountMax)) : null;
     const verifiedOnly = req.query.verified === '1' || req.query.verified === 'true';
+    const idVerifiedOnly = req.query.idVerified === '1' || req.query.id_verified === '1';
+    const nameVerifiedOnly = req.query.nameVerified === '1' || req.query.name_verified === '1';
+    const verifiedFirst = req.query.verifiedFirst === '1' || req.query.verified_first === '1';
     const payDirectOnly = req.query.payDirect === '1' || req.query.payDirect === 'true'
       || req.query.pay_direct === '1' || req.query.pay_direct === 'true';
     const charityOnly = req.query.charity === '1' || req.query.charity === 'true';
+    const askType = ['bill', 'dream', 'business', 'charity'].includes(req.query.askType) ? req.query.askType : null;
     const billShownOnly = req.query.billShown === '1' || req.query.billShown === 'true'
       || req.query.bill_shown === '1' || req.query.bill_shown === 'true';
+    const includeCompleted = req.query.includeCompleted === '1' || req.query.include_completed === '1';
+    const fundedOnly = req.query.fundedOnly === '1' || req.query.funded_only === '1';
     const cityFilter = typeof req.query.city === 'string' ? req.query.city.trim() : '';
+    const nearCity = typeof req.query.near === 'string' ? req.query.near.trim() : '';
+    const radiusKm = Math.min(Math.max(Number(req.query.radiusKm) || 50, 5), 1000);
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const posted = req.query.posted; // today|week|month
     const seen = typeof req.query.seen === 'string'
       ? req.query.seen.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 500)
       : [];
 
-    // Approved bills only. Build the WHERE clause with parameters.
+    // Approved bills only (plus completed when asked — item 27). Build the
+    // WHERE clause with parameters.
     const params = [];
-    let where = `b.status = 'approved'`;
+    let where = fundedOnly
+      ? `b.status = 'completed'`
+      : includeCompleted
+        ? `(b.status = 'approved' OR b.status = 'completed')`
+        : `b.status = 'approved'`;
     if (filterCountry) { params.push(filterCountry); where += ` AND b.country = $${params.length}`; }
     if (categories.length) {
       const ph = categories.map((c) => { params.push(c); return `$${params.length}`; }).join(',');
@@ -134,6 +232,12 @@ router.get('/feed', async (req, res, next) => {
       params.push(band[0]); where += ` AND b.amount_minor >= $${params.length}`;
       if (Number.isFinite(band[1])) { params.push(band[1]); where += ` AND b.amount_minor <= $${params.length}`; }
     }
+    if (amountMin !== null) { params.push(amountMin); where += ` AND b.amount_minor >= $${params.length}`; }
+    if (amountMax !== null) { params.push(amountMax); where += ` AND b.amount_minor <= $${params.length}`; }
+    if (askType === 'charity') where += ' AND b.charity = 1';
+    else if (askType === 'business') where += ' AND b.business = 1';
+    else if (askType === 'dream') where += ' AND b.dream = 1';
+    else if (askType === 'bill') where += ' AND b.charity = 0 AND b.business = 0 AND b.dream = 0';
     if (payDirectOnly) where += ' AND b.pay_direct = 1';
     if (charityOnly) where += ' AND b.charity = 1';
     if (billShownOnly) where += ' AND b.photo_url IS NOT NULL';
@@ -158,6 +262,8 @@ router.get('/feed', async (req, res, next) => {
               u.photo_url AS poster_photo, u.city AS poster_city,
               (SELECT COUNT(*) FROM verifications v WHERE v.bill_id = b.id AND v.status = 'approved') AS verified_count,
               (SELECT COUNT(*) FROM verifications v WHERE v.user_id = b.user_id AND v.status = 'approved') AS user_verified_count,
+              (SELECT COUNT(*) FROM verifications v WHERE v.status = 'approved' AND v.type = 'id' AND (v.bill_id = b.id OR (v.bill_id IS NULL AND v.user_id = b.user_id))) AS id_verified_count,
+              (SELECT COUNT(*) FROM verifications v WHERE v.status = 'approved' AND v.type = 'name' AND (v.bill_id = b.id OR (v.bill_id IS NULL AND v.user_id = b.user_id))) AS name_verified_count,
               (SELECT COUNT(DISTINCT supporter_id) FROM gifts g WHERE g.bill_id = b.id AND g.status = 'confirmed') AS supporter_count,
               (SELECT COUNT(*) FROM bills b2 WHERE b2.user_id = b.user_id AND b2.status = 'approved') AS poster_approved_count,
               (SELECT COUNT(*) FROM bills b2 WHERE b2.user_id = b.user_id) AS poster_total_count
@@ -168,7 +274,10 @@ router.get('/feed', async (req, res, next) => {
       params
     );
 
-    let bills = rows.map((r) => ({
+    // Expired approved bills leave the feed (lazy expiry, item 181).
+    const liveRows = rows.filter((r) => !isExpired(r));
+
+    let bills = liveRows.map((r) => ({
       id: r.id,
       requestCode: r.request_code,
       title: r.title,
@@ -180,6 +289,9 @@ router.get('/feed', async (req, res, next) => {
       dueDate: r.due_date,
       story: r.story,
       charity: r.charity === 1,
+      business: r.business === 1,
+      dream: r.dream === 1,
+      askType: askTypeOf(r),
       anonymous: r.anonymous === 1,
       status: r.status,
       city: r.city,
@@ -189,6 +301,8 @@ router.get('/feed', async (req, res, next) => {
       payDirect: r.pay_direct === 1,
       views: r.views,
       createdAt: r.created_at,
+      expiresAt: expiryOf(r),
+      posterId: r.user_id,
       poster: r.anonymous === 1
         ? { displayName: 'Anonymous', username: null, photoUrl: null, city: r.poster_city, country: r.country }
         : {
@@ -199,22 +313,74 @@ router.get('/feed', async (req, res, next) => {
             country: r.country,
           },
       verifiedCount: Number(r.verified_count) + Number(r.user_verified_count),
+      idVerified: Number(r.id_verified_count) > 0,
+      nameVerified: Number(r.name_verified_count) > 0,
       supporterCount: Number(r.supporter_count),
       posterApprovedCount: Number(r.poster_approved_count),
     }));
 
     if (verifiedOnly) bills = bills.filter((b) => b.verifiedCount > 0);
+    if (idVerifiedOnly) bills = bills.filter((b) => b.idVerified);
+    if (nameVerifiedOnly) bills = bills.filter((b) => b.nameVerified);
+
+    // Search (item 66 + typo tolerance, item 74): title, story, poster
+    // first name, category, city, biller.
+    if (q) {
+      const queryTokens = normText(q).split(' ').filter(Boolean);
+      bills = bills.filter((b) => {
+        const hay = normText([
+          b.title, b.story, b.category, b.city, b.company,
+          (b.poster.displayName || '').split(' ')[0],
+        ].join(' ')).split(' ').filter(Boolean);
+        return matchesSearch(hay, queryTokens);
+      });
+    }
+
+    // Near-me radius (item 41) + distance labels (item 45).
+    const homeCity = findCity(nearCity || viewerCity);
+    if (homeCity) {
+      for (const b of bills) {
+        const bc = findCity(b.city);
+        b.distanceKm = bc ? Math.round(haversineKm(homeCity, bc)) : null;
+      }
+    }
+    if (nearCity) {
+      if (!homeCity) bills = [];
+      else bills = bills.filter((b) => b.distanceKm !== null && b.distanceKm <= radiusKm);
+    }
 
     const nowMs = Date.now();
     if (sort === 'recommended') {
-      bills.forEach((b) => { b.score = scoreBill(b, viewerCountry, nowMs); });
+      bills.forEach((b) => {
+        const s = scoreBill(b, viewerCountry, viewerCity, nowMs);
+        b.score = s.score;
+        b.whySeeing = s.topFactor;
+      });
       bills.sort((a, b) => b.score - a.score || new Date(b.createdAt) - new Date(a.createdAt));
+      if (verifiedFirst) {
+        bills.sort((a, b) => (b.verifiedCount > 0) - (a.verifiedCount > 0) || b.score - a.score);
+      }
+      bills = applyRankingRules(bills);
     } else if (sort === 'newest') {
       bills.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     } else if (sort === 'almost_funded') {
       bills.sort((a, b) => (b.coveredMinor / b.amountMinor) - (a.coveredMinor / a.amountMinor));
     } else if (sort === 'most_supported') {
       bills.sort((a, b) => b.supporterCount - a.supporterCount);
+    } else if (sort === 'fewest_supported') {
+      bills.sort((a, b) => a.supporterCount - b.supporterCount || new Date(b.createdAt) - new Date(a.createdAt));
+    } else if (sort === 'largest') {
+      bills.sort((a, b) => b.amountMinor - a.amountMinor);
+    } else if (sort === 'smallest') {
+      bills.sort((a, b) => a.amountMinor - b.amountMinor);
+    } else if (sort === 'needs_most') {
+      // Fewest supporters + oldest + largest remaining.
+      bills.sort((a, b) => (a.supporterCount - b.supporterCount)
+        || (new Date(a.createdAt) - new Date(b.createdAt))
+        || ((b.amountMinor - b.coveredMinor) - (a.amountMinor - a.coveredMinor)));
+    }
+    if (sort !== 'recommended' && verifiedFirst) {
+      bills.sort((a, b) => (b.verifiedCount > 0) - (a.verifiedCount > 0));
     }
 
     const total = bills.length;
@@ -224,7 +390,7 @@ router.get('/feed', async (req, res, next) => {
     // Enrich just the page: approved badges (bill-level + poster-level) and
     // the public masked payout hints, so cards can show them without extra calls.
     if (page.length) {
-      const userByBill = new Map(rows.map((r) => [r.id, r.user_id]));
+      const userByBill = new Map(liveRows.map((r) => [r.id, r.user_id]));
       const pageIds = page.map((b) => b.id);
       const ph = pageIds.map((_, i) => `$${i + 1}`).join(',');
       const userIds = [...new Set(pageIds.map((id) => userByBill.get(id)).filter(Boolean))];
@@ -261,13 +427,104 @@ router.get('/feed', async (req, res, next) => {
     }
 
     res.json({
-      bills: page.map(({ score, ...rest }) => rest),
+      bills: page.map(({ score, posterId, ...rest }) => rest),
       total,
       nextCursor,
       emptyMessage: total === 0
         ? 'No approved bills match — try widening your filters. When the owner approves the first posts, they will appear here.'
         : undefined,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/feed/counts — live facet counts for the filter panel (item 21).
+// Counts respect the country/city/posted base filters (passed as the same
+// query params as /feed) but NOT the facet being counted, so every chip
+// shows how many bills it would add. Expired bills are excluded.
+router.get('/feed/counts', async (req, res, next) => {
+  try {
+    const filterCountry = ['NP', 'IN'].includes(req.query.country) ? req.query.country : null;
+    const cityFilter = typeof req.query.city === 'string' ? req.query.city.trim() : '';
+    const posted = req.query.posted;
+    const params = [];
+    let where = `b.status = 'approved'`;
+    if (filterCountry) { params.push(filterCountry); where += ` AND b.country = $${params.length}`; }
+    if (cityFilter) { params.push(`%${cityFilter.toLowerCase()}%`); where += ` AND LOWER(b.city) LIKE $${params.length}`; }
+    if (posted === 'today' || posted === 'week' || posted === 'month') {
+      const hours = posted === 'today' ? 24 : posted === 'week' ? 168 : 720;
+      params.push(new Date(Date.now() - hours * 3600000).toISOString());
+      where += ` AND b.created_at >= $${params.length}`;
+    }
+    const { rows } = await db.query(
+      `SELECT b.id, b.category, b.amount_minor, b.charity, b.business, b.dream,
+              b.photo_url, b.pay_direct, b.approved_at, b.expires_at, b.status,
+              (SELECT COUNT(*) FROM verifications v WHERE v.status = 'approved' AND (v.bill_id = b.id OR (v.bill_id IS NULL AND v.user_id = b.user_id))) AS verified_count,
+              (SELECT COUNT(*) FROM verifications v WHERE v.status = 'approved' AND v.type = 'id' AND (v.bill_id = b.id OR (v.bill_id IS NULL AND v.user_id = b.user_id))) AS id_count,
+              (SELECT COUNT(*) FROM verifications v WHERE v.status = 'approved' AND v.type = 'name' AND (v.bill_id = b.id OR (v.bill_id IS NULL AND v.user_id = b.user_id))) AS name_count
+       FROM bills b WHERE ${where} LIMIT 2000`,
+      params
+    );
+    const live = rows.filter((r) => !isExpired(r));
+    const byCategory = {};
+    const byBand = { small: 0, medium: 0, large: 0, huge: 0, humongous: 0 };
+    const byAskType = { bill: 0, dream: 0, business: 0, charity: 0 };
+    let verified = 0, idVerified = 0, nameVerified = 0, billShown = 0, payDirect = 0;
+    for (const r of live) {
+      byCategory[r.category] = (byCategory[r.category] || 0) + 1;
+      for (const [band, [lo, hi]] of Object.entries(AMOUNT_BANDS)) {
+        if (r.amount_minor >= lo && r.amount_minor <= hi) { byBand[band]++; break; }
+      }
+      byAskType[askTypeOf(r)]++;
+      if (Number(r.verified_count) > 0) verified++;
+      if (Number(r.id_count) > 0) idVerified++;
+      if (Number(r.name_count) > 0) nameVerified++;
+      if (r.photo_url) billShown++;
+      if (r.pay_direct === 1) payDirect++;
+    }
+    const completed = await db.get(`SELECT COUNT(*) AS n FROM bills WHERE status = 'completed'`);
+    res.json({
+      total: live.length,
+      byCategory, byBand, byAskType,
+      verified, idVerified, nameVerified,
+      billShown, hasPhoto: billShown, payDirect,
+      fullyFunded: Number(completed?.n) || 0,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/feed/suggest?q= — search suggestions (item 67): live bill
+// titles + categories matching the typed prefix.
+router.get('/feed/suggest', async (req, res, next) => {
+  try {
+    const q = normText(req.query.q || '');
+    if (q.length < 2) return res.json({ suggestions: [] });
+    const { rows } = await db.query(
+      `SELECT b.title, b.category FROM bills b WHERE b.status = 'approved' ORDER BY b.created_at DESC LIMIT 200`
+    );
+    const seen = new Set();
+    const suggestions = [];
+    const cats = await db.getSettingJson('categories', []);
+    for (const c of cats) {
+      if (normText(c).includes(q) && !seen.has(c)) {
+        seen.add(c);
+        suggestions.push({ kind: 'category', text: c });
+      }
+    }
+    for (const r of rows) {
+      const tokens = normText(r.title).split(' ').filter(Boolean);
+      if (tokens.some((tok) => tok.startsWith(q) || (q.length >= 4 && editDistance(q, tok) <= 1))) {
+        if (!seen.has(r.title)) {
+          seen.add(r.title);
+          suggestions.push({ kind: 'title', text: r.title });
+        }
+      }
+      if (suggestions.length >= 8) break;
+    }
+    res.json({ suggestions: suggestions.slice(0, 8) });
   } catch (err) {
     next(err);
   }
