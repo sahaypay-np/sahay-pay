@@ -276,6 +276,28 @@ async function main() {
   check('bell badge hidden after logout', $('#bell-badge').hidden === true);
   check('country chip hidden after logout', $('#country-chip').hidden === true);
 
+  // 6c. Admin session survives a page reload: boot() restores it from the
+  // 24h sp_admin cookie, so a fresh page load must open the dashboard
+  // directly instead of showing the PIN gate. (The user session was just
+  // logged out, so only the admin cookie is live here.)
+  const dom2 = await JSDOM.fromURL(BASE + '/', {
+    runScripts: 'dangerously',
+    resources: 'usable',
+    pretendToBeVisual: true,
+    virtualConsole: vc,
+    beforeParse(window2) {
+      window2.fetch = jarFetch;
+      window2.HTMLElement.prototype.scrollIntoView = function () {};
+      window2.scrollTo = function () {};
+    },
+  });
+  const doc2 = dom2.window.document;
+  const text2 = () => (doc2.getElementById('view') ? doc2.getElementById('view').textContent : '');
+  check('fresh page load boots', await waitFor(() => text2().includes('Sahay Pay'), 8000, 'reload boot'));
+  dom2.window.location.hash = '#/admin/dashboard';
+  check('admin dashboard opens after reload without the PIN gate', await waitFor(() => !!doc2.getElementById('ad-body') && !text2().includes('needs the owner PIN') && !text2().includes('Admin login'), 8000, 'reload dashboard'));
+  check('reloaded dashboard shows real metrics', await waitFor(() => text2().includes('Total users'), 5000, 'reload metrics'));
+
   // 7. No uncaught page errors at any point.
   check('no uncaught page errors', errors.length === 0, errors.slice(0, 5).join(' | '));
 

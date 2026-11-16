@@ -268,7 +268,13 @@ function setActiveTab(tab){
 function applyI18nStatic(){
   $all("[data-i18n]").forEach(function(n){ n.textContent=t(n.getAttribute("data-i18n")); });
 }
-function view(html){ $("#view").innerHTML=html; window.scrollTo(0,0); applyI18nStatic(); try{ $("#view").focus({preventScroll:true}); }catch(e){ try{ $("#view").focus(); }catch(e2){} } }
+/* Navigation token: every view() call bumps NAV and returns it. Async
+   render callbacks capture the token before their await and bail if it
+   changed — the user navigated away (or the view re-rendered), so a late
+   response must never clobber the current view or touch elements that
+   no longer exist. */
+var NAV=0;
+function view(html){ NAV++; $("#view").innerHTML=html; window.scrollTo(0,0); applyI18nStatic(); try{ $("#view").focus({preventScroll:true}); }catch(e){ try{ $("#view").focus(); }catch(e2){} } return NAV; }
 function go(hash){ location.hash=hash; }
 function needUser(){
   if(S.user) return true;
@@ -513,6 +519,7 @@ function renderOnboarding(){
     if(!ok) return;
     if(age<18){ go("#/age-block"); return; }
     var btn=$("#ob-submit"); btn.disabled=true; btn.textContent=t("loading");
+    var op=NAV;
     try{
       var photoUrl=null;
       var f=$("#ob-photo").files[0];
@@ -526,9 +533,11 @@ function renderOnboarding(){
       var res=await api("/auth/onboard", {method:"POST", body:payload});
       S.user=res.user||res;
       try{ localStorage.setItem("sp_lang", chosenLang); }catch(e){}
+      if(op!==NAV) return; // navigated away mid-submit; account exists, no clobber
       view('<div class="center-page"><div class="slide-ic">🎉</div><h1>'+esc(t("youre_in"))+'</h1><p>'+esc(t("youre_in_body"))+'</p><button class="btn" id="in-go" style="max-width:360px">'+esc(t("start_swiping"))+'</button></div>');
       $("#in-go").onclick=function(){ go("#/swipe"); };
     }catch(err){
+      if(op!==NAV) return;
       btn.disabled=false; btn.textContent=t("create_profile");
       if(err.status===403 && (err.code==="AGE_BLOCK"||/18/.test(err.message))){ go("#/age-block"); return; }
       toast(err.message||t("err_generic"), true);
@@ -626,7 +635,8 @@ function renderSwipe(){
     if(reset) wrap.innerHTML=skeleton(1);
     try{
       if(reset || S.feed.length===0) await loadFeed(reset);
-    }catch(e){ wrap.innerHTML=errBox(e.message); bindErrRetry(function(){ draw(true); }); $("#swipe-controls").hidden=true; return; }
+      wrap=$("#deck-wrap"); if(!wrap) return; // navigated away mid-load
+    }catch(e){ if(!document.getElementById("deck-wrap")) return; wrap.innerHTML=errBox(e.message); bindErrRetry(function(){ draw(true); }); var ctl=$("#swipe-controls"); if(ctl) ctl.hidden=true; return; }
     if(S.feed.length===0){
       $("#swipe-controls").hidden=true;
       var anyFilter = S.filters.categories.length||S.filters.band||S.filters.verifiedOnly||S.filters.payDirectOnly||S.filters.charity||S.filters.city||S.filters.posted!=="any";
@@ -719,8 +729,9 @@ async function fetchBill(id){
   return d.bill||d;
 }
 function renderBill(id){
-  view(skeleton(2));
+  var tok=view(skeleton(2));
   fetchBill(id).then(function(bill){
+    if(tok!==NAV) return;
     var cur=bill.currency||curOf(bill.country);
     var user=bill.user||bill.poster||{};
     var name=bill.anonymous? t("anonymous") : (user.display_name||user.displayName||bill.display_name||bill.displayName||(bill.user||{}).display_name||bill.username||"");
@@ -762,6 +773,7 @@ function renderBill(id){
     $("#report-btn").onclick=function(){ openReportSheet("bill", bill.id); };
     var pd=$("#pay-direct-btn"); if(pd) pd.onclick=function(){ openPayDirect(bill); };
   }).catch(function(e){
+    if(tok!==NAV) return;
     view(emptyState("🧾", t("bill_not_found"), e.message||"", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>', "h1"));
   });
 }
@@ -801,24 +813,27 @@ function openReportSheet(targetType, targetId){
   };
 }
 function renderPhoto(billId){
-  view('<a href="#/bill/'+encodeURIComponent(billId)+'" class="small">← '+esc(t("back"))+'</a><h1>'+esc(t("bill_photo_heading"))+'</h1><div id="photo-wrap" style="margin-top:10px">'+skeleton(1)+'</div>');
+  var tok=view('<a href="#/bill/'+encodeURIComponent(billId)+'" class="small">← '+esc(t("back"))+'</a><h1>'+esc(t("bill_photo_heading"))+'</h1><div id="photo-wrap" style="margin-top:10px">'+skeleton(1)+'</div>');
   fetchBill(billId).then(function(bill){
+    if(tok!==NAV) return;
     var photo=bill.photo_url||bill.photoUrl||bill.public_photo_url||"";
     var sup=bill.support_photo_url||bill.supportPhotoUrl||"";
-    $("#photo-wrap").innerHTML = photo
+    var wrap=$("#photo-wrap"); if(!wrap) return;
+    wrap.innerHTML = photo
       ? '<img class="full-photo" src="'+esc(photo)+'" alt="'+esc(t("bill_photo_alt"))+'">'
         +(sup?'<h2>'+esc(t("support_photo"))+'</h2><img class="full-photo" src="'+esc(sup)+'" alt="'+esc(t("support_photo"))+'" loading="lazy">':"")
         +'<div class="btn-row"><a class="btn" href="#/gift/'+encodeURIComponent(bill.id)+'">💙 '+esc(t("help_this_bill"))+'</a><button class="btn secondary" id="ph-share">🔗 '+esc(t("share"))+'</button></div>'
       : emptyState("🖼️", t("no_photo"), "", "");
     var s=$("#ph-share"); if(s) s.onclick=function(){ copyText(location.origin+location.pathname+"#/bill/"+bill.id, t("copied_link")); };
-  }).catch(function(e){ $("#photo-wrap").innerHTML=emptyState("🧾", t("bill_not_found"), e.message||""); });
+  }).catch(function(e){ if(tok!==NAV) return; var wrap=$("#photo-wrap"); if(!wrap) return; wrap.innerHTML=emptyState("🧾", t("bill_not_found"), e.message||""); });
 }
 
 /* ---------- gift journey (4 steps) ---------- */
 function renderGift(billId, q){
   var direct=q&&q.direct==="1";
-  view(skeleton(2));
+  var tok=view(skeleton(2));
   fetchBill(billId).then(function(bill){
+    if(tok!==NAV) return;
     var cur=bill.currency||curOf(bill.country);
     var total=bill.amount_minor||bill.amountMinor||0, got=bill.covered_minor||bill.coveredMinor||0;
     var remaining=Math.max(0,total-got);
@@ -867,11 +882,13 @@ function renderGift(billId, q){
         if(g.amountMinor<1000){ setFieldErr("g-custom","g-err",t("amount_min",{n:money(1000,cur)})); return; }
         if(g.amountMinor>remaining && remaining>0){ setFieldErr("g-custom","g-err",t("amount_max",{n:money(remaining,cur)})); return; }
         var btn=$("#g-next"); btn.disabled=true; btn.textContent=t("loading");
+        var op=NAV;
         try{
           try{ g.quote=await api("/gifts/quote", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor}}); }
           catch(e){ g.quote=quoteLocal(g.amountMinor, cur, !!bill.charity); }
+          if(op!==NAV) return;
           g.step=2; draw();
-        }catch(e){ btn.disabled=false; btn.textContent=t("continue_btn"); toast(e.message||t("fee_quote_failed"), true); }
+        }catch(e){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("continue_btn"); toast(e.message||t("fee_quote_failed"), true); }
       };
     }
     function drawCheck(){
@@ -915,6 +932,7 @@ function renderGift(billId, q){
         if(!$("#g-human").checked){ $("#g-err2").textContent=t("human_check_needed"); return; }
         g.human=true;
         var btn=$("#g-to-send"); btn.disabled=true; btn.textContent=t("loading");
+        var op=NAV;
         try{
           var created=await api("/gifts", {method:"POST", body:{billId:bill.id, amountMinor:g.amountMinor, tipMinor:g.tipMinor||0}});
           g.giftId=created.id||created.giftId||(created.gift&&created.gift.id);
@@ -923,8 +941,9 @@ function renderGift(billId, q){
           g.payoutMethods=rev.payoutMethods||(rev.payoutMethod?[rev.payoutMethod]:(rev.payout?[rev.payout]:[]));
           g.payDirectInfo=rev.payDirect||null;
           g.payout=g.payoutMethods[0]||{};
+          if(op!==NAV) return;
           g.step=3; draw();
-        }catch(e){ btn.disabled=false; btn.textContent=t("show_details"); toast(e.message||t("err_generic"), true); }
+        }catch(e){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("show_details"); toast(e.message||t("err_generic"), true); }
       };
     }
     function sendInstructions(method){
@@ -978,10 +997,12 @@ function renderGift(billId, q){
       var gc=$("#g-copy"); if(gc) gc.onclick=function(){ copyText(copyVal, t("copied")); };
       $("#g-sent").onclick=async function(){
         var btn=$("#g-sent"); btn.disabled=true; btn.textContent=t("loading");
+        var op=NAV;
         try{
           await api("/gifts/"+encodeURIComponent(g.giftId)+"/reported-sent", {method:"POST", body:{reference:$("#g-ref").value.trim()||undefined}});
+          if(op!==NAV) return;
           g.step=4; draw();
-        }catch(e){ btn.disabled=false; btn.textContent=t("i_sent_it"); toast(e.message||t("err_generic"), true); }
+        }catch(e){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("i_sent_it"); toast(e.message||t("err_generic"), true); }
       };
       $("#g-cancel").onclick=function(){
         confirmDialog(t("couldnt_send"), t("send_failed_note"), t("yes"), function(){ go("#/bill/"+encodeURIComponent(bill.id)); });
@@ -995,6 +1016,7 @@ function renderGift(billId, q){
         +'<a class="btn secondary" href="#/mybills">'+esc(t("my_bills"))+'</a></div></div>');
     }
   }).catch(function(e){
+    if(tok!==NAV) return;
     view(emptyState("🧾", t("bill_not_found"), e.message||"", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>', "h1"));
   });
 }
@@ -1315,6 +1337,7 @@ function renderPost(){
       +nav(true, t("submit_approval"), null, true));
     bindNav(function(){ p.step=5; draw(); }, async function(){
       var btn=$("#p-next"); btn.disabled=true; btn.textContent=t("loading");
+      var op=NAV;
       try{
         if(p.redactedDataUrl && !p.photoUrl){
           var blob=await (await fetch(p.redactedDataUrl)).blob();
@@ -1351,12 +1374,14 @@ function renderPost(){
         }
         try{ localStorage.removeItem("sp_post_draft"); }catch(e){}
         S.post=blankPost();
+        if(op!==NAV) return; // submitted, but the user left; don't clobber the new view
         view('<div class="center-page"><div class="slide-ic">✅</div><h1>'+esc(t("post_submitted"))+'</h1>'
           +'<div class="card" style="width:100%;max-width:420px"><div class="kv"><span>'+esc(t("request_code"))+'</span><b>'+esc(p.requestCode)+'</b></div><div class="kv"><span>'+esc(t("bill_status_label"))+'</span><b>'+esc(t("pending_review"))+'</b></div></div>'
           +'<p>'+esc(t("what_next"))+'</p><a class="btn" style="max-width:360px" href="#/mybills">'+esc(t("see_mybills"))+'</a></div>');
       }catch(e){
+        if(op!==NAV) return;
         btn.disabled=false; btn.textContent=t("submit_approval");
-        $("#e-submit").textContent=e.message||t("err_generic");
+        var es=$("#e-submit"); if(es) es.textContent=e.message||t("err_generic");
       }
     });
   }
@@ -1448,8 +1473,9 @@ function renderBrands(){
   }
 }
 function renderBrand(id){
-  view(skeleton(2));
+  var tok=view(skeleton(2));
   api("/brands/"+encodeURIComponent(id)).then(function(d){
+    if(tok!==NAV) return;
     var b=d.brand||d;
     view('<a href="#/brands" class="small">← '+esc(t("back"))+'</a><div class="card" style="margin-top:8px">'
       +'<h1>'+esc(b.display_name||b.displayName||b.name||"")+'</h1>'
@@ -1462,7 +1488,7 @@ function renderBrand(id){
     $("#br-share").onclick=function(){ copyText(location.origin+location.pathname+"#/brand/"+b.id, t("copied_link")); };
     $("#br-report").onclick=function(){ openReportSheet("brand", b.id); };
     $("#br-connect").onclick=function(){ openBrandConnect(b); };
-  }).catch(function(e){ view(emptyState("🏷️", t("brand_not_found"), e.message||"", "", "h1")); });
+  }).catch(function(e){ if(tok!==NAV) return; view(emptyState("🏷️", t("brand_not_found"), e.message||"", "", "h1")); });
 }
 function openBrandConnect(brand){
   if(!needUser()) return;
@@ -1529,13 +1555,15 @@ function renderBrandNew(){
     if(!phone){ setFieldErr("bn-phone","e-bn-phone",t("err_phone")); ok=false; }
     if(!ok) return;
     var btn=$("#bn-submit"); btn.disabled=true; btn.textContent=t("loading");
+    var op=NAV;
     try{
       var visualUrl=null;
       var f=$("#bn-file").files[0];
       if(f){ var up=await uploadFile(f,"support"); visualUrl=up.url||up.fileUrl||up.path; }
       await api("/brands", {method:"POST", body:{name:brand, displayName:$("#bn-display").value.trim()||undefined, story:story, country:cc, city:$("#bn-city").value.trim()||undefined, contactPhone:phone, contentNoFee:!!$("#bn-content").checked, visualUrl:visualUrl||undefined}});
+      if(op!==NAV) return;
       toast(t("brand_ask_sent")); go("#/brands");
-    }catch(err){ btn.disabled=false; btn.textContent=t("submit"); toast(err.message||t("err_generic"), true); }
+    }catch(err){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("submit"); toast(err.message||t("err_generic"), true); }
   });
 }
 
@@ -1583,8 +1611,9 @@ function openAuctionCreate(){
   };
 }
 function renderAuction(id){
-  view(skeleton(2));
+  var tok=view(skeleton(2));
   api("/auctions/"+encodeURIComponent(id)).then(function(d){
+    if(tok!==NAV) return;
     var a=d.auction||d;
     var cur=a.currency||"NPR";
     var bids=pickList(a,["bids"])||pickList(d,["bids"]);
@@ -1614,7 +1643,7 @@ function renderAuction(id){
       try{ await api("/auctions/"+encodeURIComponent(a.id)+"/bid", {method:"POST", body:{amountMinor:amt}}); toast(t("bid_placed")); route(); }
       catch(e){ bb.disabled=false; bb.textContent=t("place_bid"); toast(e.message||t("err_generic"), true); }
     };
-  }).catch(function(e){ view(emptyState("🔨", t("auction_not_found"), e.message||"", "", "h1")); });
+  }).catch(function(e){ if(tok!==NAV) return; view(emptyState("🔨", t("auction_not_found"), e.message||"", "", "h1")); });
 }
 
 /* ---------- my bills ---------- */
@@ -1783,8 +1812,9 @@ function openDocsUpload(bill){
 
 /* ---------- public profile ---------- */
 function renderProfile(username){
-  view(skeleton(2));
+  var tok=view(skeleton(2));
   api("/profile/"+encodeURIComponent(username)).then(function(d){
+    if(tok!==NAV) return;
     var u=d.profile||d.user||d;
     var bills=pickList(d,["bills","liveAsks"])||[];
     var blocked=S.blocked.indexOf(u.id||username)>=0;
@@ -1808,7 +1838,7 @@ function renderProfile(username){
       if(i>=0){ S.blocked.splice(i,1); } else { S.blocked.push(key); }
       saveBlocked(); toast(t("blocked")); route();
     };
-  }).catch(function(e){ view(emptyState("👤", t("profile_not_found"), e.message||"", "", "h1")); });
+  }).catch(function(e){ if(tok!==NAV) return; view(emptyState("👤", t("profile_not_found"), e.message||"", "", "h1")); });
 }
 
 /* ---------- settings ---------- */
@@ -1982,7 +2012,7 @@ function renderHelp(id, q){
         if(!s||!b){ $("#cp-err").textContent=t("err_complaint_fields"); return; }
         $("#cp-err").textContent="";
         var btn=$("#cp-send"); btn.disabled=true; btn.textContent=t("loading");
-        try{ await api("/complaints", {method:"POST", body:{subject:s, body:b}}); toast(t("complaint_sent")); $("#cp-subject").value=""; $("#cp-body").value=""; }
+        try{ await api("/complaints", {method:"POST", body:{subject:s, body:b}}); toast(t("complaint_sent")); var cs=$("#cp-subject"); if(cs) cs.value=""; var cb=$("#cp-body"); if(cb) cb.value=""; }
         catch(e){ toast(e.message||t("err_generic"), true); }
         finally{ btn.disabled=false; btn.textContent=t("file_complaint"); }
       };
@@ -2130,6 +2160,7 @@ function renderAdminLogin(){
     var body=$("#ad-body");
     try{
       var st=await api("/admin/pin-status");
+      if(!body.isConnected) return; // navigated away while loading
       if(st.pinSet===false||st.pin_set===false){
         body.innerHTML='<div class="card"><h2>'+esc(t("pin_setup_title"))+'</h2><p>'+esc(t("pin_setup_body"))+'</p><p class="small">'+esc(t("pin_hint"))+'</p>'
           +'<label for="ad-pin">'+esc(t("pin_label"))+'</label><input id="ad-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="new-password" aria-describedby="ad-err">'
@@ -2143,9 +2174,10 @@ function renderAdminLogin(){
           var btn=$("#ad-setup"); btn.disabled=true; btn.textContent=t("loading");
           try{
             await api("/admin/setup-pin", {method:"POST", body:{pin:p1}});
+            if(location.hash.split("?")[0]!=="#/admin") return;
             toast(t("admin_pin_setup_done"));
             renderAdminLogin();
-          }catch(e){ btn.disabled=false; btn.textContent=t("set_pin"); toast(e.message||t("err_generic"), true); }
+          }catch(e){ if(location.hash.split("?")[0]!=="#/admin") return; btn.disabled=false; btn.textContent=t("set_pin"); toast(e.message||t("err_generic"), true); }
         };
         return;
       }
@@ -2164,8 +2196,10 @@ function renderAdminLogin(){
         var btn=$("#ad-login"); btn.disabled=true; btn.textContent=t("loading");
         try{
           await api("/admin/login", {method:"POST", body:{pin:pin}});
-          S.admin=true; toast(t("admin_welcome")); go("#/admin/dashboard");
-        }catch(e){ btn.disabled=false; btn.textContent=t("login"); $("#ad-err").textContent=(e.status===401||e.status===403)?t("wrong_pin"):(e.message||t("err_generic")); }
+          S.admin=true;
+          if(location.hash.split("?")[0]!=="#/admin") return;
+          toast(t("admin_welcome")); go("#/admin/dashboard");
+        }catch(e){ btn.disabled=false; btn.textContent=t("login"); var ae=$("#ad-err"); if(ae) ae.textContent=(e.status===401||e.status===403)?t("wrong_pin"):(e.message||t("err_generic")); }
       };
       $("#ad-change").onclick=async function(){
         var oldP=$("#ad-old").value, newP=$("#ad-new").value;
@@ -2194,7 +2228,7 @@ async function renderAdminDashboard(){
   try{
     var d=await api("/admin/metrics");
     var m=d.metrics||d;
-    var body=$("#ad-body");
+    var body=$("#ad-body"); if(!body) return;
     var byStatus=m.billsByStatus||m.bills_by_status||{};
     var totalPosts=Object.keys(byStatus).reduce(function(a,k){ return a+(byStatus[k]||0); }, 0);
     var vol=m.confirmedHelpVolume||m.confirmed_help_volume||[];
@@ -2213,8 +2247,10 @@ async function renderAdminDashboard(){
       +'<div class="btn-row"><a class="btn" href="#/admin/queue">'+esc(t("admin_queue_cta"))+'</a><a class="btn secondary" href="#/swipe">'+esc(t("back_to_app"))+'</a></div>';
     function statBox(l, v){ return '<div class="card stat"><div class="n">'+esc(v)+'</div><div class="l">'+esc(l)+'</div></div>'; }
   }catch(e){
-    if(e.status===401){ S.admin=false; go("#/admin"); return; }
-    $("#ad-body").innerHTML=errBox(e.message); bindErrRetry(renderAdminDashboard);
+    if(e.status===401) S.admin=false;
+    var eb=$("#ad-body"); if(!eb) return;
+    if(e.status===401){ go("#/admin"); return; }
+    eb.innerHTML=errBox(e.message); bindErrRetry(renderAdminDashboard);
   }
 }
 function renderAdminQueue(){
@@ -2249,7 +2285,7 @@ function renderAdminQueue(){
         };
       });
     }catch(e){
-      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
       body.innerHTML=errBox(e.message); bindErrRetry(load);
     }
   }
@@ -2329,7 +2365,7 @@ function renderAdminUsers(){
         };
       });
     }catch(e){
-      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
       body.innerHTML=errBox(e.message); bindErrRetry(load);
     }
   }
@@ -2364,7 +2400,7 @@ function renderAdminVerifications(){
         };
       });
     }catch(e){
-      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
       body.innerHTML=errBox(e.message); bindErrRetry(load);
     }
   }
@@ -2396,7 +2432,7 @@ function renderAdminReports(){
         };
       });
     }catch(e){
-      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
       body.innerHTML=errBox(e.message); bindErrRetry(load);
     }
   }
@@ -2486,7 +2522,7 @@ function renderAdminFees(){
         }
       }catch(e){ var mb2=$("#methods-body"); if(mb2) mb2.innerHTML='<p class="small">'+esc(e.message||"")+'</p>'; }
     }catch(e){
-      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
       body.innerHTML=errBox(e.message); bindErrRetry(load);
     }
   }
@@ -2514,7 +2550,7 @@ function renderAdminAudit(){
       rows=pickList(d,["audit","logs","entries"]);
       draw();
     }catch(e){
-      if(e.status===401){ S.admin=false; go("#/admin"); return; }
+      if(e.status===401){ S.admin=false; if(!body.isConnected) return; go("#/admin"); return; }
       body.innerHTML=errBox(e.message); bindErrRetry(load);
     }
   }
@@ -2532,12 +2568,21 @@ function renderAdminAudit(){
 async function boot(){
   if(S.booted) return; S.booted=true;
   try{ S.config=await api("/config"); }catch(e){ S.config=null; }
-  try{
-    var me=await api("/auth/me");
-    S.user=(me&&me.user)||null;
-    if(S.user&&S.user.language) I.setLang(S.user.language);
-    if(S.user&&S.user.country) S.country=countryCode(S.user.country);
-  }catch(e){ S.user=null; }
+  // Restore both sessions in parallel: the user session and the admin
+  // session (the sp_admin cookie lasts 24h, so the owner should not have
+  // to re-enter the PIN after every reload). checkAdminSession was defined
+  // but never called, so admin deep links always hit the PIN gate.
+  await Promise.all([
+    (async function(){
+      try{
+        var me=await api("/auth/me");
+        S.user=(me&&me.user)||null;
+        if(S.user&&S.user.language) I.setLang(S.user.language);
+        if(S.user&&S.user.country) S.country=countryCode(S.user.country);
+      }catch(e){ S.user=null; }
+    })(),
+    checkAdminSession()
+  ]);
   if(!location.hash) location.hash="#/splash";
   route();
   window.addEventListener("online", function(){ hideOfflineBanner(); toast(t("session_restored")); });
