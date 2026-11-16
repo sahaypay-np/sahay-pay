@@ -2907,22 +2907,46 @@ function renderLeaders(arg, q){
 /* ---------- brands ---------- */
 function renderBrands(){
   view('<h1>'+esc(t("brands_title"))+'</h1>'
-    +'<div class="btn-row" style="margin-bottom:12px"><a class="btn" href="#/brand-new">＋ '+esc(t("brand_new"))+'</a><a class="btn secondary" href="#/auctions">🔨 '+esc(t("auctions"))+'</a></div>'
+    +'<div class="btn-row" style="margin-bottom:12px"><a class="btn" href="#/brand-new">＋ '+esc(t("brand_new"))+'</a><a class="btn secondary" href="#/brand-directory">🏢 '+esc(t("brand_directory"))+'</a><a class="btn secondary" href="#/drops">🎁 '+esc(t("drops"))+'</a><a class="btn secondary" href="#/auctions">🔨 '+esc(t("auctions"))+'</a></div>'
+    +'<div class="btn-row" style="margin-bottom:12px"><a class="btn secondary small" href="#/brands?mine=1">'+esc(t("my_asks"))+'</a><a class="btn secondary small" href="#/brand-messages">'+esc(t("brand_messages"))+'</a></div>'
     +'<label class="sr-only" for="br-search">'+esc(t("search_brands"))+'</label><input id="br-search" placeholder="'+esc(t("search_brands"))+'" style="margin-bottom:10px">'
+    // Tag filter (item 594) + group-by-brand toggle (item 519).
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="br-tags">'
+    +[["",t("all")],["product",t("tag_product")],["collaboration",t("tag_collaboration")],["sponsorship",t("tag_sponsorship")],["help",t("tag_help")]].map(function(x){ return '<button class="chip'+(x[0]===""?" on":"")+'" data-tag="'+x[0]+'">'+esc(x[1])+'</button>'; }).join("")
+    +'<button class="chip" id="br-group">'+esc(t("group_by_brand"))+'</button></div>'
+    +'<div id="br-new"></div>'
     +'<div id="br-body">'+skeleton(2)+'</div>');
-  var timer=null;
+  var timer=null, tag="", grouped=false, mine=location.hash.indexOf("mine=1")>=0;
   $("#br-search").addEventListener("input", function(){ clearTimeout(timer); timer=setTimeout(load, 300); });
+  $all("#br-tags [data-tag]").forEach(function(b){ b.onclick=function(){ tag=b.getAttribute("data-tag"); $all("#br-tags [data-tag]").forEach(function(x){ x.classList.toggle("on", x===b); }); load(); }; });
+  $("#br-group").onclick=function(){ grouped=!grouped; $("#br-group").classList.toggle("on", grouped); load(); };
   load();
   async function load(){
     var body=$("#br-body"); if(!body) return;
     try{
       var q=new URLSearchParams(); var s=$("#br-search").value.trim(); if(s) q.set("brand", s);
-      var d=await api("/brands"+(q.toString()?"?"+q.toString():""));
+      if(tag) q.set("tag", tag);
+      var d=await api((mine?"/brands/mine":"/brands")+(q.toString()?"?"+q.toString():""));
       var list=pickList(d,["brands"]);
+      // New-this-week strip (item 596).
+      var weekAgo=Date.now()-7*86400000;
+      var fresh=list.filter(function(b){ return new Date(b.createdAt||b.created_at).getTime()>=weekAgo; });
+      var nb=$("#br-new");
+      if(nb) nb.innerHTML=fresh.length? '<h2>'+esc(t("new_this_week"))+'</h2><div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap">'+fresh.slice(0,6).map(function(b){ return '<a class="chip" href="#/brand/'+encodeURIComponent(b.id)+'">'+esc(b.name||"")+'</a>'; }).join("")+'</div></div>' : "";
       if(!list.length){ body.innerHTML=emptyState("🏷️", t("empty_brands"), "", '<a class="btn small" href="#/brand-new">'+esc(t("create_first_brand"))+'</a>'); return; }
-      body.innerHTML=list.map(function(b){
-        return '<a class="card row-card" href="#/brand/'+encodeURIComponent(b.id)+'"><div class="avatar">🏷️</div><div class="grow"><div class="t">'+esc(b.display_name||b.displayName||b.name||"")+'</div><div class="s">'+flag(b.country)+' '+esc(b.city||"")+' · '+esc((b.story||"").slice(0,80))+'</div></div><span>›</span></a>';
-      }).join("");
+      function card(b){
+        return '<a class="card row-card" href="#/brand/'+encodeURIComponent(b.id)+'">'+(b.visualUrl?'<img src="'+esc(b.visualUrl)+'" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px">':'<div class="avatar">🏷️</div>')+'<div class="grow"><div class="t">'+esc(b.displayName||b.display_name||b.name||"")+'</div><div class="s">'+flag(b.country)+' '+esc(b.city||"")+' · '+esc((b.story||"").slice(0,80))+'</div>'+((b.tags||[]).length?'<div style="margin-top:4px">'+b.tags.map(function(tg){ return '<span class="chip">'+esc(tg)+'</span>'; }).join(" ")+'</div>':"")+(b.status&&b.status!=="approved"?'<div style="margin-top:4px"><span class="chip">'+esc(b.status)+'</span></div>':"")+'</div><span>›</span></a>';
+      }
+      if(grouped){
+        // Grouped by brand name (item 519).
+        var groups={};
+        list.forEach(function(b){ (groups[b.name||"?"]=groups[b.name||"?"]||[]).push(b); });
+        body.innerHTML=Object.keys(groups).sort().map(function(name){
+          return '<h2>'+esc(name)+'</h2>'+groups[name].map(card).join("");
+        }).join("");
+      } else {
+        body.innerHTML=list.map(card).join("");
+      }
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
   }
 }
@@ -2931,17 +2955,59 @@ function renderBrand(id){
   api("/brands/"+encodeURIComponent(id)).then(function(d){
     if(tok!==NAV) return;
     var b=d.brand||d;
+    var isOwner=S.user&&b.poster&&(b.poster.username===S.user.username);
+    var responses=b.responses||[];
     view('<a href="#/brands" class="small">← '+esc(t("back"))+'</a><div class="card" style="margin-top:8px">'
-      +'<h1>'+esc(b.display_name||b.displayName||b.name||"")+'</h1>'
-      +'<p class="small">'+flag(b.country)+' '+esc(b.city||"")+' · '+esc(timeAgo(b.created_at||b.createdAt))+'</p>'
+      +(b.visualUrl?'<img class="bill-photo" src="'+esc(b.visualUrl)+'" alt="" loading="lazy">':"")
+      +'<h1>'+esc(b.displayName||b.display_name||b.name||"")+'</h1>'
+      +'<p class="small">'+flag(b.country)+' '+esc(b.city||"")+' · '+esc(timeAgo(b.createdAt||b.created_at))+'</p>'
+      +((b.tags||[]).length?'<p>'+b.tags.map(function(tg){ return '<span class="chip">'+esc(tg)+'</span>'; }).join(" ")+'</p>':"")
       +'<p>'+esc(b.story||"")+'</p>'
-      +(b.content_no_fee?'<p><span class="chip good">'+esc(t("content_ok"))+'</span></p>':"")
+      +(b.contentNoFee?'<p><span class="chip good">'+esc(t("content_ok"))+'</span></p>':"")
+      // Status tracker (item 529): status + expiry + responses.
+      +'<div class="card" style="margin-top:10px"><h2>'+esc(t("ask_status"))+'</h2>'
+      +'<div class="kv"><span>'+esc(t("status"))+'</span><b>'+esc(b.status||"")+'</b></div>'
+      +(b.expiresAt?'<div class="kv"><span>'+esc(t("expires"))+'</span><b>'+esc(fmtDate(b.expiresAt))+'</b></div>':"")
+      +'<div class="kv"><span>'+esc(t("responses"))+'</span><b>'+esc(responses.length)+'</b></div>'
+      +(b.closedAt?'<div class="kv"><span>'+esc(t("closed"))+'</span><b>'+esc(fmtDate(b.closedAt))+'</b></div>':"")
+      +(b.thankYouNote?'<p>'+esc(b.thankYouNote)+'</p>':"")
+      +'</div>'
       +'<p class="small muted">'+esc(t("brand_ask_footer"))+'</p>'
       +'<div class="btn-row"><button class="btn" id="br-connect">'+esc(t("connect"))+' →</button></div>'
-      +'<div class="btn-row"><button class="btn secondary small" id="br-share">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="br-report">🚩 '+esc(t("report"))+'</button></div></div>');
-    $("#br-share").onclick=function(){ copyText(location.origin+location.pathname+"#/brand/"+b.id, t("copied_link")); };
+      +'<div class="btn-row"><button class="btn secondary small" id="br-share">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="br-report">🚩 '+esc(t("report"))+'</button></div>'
+      +(isOwner&&b.status==="approved"?'<div class="btn-row"><button class="btn secondary small" id="br-close">'+esc(t("close_ask"))+'</button></div>':"")
+      +(isOwner&&b.status==="expired"?'<div class="btn-row"><button class="btn" id="br-renew">'+esc(t("renew_ask"))+'</button></div>':"")
+      +'</div>'
+      // Public brand responses (item 520).
+      +'<h2 style="margin-top:14px">'+esc(t("brand_responses"))+'</h2>'
+      +(responses.length? responses.map(function(r){
+        return '<div class="card"><p>'+esc(r.body||"")+'</p><p class="small">'+esc(r.brandName||"")+(r.verified?" ✅":"")+' · '+esc(fmtDate(r.createdAt))+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_responses_yet"))+'</p>'));
+    $("#br-share").onclick=function(){ copyText(location.origin+"/share/brand-ask/"+b.id, t("copied_link")); };
     $("#br-report").onclick=function(){ openReportSheet("brand", b.id); };
     $("#br-connect").onclick=function(){ openBrandConnect(b); };
+    var closeBtn=$("#br-close");
+    if(closeBtn){
+      closeBtn.onclick=function(){
+        openSheet('<h2>'+esc(t("close_ask"))+'</h2><p class="small">'+esc(t("close_ask_body"))+'</p>'
+          +'<label for="cl-note">'+esc(t("thank_you_note"))+'</label><textarea id="cl-note" maxlength="1000"></textarea>'
+          +'<div class="btn-row"><button class="btn secondary" id="cl-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="cl-go">'+esc(t("close_ask"))+'</button></div>');
+        $("#cl-cancel").onclick=closeSheets;
+        $("#cl-go").onclick=async function(){
+          try{ await api("/brands/"+encodeURIComponent(b.id)+"/close", {method:"POST", body:{thankYouNote:$("#cl-note").value.trim()}}); closeSheets(); toast(t("ask_closed")); route(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        };
+      };
+    }
+    var renewBtn=$("#br-renew");
+    if(renewBtn){
+      renewBtn.onclick=function(){
+        confirmDialog(t("renew_ask"), t("renew_ask_body"), t("renew_ask"), async function(){
+          try{ await api("/brands/"+encodeURIComponent(b.id)+"/renew", {method:"POST"}); toast(t("ask_renewed")); route(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        });
+      };
+    }
   }).catch(function(e){ if(tok!==NAV) return; view(emptyState("🏷️", t("brand_not_found"), e.message||"", "", "h1")); });
 }
 function openBrandConnect(brand){
@@ -2955,6 +3021,8 @@ function openBrandConnect(brand){
     +'<label for="bc-brand">'+esc(t("brand_name"))+'</label><input id="bc-brand">'
     +'<label for="bc-name">'+esc(t("display_name"))+'</label><input id="bc-name" autocomplete="name">'
     +'<label for="bc-phone">'+esc(t("contact_phone"))+'</label><input id="bc-phone" type="tel" inputmode="tel" autocomplete="tel">'
+    +'<label for="bc-industry">'+esc(t("industry"))+'</label><input id="bc-industry" maxlength="120">'
+    +'<label for="bc-offer">'+esc(t("offer_label"))+'</label><textarea id="bc-offer" maxlength="500" placeholder="'+esc(t("offer_ph"))+'"></textarea>'
     +'<label for="bc-note">'+esc(t("brand_story_label"))+' / '+esc(t("details"))+'</label><textarea id="bc-note" maxlength="500"></textarea>'
     +'<label>'+esc(t("brand_connect_price"))+'</label><div class="seg" id="bc-plans">'+pkgs.map(function(p,i){ return '<button type="button" data-p="'+esc(p.id||p.name||("p"+i))+'" class="'+(i===0?"on":"")+'">'+esc(p.label||p.name||"")+(p.priceMinor?' — '+money(p.priceMinor,p.currency||"NPR"):"")+'</button>'; }).join("")+'</div>'
     +'<div id="bc-email-wrap" hidden><label for="bc-email">'+esc(t("company_email"))+'</label><input id="bc-email" type="email" autocomplete="email" placeholder="name@company.com"><p class="small">'+esc(t("brand_plan_note"))+'</p></div>'
@@ -2978,7 +3046,7 @@ function openBrandConnect(brand){
     }
     var btn=$("#bc-send"); btn.disabled=true; btn.textContent=t("loading");
     try{
-      await api("/brands/"+encodeURIComponent(brand.id)+"/connect", {method:"POST", body:{brandName:brandName, contactName:name, phone:phone, note:$("#bc-note").value.trim(), plan:plan, workEmail:email||undefined}});
+      await api("/brands/"+encodeURIComponent(brand.id)+"/connect", {method:"POST", body:{brandName:brandName, contactName:name, phone:phone, note:$("#bc-note").value.trim(), plan:plan, workEmail:email||undefined, industry:$("#bc-industry").value.trim()||undefined, offer:$("#bc-offer").value.trim()||undefined}});
       closeSheets(); toast(t("brand_connected"));
     }catch(e){ btn.disabled=false; btn.textContent=t("connect"); toast(e.message||t("err_generic"), true); }
   };
@@ -2993,6 +3061,9 @@ function renderBrandNew(){
     +'<label for="bn-city">'+esc(t("city"))+' '+esc(t("q_about_opt"))+'</label><input id="bn-city" value="'+esc(S.user.city||"")+'" autocomplete="address-level2">'
     +'<label for="bn-phone">'+esc(t("contact_phone"))+' '+reqStar()+'</label><input id="bn-phone" type="tel" inputmode="tel" autocomplete="tel" aria-required="true" aria-describedby="e-bn-phone"><div class="field-err" id="e-bn-phone" role="alert"></div>'
     +'<label for="bn-file">'+esc(t("visual_plan"))+'</label><input type="file" id="bn-file" accept="image/jpeg,image/png,image/webp">'
+    +'<label>'+esc(t("ask_tags"))+'</label><div style="display:flex;gap:6px;flex-wrap:wrap">'
+    +[["product",t("tag_product")],["collaboration",t("tag_collaboration")],["sponsorship",t("tag_sponsorship")],["help",t("tag_help")]].map(function(x){ return '<label class="check-row"><input type="checkbox" class="bn-tag" value="'+x[0]+'"> '+esc(x[1])+'</label>'; }).join("")
+    +'</div>'
     +'<label class="check-row"><input type="checkbox" id="bn-content"> '+esc(t("content_no_fee"))+'</label>'
     +'<p class="small">⚠️ '+esc(t("no_contact_in_text"))+'</p>'
     +'<button class="btn" type="submit" id="bn-submit">'+esc(t("submit"))+'</button></form>');
@@ -3014,29 +3085,330 @@ function renderBrandNew(){
       var visualUrl=null;
       var f=$("#bn-file").files[0];
       if(f){ var up=await uploadFile(f,"support"); visualUrl=up.url||up.fileUrl||up.path; }
-      await api("/brands", {method:"POST", body:{name:brand, displayName:$("#bn-display").value.trim()||undefined, story:story, country:cc, city:$("#bn-city").value.trim()||undefined, contactPhone:phone, contentNoFee:!!$("#bn-content").checked, visualUrl:visualUrl||undefined}});
+      var tags=$all(".bn-tag").filter(function(c){ return c.checked; }).map(function(c){ return c.value; });
+      await api("/brands", {method:"POST", body:{name:brand, displayName:$("#bn-display").value.trim()||undefined, story:story, country:cc, city:$("#bn-city").value.trim()||undefined, contactPhone:phone, contentNoFee:!!$("#bn-content").checked, visualUrl:visualUrl||undefined, tags:tags}});
       if(op!==NAV) return;
       toast(t("brand_ask_sent")); go("#/brands");
     }catch(err){ if(op!==NAV) return; btn.disabled=false; btn.textContent=t("submit"); toast(err.message||t("err_generic"), true); }
   });
 }
 
+/* ---------- brand directory (items 501–512, 523, 590–591, 597) ---------- */
+function renderBrandDirectory(){
+  view('<h1>'+esc(t("brand_directory"))+'</h1><p class="small">'+esc(t("brand_directory_intro"))+'</p>'
+    +'<div class="btn-row" style="margin-bottom:12px"><a class="btn" href="#/brand-directory/new">＋ '+esc(t("register_brand"))+'</a><a class="btn secondary" href="#/brands">'+esc(t("brands_title"))+'</a><a class="btn secondary" href="#/partnerships">'+esc(t("partnerships"))+'</a></div>'
+    +'<label class="sr-only" for="bd-search">'+esc(t("search_brands"))+'</label><input id="bd-search" placeholder="'+esc(t("search_brands"))+'" style="margin-bottom:10px">'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px"><select id="bd-country" style="flex:1"><option value="">'+esc(t("all"))+'</option><option value="NP">🇳🇵 '+esc(t("nepal"))+'</option><option value="IN">🇮🇳 '+esc(t("india"))+'</option></select><select id="bd-industry" style="flex:1"><option value="">'+esc(t("all_industries"))+'</option></select></div>'
+    +'<div id="bd-new"></div><div id="bd-body">'+skeleton(2)+'</div>');
+  var timer=null;
+  $("#bd-search").addEventListener("input", function(){ clearTimeout(timer); timer=setTimeout(load, 300); });
+  $("#bd-country").addEventListener("change", load);
+  $("#bd-industry").addEventListener("change", load);
+  load();
+  async function load(){
+    var body=$("#bd-body"); if(!body) return;
+    try{
+      var q=new URLSearchParams();
+      var s=$("#bd-search").value.trim(); if(s) q.set("q", s);
+      var c=$("#bd-country").value; if(c) q.set("country", c);
+      var ind=$("#bd-industry").value; if(ind) q.set("industry", ind);
+      var d=await api("/brand-directory/directory"+(q.toString()?"?"+q.toString():""));
+      var sel=$("#bd-industry");
+      if(sel&&sel.options.length<=1){
+        (d.industries||[]).forEach(function(i){ var o=document.createElement("option"); o.value=i; o.textContent=i; sel.appendChild(o); });
+      }
+      var list=d.brands||[];
+      var nb=$("#bd-new");
+      if(nb&&d.newThisWeek&&d.newThisWeek.length){
+        nb.innerHTML='<h2>'+esc(t("new_this_week"))+'</h2><div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap">'+list.filter(function(b){ return d.newThisWeek.indexOf(b.id)>=0; }).map(function(b){ return '<a class="chip" href="#/brand-directory/'+encodeURIComponent(b.id)+'">'+esc(b.name)+'</a>'; }).join("")+'</div></div>';
+      }
+      if(!list.length){ body.innerHTML=emptyState("🏢", t("empty_directory"), "", '<a class="btn small" href="#/brand-directory/new">'+esc(t("register_brand"))+'</a>'); return; }
+      body.innerHTML=list.map(function(b){
+        return '<a class="card row-card" href="#/brand-directory/'+encodeURIComponent(b.id)+'">'+(b.logoUrl?'<img src="'+esc(b.logoUrl)+'" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px">':'<div class="avatar">🏢</div>')+'<div class="grow"><div class="t">'+esc(b.name)+(b.verified?" ✅":"")+'</div><div class="s">'+esc(b.industry||"")+' · '+flag(b.country)+' '+esc(b.city||"")+'</div><p class="small">'+esc((b.description||"").slice(0,120))+'</p></div><span>›</span></a>';
+      }).join("");
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
+  }
+}
+
+function renderBrandApply(){
+  if(!S.user){ view(emptyState("🏢", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  view('<h1>'+esc(t("register_brand"))+'</h1><p class="small">'+esc(t("brand_apply_intro"))+'</p>'
+    +'<div id="ba-mine"></div>'
+    +'<form id="ba-form" class="card"><label for="ba-name">'+esc(t("brand_name"))+' '+reqStar()+'</label><input id="ba-name" maxlength="120">'
+    +'<label for="ba-industry">'+esc(t("industry"))+' '+reqStar()+'</label><select id="ba-industry"></select>'
+    +'<label>'+esc(t("country"))+'</label><div class="seg" id="ba-country"><button type="button" data-c="NP" class="'+(countryCode(S.user.country)==="NP"?"on":"")+'">🇳🇵 '+esc(t("nepal"))+'</button><button type="button" data-c="IN" class="'+(countryCode(S.user.country)==="IN"?"on":"")+'">🇮🇳 '+esc(t("india"))+'</button></div>'
+    +'<label for="ba-city">'+esc(t("city"))+'</label><input id="ba-city" maxlength="120" value="'+esc(S.user.city||"")+'">'
+    +'<label for="ba-website">'+esc(t("website"))+'</label><input id="ba-website" maxlength="300" placeholder="https://…">'
+    +'<label for="ba-email">'+esc(t("company_email"))+' '+reqStar()+'</label><input id="ba-email" type="email" maxlength="200" placeholder="name@company.com"><p class="small">'+esc(t("company_email_note"))+'</p>'
+    +'<label for="ba-desc">'+esc(t("brand_description"))+' '+reqStar()+'</label><textarea id="ba-desc" maxlength="1500"></textarea>'
+    +'<label for="ba-logo">'+esc(t("brand_logo"))+'</label><input type="file" id="ba-logo" accept="image/jpeg,image/png,image/webp">'
+    +'<div class="field-err" id="ba-err" role="alert"></div>'
+    +'<button class="btn" type="submit" id="ba-submit">'+esc(t("submit_application"))+'</button></form>');
+  var cc=countryCode(S.user.country);
+  $all("#ba-country button").forEach(function(b){ b.onclick=function(){ cc=b.getAttribute("data-c"); $all("#ba-country button").forEach(function(x){ x.classList.toggle("on", x===b); }); }; });
+  api("/brand-directory/directory").then(function(d){
+    var sel=$("#ba-industry"); if(!sel) return;
+    sel.innerHTML=(d.industries||[]).map(function(i){ return '<option>'+esc(i)+'</option>'; }).join("");
+  }).catch(function(){});
+  // Application status tracking (items 509/510).
+  api("/brand-directory/mine").then(function(d){
+    var box=$("#ba-mine"); if(!box) return;
+    var list=d.brands||[];
+    if(list.length){
+      box.innerHTML='<h2>'+esc(t("my_applications"))+'</h2>'+list.map(function(b){
+        return '<div class="card row-card"><div class="grow"><div class="t">'+esc(b.name)+'</div><div class="s">'+esc(b.status)+(b.rejectionReason?' — '+esc(b.rejectionReason):"")+'</div></div>'+(b.status==="approved"?'<a class="btn secondary small" href="#/brand-directory/'+encodeURIComponent(b.id)+'">'+esc(t("view"))+'</a>':"")+'</div>';
+      }).join("");
+    }
+  }).catch(function(){});
+  $("#ba-form").addEventListener("submit", async function(e){
+    e.preventDefault();
+    var name=$("#ba-name").value.trim(), desc=$("#ba-desc").value.trim(), email=$("#ba-email").value.trim();
+    if(name.length<2||desc.length<20||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ $("#ba-err").textContent=t("err_brand_fields"); return; }
+    var btn=$("#ba-submit"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      var logoUrl=null; var f=$("#ba-logo").files[0];
+      if(f){ var up=await uploadFile(f,"support"); logoUrl=up.url||up.fileUrl||up.path; }
+      await api("/brand-directory/apply", {method:"POST", body:{name:name, industry:$("#ba-industry").value, country:cc, city:$("#ba-city").value.trim(), website:$("#ba-website").value.trim(), email:email, description:desc, logoUrl:logoUrl||undefined}});
+      toast(t("brand_applied")); go("#/brand-directory");
+    }catch(err){ btn.disabled=false; btn.textContent=t("submit_application"); toast(err.message||t("err_generic"), true); }
+  });
+}
+
+function renderBrandProfile(id){
+  var tok=view(skeleton(2));
+  api("/brand-directory/"+encodeURIComponent(id)).then(function(d){
+    if(tok!==NAV) return;
+    var b=d.brand||d;
+    var isOwner=S.user&&String(b.ownerId)===String(S.user.id);
+    var imp=b.impact||{};
+    view('<a href="#/brand-directory" class="small">← '+esc(t("back"))+'</a><div class="card" style="margin-top:8px">'
+      +(b.logoUrl?'<img src="'+esc(b.logoUrl)+'" alt="" style="width:96px;height:96px;object-fit:cover;border-radius:12px">':"")
+      +'<h1>'+esc(b.name||"")+(b.verified?' ✅':"")+'</h1>'
+      +'<p class="small">'+esc(b.industry||"")+' · '+flag(b.country)+' '+esc(b.city||"")+(b.website?' · <a href="'+esc(b.website)+'" target="_blank" rel="noopener">'+esc(t("website"))+'</a>':"")+'</p>'
+      +(b.verified?'<p><span class="chip good">✓ '+esc(t("verified_brand"))+'</span></p>':'<p class="small"><a href="#/help?topic=brand-connect">'+esc(t("verify_brand_info"))+'</a></p>')
+      +'<p>'+esc(b.description||"")+'</p>'
+      // Impact section (item 523) + response time (item 597).
+      +'<div class="grid2"><div class="card stat"><div class="n">'+esc(imp.asksReceived||0)+'</div><div class="l">'+esc(t("asks_received"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(imp.asksResponded||0)+'</div><div class="l">'+esc(t("asks_responded"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(imp.collaborations||0)+'</div><div class="l">'+esc(t("collaborations"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+(b.medianResponseHours!=null?esc(b.medianResponseHours)+"h":"—")+'</div><div class="l">'+esc(t("response_time"))+'</div></div></div>'
+      +'<div class="btn-row"><button class="btn secondary small" id="bp-share">🔗 '+esc(t("share"))+'</button>'
+      +(isOwner?'<button class="btn secondary small" id="bp-edit">'+esc(t("edit"))+'</button><button class="btn secondary small" id="bp-checklist">'+esc(t("onboarding_checklist"))+'</button><button class="btn secondary small" id="bp-report">'+esc(t("monthly_report"))+'</button>':"")
+      +(!b.verified&&isOwner&&b.status==="approved"?'<button class="btn secondary small" id="bp-verify">'+esc(t("request_verification"))+'</button>':"")
+      +'</div></div>'
+      +'<div id="bp-extra"></div>'
+      +'<h2 style="margin-top:14px">'+esc(t("brand_responses"))+'</h2>'
+      +((b.responses||[]).length? b.responses.map(function(r){
+        return '<div class="card"><p>'+esc(r.body||"")+'</p><p class="small"><a href="#/brand/'+encodeURIComponent(r.askId)+'">'+esc(r.askName||"")+'</a> · '+esc(fmtDate(r.createdAt))+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_responses_yet"))+'</p>')
+      +'<h2 style="margin-top:14px">'+esc(t("csr_updates"))+'</h2>'
+      +((b.csrUpdates||[]).length? b.csrUpdates.map(function(c){
+        return '<div class="card"><strong>'+esc(c.title||"")+'</strong><p>'+esc(c.body||"")+'</p><p class="small">'+esc(c.status||"")+' · '+esc(fmtDate(c.createdAt))+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_csr_yet"))+'</p>')
+      +(isOwner&&b.verified?'<p><button class="btn secondary small" id="bp-csr">'+esc(t("post_csr"))+'</button></p>':""));
+    $("#bp-share").onclick=function(){ copyText(location.origin+"/share/brand/"+b.id, t("copied_link")); };
+    var editBtn=$("#bp-edit");
+    if(editBtn){
+      editBtn.onclick=function(){
+        openSheet('<h2>'+esc(t("edit"))+'</h2>'
+          +'<label for="be-desc">'+esc(t("brand_description"))+'</label><textarea id="be-desc" maxlength="1500">'+esc(b.description||"")+'</textarea>'
+          +'<label for="be-city">'+esc(t("city"))+'</label><input id="be-city" value="'+esc(b.city||"")+'">'
+          +'<label for="be-web">'+esc(t("website"))+'</label><input id="be-web" value="'+esc(b.website||"")+'">'
+          +'<div class="btn-row"><button class="btn secondary" id="be-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="be-save">'+esc(t("save"))+'</button></div>');
+        $("#be-cancel").onclick=closeSheets;
+        $("#be-save").onclick=async function(){
+          try{ await api("/brand-directory/"+encodeURIComponent(b.id), {method:"PATCH", body:{description:$("#be-desc").value.trim(), city:$("#be-city").value.trim(), website:$("#be-web").value.trim()}}); closeSheets(); toast(t("saved")); route(); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        };
+      };
+    }
+    var clBtn=$("#bp-checklist");
+    if(clBtn){
+      clBtn.onclick=async function(){
+        try{
+          var cd=await api("/brand-directory/"+encodeURIComponent(b.id)+"/checklist");
+          var box=$("#bp-extra");
+          box.innerHTML='<div class="card"><h2>'+esc(t("onboarding_checklist"))+'</h2><ul>'+(cd.checklist||[]).map(function(c){ return '<li>'+(c.done?"✅ ":"⬜ ")+esc(c.label)+'</li>'; }).join("")+'</ul></div>';
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
+    var rpBtn=$("#bp-report");
+    if(rpBtn){
+      rpBtn.onclick=async function(){
+        try{
+          var rd=await api("/brand-directory/"+encodeURIComponent(b.id)+"/report");
+          var box=$("#bp-extra");
+          box.innerHTML='<div class="card"><h2>'+esc(t("monthly_report"))+' ('+esc(rd.month||"")+')</h2>'
+            +'<div class="kv"><span>'+esc(t("asks_received"))+'</span><b>'+esc(rd.asks||0)+'</b></div>'
+            +'<div class="kv"><span>'+esc(t("responses"))+'</span><b>'+esc(rd.responses||0)+'</b></div>'
+            +'<div class="kv"><span>'+esc(t("messages"))+'</span><b>'+esc(rd.messages||0)+'</b></div></div>';
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
+    var vfBtn=$("#bp-verify");
+    if(vfBtn){
+      vfBtn.onclick=async function(){
+        try{ await api("/brand-directory/"+encodeURIComponent(b.id)+"/verify-request", {method:"POST"}); toast(t("verify_requested")); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    }
+    var csrBtn=$("#bp-csr");
+    if(csrBtn){
+      csrBtn.onclick=function(){
+        openSheet('<h2>'+esc(t("post_csr"))+'</h2>'
+          +'<label for="csr-title">'+esc(t("title"))+'</label><input id="csr-title" maxlength="200">'
+          +'<label for="csr-body">'+esc(t("message"))+'</label><textarea id="csr-body" maxlength="5000" rows="5"></textarea>'
+          +'<div class="btn-row"><button class="btn secondary" id="csr-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="csr-send">'+esc(t("submit"))+'</button></div>');
+        $("#csr-cancel").onclick=closeSheets;
+        $("#csr-send").onclick=async function(){
+          try{ await api("/brand-directory/"+encodeURIComponent(b.id)+"/csr", {method:"POST", body:{title:$("#csr-title").value.trim(), body:$("#csr-body").value.trim()}}); closeSheets(); toast(t("csr_sent_review")); }
+          catch(e){ toast(e.message||t("err_generic"), true); }
+        };
+      };
+    }
+  }).catch(function(e){ if(tok!==NAV) return; view(emptyState("🏢", t("brand_not_found"), e.message||"", "", "h1")); });
+}
+
+/* ---------- brand messaging (items 524–528) ---------- */
+function renderBrandMessages(){
+  if(!S.user){ view(emptyState("💬", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  var tok=view(skeleton(2));
+  api("/brand-directory/threads").then(function(d){
+    if(tok!==NAV) return;
+    var list=d.threads||[];
+    view('<h1>'+esc(t("brand_messages"))+'</h1>'
+      +(list.length? list.map(function(th){
+        return '<a class="card row-card" href="#/brand-messages/'+encodeURIComponent(th.id)+'"><div class="grow"><div class="t">'+esc(th.brandName||"")+' — '+esc(th.askName||"")+'</div><div class="s">'+esc(timeAgo(th.updatedAt))+(th.unread?' · <span class="chip on">'+esc(th.unread)+' '+esc(t("unread"))+'</span>':"")+'</div></div><span>›</span></a>';
+      }).join("") : emptyState("💬", t("empty_threads"), t("threads_hint"))));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderBrandMessages); });
+}
+
+function renderBrandThread(id){
+  if(!S.user){ view(emptyState("💬", t("need_profile"), "", '<a class="btn small" href="#/country">'+esc(t("get_started"))+'</a>', "h1")); return; }
+  var tok=view(skeleton(2));
+  api("/brand-directory/threads/"+encodeURIComponent(id)).then(function(d){
+    if(tok!==NAV) return;
+    var th=d.thread||{}, msgs=d.messages||[];
+    view('<a href="#/brand-messages" class="small">← '+esc(t("back"))+'</a><h1 style="margin-top:8px">'+esc(th.brandName||"")+'</h1>'
+      +'<p class="small">'+esc(t("ask"))+': <a href="#/brand/'+encodeURIComponent(th.askId)+'">'+esc(th.askId||"")+'</a></p>'
+      +'<div class="card"><p class="small">⚠️ '+esc(t("off_platform_warning"))+'</p></div>'
+      +'<div id="bt-msgs">'+(msgs.length? msgs.map(function(m){
+        var mine=String(m.senderId)===String(S.user.id);
+        return '<div class="card" style="'+(mine?"margin-left:24px;background:var(--accent-soft)":"margin-right:24px")+'"><p>'+esc(m.body||"")+'</p><p class="small">'+esc(m.senderName||"")+' · '+esc(fmtDate(m.createdAt))+'</p>'
+          +(!mine?'<p><button class="btn ghost small" data-repmsg="'+esc(m.id)+'">🚩 '+esc(t("report"))+'</button></p>':"")
+          +'</div>';
+      }).join("") : '<p>'+esc(t("no_messages"))+'</p>')+'</div>'
+      +'<div class="card" style="margin-top:12px"><label for="bt-body">'+esc(t("your_message"))+'</label><textarea id="bt-body" maxlength="2000" rows="3"></textarea><button class="btn" id="bt-send" style="margin-top:8px">'+esc(t("send"))+'</button></div>');
+    $("#bt-send").onclick=async function(){
+      var body=$("#bt-body").value.trim();
+      if(!body) return;
+      var btn=$("#bt-send"); btn.disabled=true;
+      try{ await api("/brand-directory/threads/"+encodeURIComponent(id)+"/messages", {method:"POST", body:{body:body}}); route(); }
+      catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+    };
+    $all("[data-repmsg]").forEach(function(b){
+      b.onclick=function(){ openReportSheet("message", b.getAttribute("data-repmsg")); };
+    });
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(function(){ renderBrandThread(id); }); });
+}
+
+/* ---------- sponsored drops (items 539–543) ---------- */
+function renderDrops(){
+  var tok=view(skeleton(2));
+  api("/brand-directory/drops").then(function(d){
+    if(tok!==NAV) return;
+    var list=d.drops||[];
+    var open=list.filter(function(x){ return x.status==="open"; });
+    var done=list.filter(function(x){ return x.status!=="open"; });
+    view('<h1>'+esc(t("drops"))+'</h1><p class="small">'+esc(t("drops_intro"))+'</p><p class="small"><a href="#/help?topic=drops">'+esc(t("how_drops_work"))+'</a></p>'
+      +'<h2>'+esc(t("open_drops"))+'</h2>'
+      +(open.length? open.map(function(dr){
+        return '<div class="card"><strong>'+esc(dr.title||"")+'</strong><p>'+esc(dr.product||"")+' × '+esc(dr.quantity||1)+' · '+esc(dr.brandName||"")+'</p>'
+          +(dr.eligibility?'<p class="small">'+esc(dr.eligibility)+'</p>':"")
+          +'<p class="small">'+esc(dr.entries||0)+' '+esc(t("entries"))+'</p>'
+          +'<button class="btn small" data-enter="'+esc(dr.id)+'">'+esc(t("register_interest"))+'</button></div>';
+      }).join("") : '<p>'+esc(t("no_open_drops"))+'</p>')
+      +'<h2 style="margin-top:14px">'+esc(t("past_drops"))+'</h2>'
+      +(done.length? done.map(function(dr){
+        return '<div class="card"><strong>'+esc(dr.title||"")+'</strong><p>'+esc(dr.product||"")+' · '+esc(dr.brandName||"")+'</p>'
+          +(dr.winnerName?'<p>🏆 '+esc(t("winner"))+': '+esc(dr.winnerName)+'</p>':"")
+          +'<p class="small">'+esc(dr.status||"")+(dr.drawnAt?' · '+esc(fmtDate(dr.drawnAt)):"")+'</p></div>';
+      }).join("") : '<p>'+esc(t("no_past_drops"))+'</p>'));
+    $all("[data-enter]").forEach(function(btn){
+      btn.onclick=async function(){
+        if(!S.user){ toast(t("need_profile"), true); return; }
+        btn.disabled=true;
+        try{ await api("/brand-directory/drops/"+encodeURIComponent(btn.getAttribute("data-enter"))+"/enter", {method:"POST"}); toast(t("drop_entered")); route(); }
+        catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
+      };
+    });
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderDrops); });
+}
+
+/* ---------- partnerships (items 552–554) ---------- */
+function renderPartnerships(){
+  view('<h1>'+esc(t("partnerships"))+'</h1><p>'+esc(t("partnerships_body"))+'</p>'
+    +'<div class="card"><h2>'+esc(t("partnership_form"))+'</h2>'
+    +'<label for="pt-org">'+esc(t("org_name"))+'</label><input id="pt-org" maxlength="200">'
+    +'<label for="pt-email">'+esc(t("contact_email"))+'</label><input id="pt-email" type="email" maxlength="200">'
+    +'<label for="pt-type">'+esc(t("partnership_type"))+'</label><select id="pt-type"><option value="csr">'+esc(t("type_csr"))+'</option><option value="sponsorship">'+esc(t("type_sponsorship"))+'</option><option value="media">'+esc(t("type_media"))+'</option><option value="other">'+esc(t("report_other"))+'</option></select>'
+    +'<label for="pt-prop">'+esc(t("proposal"))+'</label><textarea id="pt-prop" maxlength="2000" rows="5"></textarea>'
+    +'<div class="field-err" id="pt-err" role="alert"></div>'
+    +'<button class="btn" id="pt-send" style="margin-top:8px">'+esc(t("submit"))+'</button></div>');
+  $("#pt-send").onclick=async function(){
+    if(!needUser()) return;
+    var org=$("#pt-org").value.trim(), email=$("#pt-email").value.trim(), prop=$("#pt-prop").value.trim();
+    if(org.length<2||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||prop.length<20){ $("#pt-err").textContent=t("err_partnership_fields"); return; }
+    var btn=$("#pt-send"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      await api("/brand-directory/partnerships", {method:"POST", body:{orgName:org, contactEmail:email, type:$("#pt-type").value, proposal:prop}});
+      toast(t("partnership_sent")); go("#/community");
+    }catch(e){ btn.disabled=false; btn.textContent=t("submit"); toast(e.message||t("err_generic"), true); }
+  };
+}
+
+/* ---------- founder page (item 564) + supporter wall (item 565) ---------- */
+// NOTE (item 564): the founder's story below is a draft from existing
+// public copy — danish's own words still needed; flagged for his review.
+function renderFounderPage(){
+  view('<h1>'+esc(t("founder_page"))+'</h1>'
+    +'<div class="card"><h2>'+esc(t("founder_story"))+'</h2><p>'+esc(t("founder_story_draft"))+'</p><p class="small">'+esc(t("founder_story_note"))+'</p></div>'
+    +'<div class="card" style="margin-top:12px"><h2>'+esc(t("support_sahay_pay"))+'</h2><p>'+esc(t("support_sahay_pay_body"))+'</p>'
+    +'<div style="display:grid;gap:8px"><a class="btn" href="#/founder-tip">'+esc(t("tip_founder"))+'</a><a class="btn secondary" href="#/supporters-wall">'+esc(t("supporters_wall"))+'</a></div></div>');
+}
+
+function renderSupportersWall(){
+  var tok=view(skeleton(2));
+  api("/supporters-wall").then(function(d){
+    if(tok!==NAV) return;
+    var list=d.supporters||[];
+    view('<h1>'+esc(t("supporters_wall"))+'</h1><p class="small">'+esc(t("supporters_wall_intro"))+'</p>'
+      +(list.length? list.map(function(s){
+        return '<a class="card row-card" href="#/profile/'+encodeURIComponent(s.username||"")+'"><div class="avatar">'+esc(initials(s.displayName||""))+'</div><div class="grow"><div class="t">'+esc(s.displayName||"")+'</div><div class="s">'+esc(money(s.tipsMinor||0, "NPR"))+' '+esc(t("tipped"))+'</div></div><span>›</span></a>';
+      }).join("") : emptyState("💙", t("empty_supporters_wall"), "")));
+  }).catch(function(e){ if(tok!==NAV) return; view(errBox(e.message, "h1")); bindErrRetry(renderSupportersWall); });
+}
+
 /* ---------- auctions ---------- */
 function renderAuctions(){
   view('<h1>'+esc(t("auctions"))+'</h1><p class="small">'+esc(t("auction_disabled_note"))+'</p>'
-    +'<div class="btn-row" style="margin-bottom:12px"><button class="btn" id="au-new">＋ '+esc(t("create_auction"))+'</button></div>'
+    +'<div class="btn-row" style="margin-bottom:12px"><button class="btn" id="au-new">＋ '+esc(t("create_auction"))+'</button><a class="btn secondary" href="#/auctions?watchlist=1">👁️ '+esc(t("watchlist"))+'</a></div>'
+    +'<label for="au-cat">'+esc(t("category"))+'</label><select id="au-cat" style="margin-bottom:10px"><option value="">'+esc(t("all"))+'</option>'+I.categories().map(function(c){ return '<option>'+esc(c)+'</option>'; }).join("")+'</select>'
     +'<div id="au-body">'+skeleton(2)+'</div>');
   $("#au-new").onclick=function(){ if(needUser()) openAuctionCreate(); };
+  $("#au-cat").addEventListener("change", load);
   load();
   async function load(){
     var body=$("#au-body"); if(!body) return;
+    var watchlist=location.hash.indexOf("watchlist=1")>=0;
     try{
-      var d=await api("/auctions");
+      var cat=$("#au-cat").value;
+      var d=await api(watchlist?"/auctions/watchlist":"/auctions"+(cat?"?category="+encodeURIComponent(cat):""));
       var list=pickList(d,["auctions"]);
       if(!list.length){ body.innerHTML=emptyState("🔨", t("empty_auctions"), "", '<button class="btn small" id="au-empty-new">'+esc(t("create_first_auction"))+'</button>'); var b=$("#au-empty-new"); if(b) b.onclick=function(){ if(needUser()) openAuctionCreate(); }; return; }
       body.innerHTML=list.map(function(a){
         var cur=a.currency||"NPR";
-        return '<a class="card row-card" href="#/auction/'+encodeURIComponent(a.id)+'"><div class="avatar">🔨</div><div class="grow"><div class="t">'+esc(a.title||"")+'</div><div class="s">'+esc(t("current_bid"))+': '+esc(money(a.current_bid_minor||a.currentBidMinor||a.start_bid_minor||a.startBidMinor||0, cur))+' · '+esc(t("ends"))+' '+esc((a.endsAt||a.ends_at)?fmtDate(a.endsAt||a.ends_at):"—")+'</div></div><span>›</span></a>';
+        return '<a class="card row-card" href="#/auction/'+encodeURIComponent(a.id)+'"><div class="avatar">🔨</div><div class="grow"><div class="t">'+esc(a.title||"")+'</div><div class="s">'+esc(t("current_bid"))+': '+esc(money(a.currentBidMinor||a.current_bid_minor||a.startBidMinor||a.start_bid_minor||0, cur))+' · '+esc(t("ends"))+' '+esc((a.endsAt||a.ends_at)?fmtDate(a.endsAt||a.ends_at):"—")+(a.ended?' · '+esc(t("ended")):"")+'</div></div><span>›</span></a>';
       }).join("");
     }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
   }
@@ -3047,6 +3419,7 @@ function openAuctionCreate(){
     +'<label for="ac-desc">'+esc(t("auction_desc"))+'</label><textarea id="ac-desc" maxlength="1500"></textarea>'
     +'<label for="ac-cat">'+esc(t("category"))+'</label><select id="ac-cat">'+I.categories().map(function(c){ return '<option>'+esc(c)+'</option>'; }).join("")+'</select>'
     +'<label for="ac-bid">'+esc(t("start_bid"))+' ('+(S.user&&countryCode(S.user.country)==="IN"?"₹":"रू")+')</label><input id="ac-bid" type="number" min="0" step="1">'
+    +'<label for="ac-inc">'+esc(t("min_increment"))+' ('+(S.user&&countryCode(S.user.country)==="IN"?"₹":"रू")+') '+esc(t("optional"))+'</label><input id="ac-inc" type="number" min="10" step="1" placeholder="10"><p class="small">'+esc(t("min_increment_note"))+'</p>'
     +'<label for="ac-ends">'+esc(t("auction_ends"))+'</label><input id="ac-ends" type="datetime-local">'
     +'<label for="ac-file">'+esc(t("upload"))+'</label><input type="file" id="ac-file" accept="image/jpeg,image/png,image/webp">'
     +'<div class="field-err" id="ac-err" role="alert"></div>'
@@ -3059,7 +3432,8 @@ function openAuctionCreate(){
     try{
       var photoUrl=null; var f=$("#ac-file").files[0];
       if(f){ var up=await uploadFile(f,"support"); photoUrl=up.url||up.fileUrl||up.path; }
-      await api("/auctions", {method:"POST", body:{title:title, description:$("#ac-desc").value.trim(), category:$("#ac-cat").value, country:countryCode(S.user.country), currency:curOf(S.user.country), startBidMinor:bid, endsAt:new Date(ends).toISOString(), photoUrl:photoUrl||undefined}});
+      var inc=toMinor($("#ac-inc").value);
+      await api("/auctions", {method:"POST", body:{title:title, description:$("#ac-desc").value.trim(), category:$("#ac-cat").value, country:countryCode(S.user.country), currency:curOf(S.user.country), startBidMinor:bid, endsAt:new Date(ends).toISOString(), photoUrl:photoUrl||undefined, minIncrementMinor:inc>0?inc:undefined}});
       closeSheets(); toast(t("auction_submitted")); route();
     }catch(e){ btn.disabled=false; btn.textContent=t("submit"); toast(e.message||t("err_generic"), true); }
   };
@@ -3071,28 +3445,74 @@ function renderAuction(id){
     var a=d.auction||d;
     var cur=a.currency||"NPR";
     var bids=pickList(a,["bids"])||pickList(d,["bids"]);
-    var high=a.current_bid_minor||a.currentBidMinor||a.start_bid_minor||a.startBidMinor||0;
+    var high=a.currentBidMinor||a.current_bid_minor||a.startBidMinor||a.start_bid_minor||0;
     var _ends=a.endsAt||a.ends_at; var ended=_ends? new Date(_ends).getTime()<Date.now() : false;
     var isOwner=S.user && String(a.user_id||a.userId)===String(S.user.id);
+    var minNext=a.minNextBidMinor||(high+(a.minIncrement||0));
+    var sellerName=(a.seller||{}).displayName||(a.seller||{}).display_name||(a.user||{}).display_name||a.seller_name||"";
+    var sellerUsername=(a.seller||{}).username||"";
+    var winner=a.winner||null;
+    var settlement=a.settlement||{};
+    var isWinner=S.user&&winner&&winner.bidderUsername===S.user.username;
     view('<a href="#/auctions" class="small">← '+esc(t("back"))+'</a><div class="card" style="margin-top:8px">'
       +((a.photoUrl||a.photo_url)?'<img class="bill-photo" src="'+esc(a.photoUrl||a.photo_url)+'" alt="'+esc(t("auction_photo_alt"))+'" loading="lazy">':"")
       +'<h1>'+esc(a.title||"")+'</h1><p>'+esc(a.description||"")+'</p>'
+      // Winner announcement (item 568).
+      +(ended&&winner?'<div class="card" style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#fff"><h2 style="color:#fff;margin-top:0">🏆 '+esc(t("auction_winner"))+'</h2><p>'+esc(winner.bidderName||"")+' — '+esc(money(winner.amountMinor||0, cur))+'</p></div>':"")
       +'<div class="kv"><span>'+esc(t("current_bid"))+'</span><b>'+esc(money(high,cur))+'</b></div>'
-      +'<div class="kv"><span>'+esc(t("start_bid"))+'</span><b>'+esc(money(a.start_bid_minor||a.startBidMinor||0,cur))+'</b></div>'
+      +'<div class="kv"><span>'+esc(t("start_bid"))+'</span><b>'+esc(money(a.startBidMinor||a.start_bid_minor||0,cur))+'</b></div>'
+      // Min-next-bid display (item 575) + live countdown (item 576).
+      +(!ended?'<div class="kv"><span>'+esc(t("min_next_bid"))+'</span><b>'+esc(money(minNext,cur))+'</b></div>':"")
       +'<div class="kv"><span>'+esc(t("ends"))+'</span><b>'+esc(_ends?new Date(_ends).toLocaleString():"—")+' '+(ended?esc(t("ended")):"")+'</b></div>'
-      +'<div class="kv"><span>'+esc(t("seller"))+'</span><b>'+esc(((a.seller||{}).displayName||(a.seller||{}).display_name||(a.user||{}).display_name||a.seller_name||""))+'</b></div>'
+      +(!ended&&_ends?'<p class="small" id="au-countdown"></p>':"")
+      +'<div class="kv"><span>'+esc(t("seller"))+'</span><b>'+(sellerUsername?'<a href="#/profile/'+encodeURIComponent(sellerUsername)+'">'+esc(sellerName)+'</a>':esc(sellerName))+'</b></div>'
+      // Settlement (items 572/573): buyer + seller confirm.
+      +(ended&&winner&&(isOwner||isWinner)?'<div class="card" style="margin-top:10px"><h2>'+esc(t("settlement"))+'</h2>'
+        +'<p class="small">'+esc(t("settlement_body"))+'</p>'
+        +'<div class="kv"><span>'+esc(t("buyer_confirmed"))+'</span><b>'+(settlement.buyerSettled?"✅":"⬜")+'</b></div>'
+        +'<div class="kv"><span>'+esc(t("seller_confirmed"))+'</span><b>'+(settlement.sellerSettled?"✅":"⬜")+'</b></div>'
+        +(settlement.settled?'<p>✅ '+esc(t("settled"))+' '+esc(fmtDate(settlement.settledAt))+'</p>'
+          :'<button class="btn" id="au-settle">'+esc(t("confirm_settlement"))+'</button>')
+        +'</div>':"")
       +demoHtml()+'<p class="small">'+esc(t("auction_disabled_note"))+'</p>'
       +(ended?'<p><strong>'+esc(t("auction_ended"))+'</strong></p>':(isOwner?'<p class="small">'+esc(t("bid_self"))+'</p>':'<label for="bid-amt">'+esc(t("your_bid"))+' ('+(cur==="INR"?"₹":"रू")+')</label><input id="bid-amt" type="number" min="0" step="1" aria-describedby="bid-err"><div class="field-err" id="bid-err" role="alert"></div><button class="btn" id="bid-btn">'+esc(t("place_bid"))+'</button><p class="small">'+esc(t("outbid_note"))+'</p>'))
-      +'<div class="btn-row"><button class="btn secondary small" id="au-share">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="au-report">🚩 '+esc(t("report"))+'</button></div></div>'
+      +'<div class="btn-row"><button class="btn secondary small" id="au-watch">'+(a.watching?"👁️ "+esc(t("watching")):"👁️ "+esc(t("watch")))+'</button><button class="btn secondary small" id="au-share">🔗 '+esc(t("share"))+'</button><button class="btn secondary small" id="au-report">🚩 '+esc(t("report"))+'</button></div></div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("bid_history"))+'</h2>'
-      +(bids.length? bids.map(function(bd){ return '<div class="kv"><span>'+esc(bd.anonymous?t("anonymous"):(bd.bidderName||bd.bidder_name||bd.display_name||bd.bidderUsername||bd.username||t("anonymous")))+'</span><b>'+esc(money(bd.amount_minor||bd.amountMinor||0,cur))+' · '+esc(timeAgo(bd.createdAt||bd.created_at))+'</b></div>'; }).join("") : '<p>'+esc(t("no_bids"))+'</p>')+'</div>');
+      +(bids.length? bids.map(function(bd){ return '<div class="kv"><span>'+esc(bd.anonymous?t("anonymous"):(bd.bidderName||bd.bidder_name||bd.display_name||bd.bidderUsername||bd.username||t("anonymous")))+'</span><b>'+esc(money(bd.amountMinor||bd.amount_minor||0,cur))+' · '+esc(timeAgo(bd.createdAt||bd.created_at))+'</b></div>'; }).join("") : '<p>'+esc(t("no_bids"))+'</p>')+'</div>');
+    // Live countdown (item 576).
+    var cd=$("#au-countdown");
+    if(cd&&_ends){
+      var endMs=new Date(_ends).getTime();
+      var cdTimer=setInterval(function(){
+        if(!document.body.contains(cd)){ clearInterval(cdTimer); return; }
+        var left=endMs-Date.now();
+        if(left<=0){ cd.textContent=t("ended"); clearInterval(cdTimer); return; }
+        var h=Math.floor(left/3600000), m=Math.floor(left%3600000/60000), s=Math.floor(left%60000/1000);
+        cd.textContent="⏳ "+h+"h "+String(m).padStart(2,"0")+"m "+String(s).padStart(2,"0")+"s";
+      }, 1000);
+      (function tick(){ var left=endMs-Date.now(); var h=Math.floor(left/3600000), m=Math.floor(left%3600000/60000), s=Math.floor(left%60000/1000); cd.textContent="⏳ "+h+"h "+String(m).padStart(2,"0")+"m "+String(s).padStart(2,"0")+"s"; })();
+    }
     $("#au-share").onclick=function(){ copyText(location.origin+location.pathname+"#/auction/"+a.id, t("copied_link")); };
     $("#au-report").onclick=function(){ openReportSheet("auction", a.id); };
+    $("#au-watch").onclick=async function(){
+      if(!S.user){ toast(t("need_profile"), true); return; }
+      try{
+        if(a.watching){ await api("/auctions/"+encodeURIComponent(a.id)+"/watch", {method:"DELETE"}); }
+        else { await api("/auctions/"+encodeURIComponent(a.id)+"/watch", {method:"POST"}); }
+        route();
+      }catch(e){ toast(e.message||t("err_generic"), true); }
+    };
+    var st=$("#au-settle");
+    if(st) st.onclick=async function(){
+      st.disabled=true;
+      try{ var r=await api("/auctions/"+encodeURIComponent(a.id)+"/settle", {method:"POST"}); toast(r.settled?t("settled"):t("settlement_noted")); route(); }
+      catch(e){ st.disabled=false; toast(e.message||t("err_generic"), true); }
+    };
     var bb=$("#bid-btn");
     if(bb) bb.onclick=async function(){
       if(!needUser()) return;
       var amt=toMinor($("#bid-amt").value);
-      if(amt<=high){ $("#bid-err").textContent=t("bid_min"); return; }
+      if(amt<minNext){ $("#bid-err").textContent=t("bid_min")+" "+money(minNext,cur); return; }
       bb.disabled=true; bb.textContent=t("loading");
       try{ await api("/auctions/"+encodeURIComponent(a.id)+"/bid", {method:"POST", body:{amountMinor:amt}}); toast(t("bid_placed")); route(); }
       catch(e){ bb.disabled=false; bb.textContent=t("place_bid"); toast(e.message||t("err_generic"), true); }
@@ -4014,6 +4434,10 @@ var HELP_TOPICS=[
   {id:"install", titleKey:"topic_install", body:function(){ return '<p>'+esc(t("install_body"))+'</p><p>'+esc(t("install_android"))+'</p><p>'+esc(t("install_ios"))+'</p>'; }},
   {id:"brand-connect", titleKey:"topic_brand_connect", body:function(){ return '<p>'+esc(t("brand_connect_body"))+'</p><p class="small">'+esc(t("brand_connect_note"))+'</p>'; }},
   {id:"drops", titleKey:"topic_drops", body:function(){ return '<p>'+esc(t("drops_body"))+'</p>'; }},
+  {id:"how-brands-help", titleKey:"topic_how_brands_help", body:function(){ return '<p>'+esc(t("how_brands_help_body"))+'</p>'; }},
+  {id:"direct-payments", titleKey:"topic_direct_payments", body:function(){ return '<p>'+esc(t("direct_payments_body"))+'</p><p class="small">'+esc(t("never_holds"))+'</p>'; }},
+  {id:"monetisation", titleKey:"topic_monetisation", body:function(){ return '<p>'+esc(t("monetisation_body"))+'</p>'; }},
+  {id:"brand-faq", titleKey:"topic_brand_faq", body:function(){ return '<p>'+esc(t("brand_faq_body"))+'</p>'; }},
   {id:"who-sees", titleKey:"topic_who_sees", body:function(){ return '<p>'+esc(t("who_sees_body"))+'</p><ul><li>'+esc(t("who_sees_1"))+'</li><li>'+esc(t("who_sees_2"))+'</li><li>'+esc(t("who_sees_3"))+'</li></ul>'; }}
 ];
 function renderHelp(id, q){
@@ -5130,6 +5554,26 @@ async function boot(){
   if("serviceWorker" in navigator){
     try{ navigator.serviceWorker.register("/sw.js").catch(function(){ /* offline shell is best-effort */ }); }catch(e){ /* unsupported */ }
   }
+  // Install prompt (item 583): show once for eligible browsers, dismissible.
+  window.addEventListener("beforeinstallprompt", function(e){
+    e.preventDefault();
+    if(localStorage.getItem("sp-install-dismissed")) return;
+    if(document.getElementById("install-banner")) return;
+    S.deferredInstall=e;
+    var bar=document.createElement("div");
+    bar.id="install-banner";
+    bar.className="install-banner";
+    bar.innerHTML='<span>'+esc(t("install_prompt"))+'</span><button class="btn small" id="ib-install">'+esc(t("install"))+'</button><button class="btn ghost small" id="ib-dismiss" aria-label="'+esc(t("dismiss"))+'">✕</button>';
+    document.body.appendChild(bar);
+    document.getElementById("ib-install").addEventListener("click", function(){
+      if(S.deferredInstall){ S.deferredInstall.prompt(); S.deferredInstall=null; }
+      bar.remove();
+    });
+    document.getElementById("ib-dismiss").addEventListener("click", function(){
+      localStorage.setItem("sp-install-dismissed", "1");
+      bar.remove();
+    });
+  });
 }
 document.addEventListener("DOMContentLoaded", boot);
 if(document.readyState!=="loading") boot();
