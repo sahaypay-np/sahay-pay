@@ -260,3 +260,22 @@ body.has-chrome .site-footer{padding-bottom:calc(var(--dock-h) + 28px + env(safe
 .pe-toolbar input[type=range]{width:110px}
 .chip .cnt{opacity:.75;font-weight:600}
 .progress-thin{height:6px}
+/* Phase 2 §9/§10: accessibility */
+/* Item 947: high-contrast theme (overrides light/dark via data-theme). */
+[data-theme="contrast"]{
+  --bg:#ffffff; --bg2:#ffffff; --ink:#000000; --ink2:#111111; --ink3:#222222;
+  --glass:rgba(255,255,255,.95); --glass2:rgba(255,255,255,.9); --glass-strong:#ffffff;
+  --border:#000000; --border2:#333333; --accent:#0000cc; --accent2:#0000cc; --accent3:#005500;
+  --good:#006400; --bad-text:#b00000; --warn:#7a5200; --shadow:0 0 0 2px #000;
+  color-scheme:light;
+}
+[data-theme="contrast"] .btn{border:2px solid #000}
+[data-theme="contrast"] .chip, [data-theme="contrast"] .card{border:2px solid #000}
+[data-theme="contrast"] a{color:#0000cc;text-decoration:underline}
+/* Item 946: large text size. */
+[data-text-size="large"]{ font-size:19px }
+[data-text-size="large"] .small{ font-size:16px }
+/* Item 948: reduced motion toggle (in addition to the OS preference). */
+html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after{
+  animation-duration:.01ms!important; transition-duration:.01ms!important;
+}

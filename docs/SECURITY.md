@@ -21,6 +21,13 @@ Review annually (see `docs/RUNBOOK.md` §5). Last reviewed: 16 November
   (`PAYOUT_ENCRYPTION_KEY`, else derived from `SESSION_SECRET`, else
   ephemeral with a startup warning). Full details are shown only to a
   helper at the Send step; every reveal is logged in the audit log.
+  Phase 2 (item 833): encryption is **key-per-field** — each payout
+  method (esewa, khalti, upi, bank_np, …) gets its own key, derived
+  from the master key with HMAC-SHA-256 over the label
+  `sahay-pay-field:<method>`, so a compromised field key exposes only
+  one field type. New ciphertexts carry a `v2:` prefix; legacy blobs
+  (master key directly) still decrypt. Rotation: see
+  `docs/KEY-ROTATION.md`.
 - **Verification documents:** reviewer-only; deleted after the review
   is decided (deletion code landed in the November 2026 checklist job).
 - **Uploads:** images (jpg/png/webp) + PDF only, 5 MB cap, random
