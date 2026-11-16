@@ -1829,7 +1829,7 @@ function renderSettings(){
 /* ---------- help centre ---------- */
 /* Full legal documents (English is the binding version; the short summary above each one is translated). */
 var LEGAL_TERMS_HTML=
- '<p class="small">Last updated 16 November 2026. The English version of these terms is the binding version.</p>'
+ '<p class="small">Version 1.0 — Last updated 16 November 2026. Effective 16 November 2026. The English version of these terms is the binding version.</p>'
  +'<h3>1. What Sahay Pay is</h3>'
  +'<p>Sahay Pay connects people in Nepal and India who need help with a bill with people willing to help. A supporter pays the person directly, from their own payment app, using the payout details shown in the app. Sahay Pay never holds, receives, processes, or guarantees gift money.</p>'
  +'<p>Payments are currently in Demo Mode. The gift journey is a demonstration: fees shown are quotes and are not collected, and no real money moves through Sahay Pay. Any transfer you make is made by you, from your own payment app, directly to the other person.</p>'
@@ -1842,7 +1842,8 @@ var LEGAL_TERMS_HTML=
  +'<h3>5. Verification</h3>'
  +'<p>Bill, ID, and Name badges are decided by a human reviewer. A badge means the reviewer checked what was shown to them. It is not a promise that a bill is genuine or that a person will use help in a particular way.</p>'
  +'<h3>6. Helping and gifts</h3>'
- +'<p>Gifts are voluntary. A bill counts as helped only when the person confirms they received the money. Sahay Pay cannot reverse a gift and cannot refund you, because the money never passes through Sahay Pay. Never send money you cannot afford to lose. Never share your MPIN, OTP, password, or card details with anyone. Sahay Pay never asks for them.</p>'
+ +'<p>Gifts are voluntary. A bill counts as helped only when the person confirms they received the money. No contract of sale is formed through Sahay Pay: a gift is a voluntary transfer between two users, and it counts only when the recipient confirms receipt. Sahay Pay cannot reverse a gift and cannot refund you, because the money never passes through Sahay Pay. Never send money you cannot afford to lose. Never share your MPIN, OTP, password, or card details with anyone. Sahay Pay never asks for them.</p>'
+ +'<p>If a gift goes wrong, the dispute is between the two users involved. You can report the problem through the Help Centre complaint form and Sahay Pay will look into it and may suspend the account involved, but Sahay Pay cannot reverse a transfer it never held and cannot force a refund.</p>'
  +'<h3>7. Fees</h3>'
  +'<p>The fee shown at the Fee step is the current schedule: in Nepal, Rs 160 on gifts up to Rs 1,600, then 10% of the gift; in India, Rs 100 on gifts up to Rs 1,000, then 10% of the gift. Charity asks are free. While Demo Mode is active, fees are quoted only and are not collected. The fee may change, and the fee shown before you confirm always applies.</p>'
  +'<h3>8. Cross-border help</h3>'
@@ -1853,16 +1854,17 @@ var LEGAL_TERMS_HTML=
  +'<p>Fake bills, fraud, impersonation, illegal content, harassment, spam, scraping, and attempts to break the service are not allowed. Reported illegal content is removed promptly. Accounts that break these rules may be suspended.</p>'
  +'<h3>11. Your content</h3>'
  +'<p>You keep ownership of what you post. By posting, you allow Sahay Pay to display it on the service. You must have the right to share anything you post.</p>'
+ +'<p>If you believe something posted on Sahay Pay infringes your copyright, report it through the Help Centre complaint form. Include: what was copied and where it appears on Sahay Pay, proof that you own it (or act for the owner), and how to reach you. Sahay Pay will review the report and remove content that breaks the rules.</p>'
  +'<h3>12. Liability</h3>'
  +'<p>The service is provided as is. Sahay Pay does not promise that you will receive help, does not guarantee any post, and is not responsible for transfers between users, for what users post, or for losses from using the service, to the fullest extent the law allows.</p>'
  +'<h3>13. Changes to these terms</h3>'
  +'<p>These terms may change. The version shown in the app always applies. If you keep using Sahay Pay after a change, you accept the new terms.</p>'
  +'<h3>14. Governing law and contact</h3>'
- +'<p>These terms are governed by the law of Nepal. Questions or complaints can be sent through the Help Centre complaint form.</p>';
+ +'<p>These terms are governed by the law of Nepal. By ticking "I agree" and using Sahay Pay, you accept these terms. Under Nepal\'s Electronic Transactions Act, 2063 (2008), electronic records and electronic acceptance form a binding agreement, so these terms bind you even though you never sign a paper copy. Questions or complaints can be sent through the Help Centre complaint form.</p>';
 var LEGAL_PRIVACY_HTML=
- '<p class="small">Last updated 16 November 2026. The English version of this policy is the binding version.</p>'
+ '<p class="small">Version 1.0 — Last updated 16 November 2026. Effective 16 November 2026. The English version of this policy is the binding version.</p>'
  +'<h3>1. What we collect</h3>'
- +'<p>Profile: display name, age, country, city, about you, language, and an optional photo. Payout details: your eSewa or Khalti number, UPI ID, or bank details, encrypted and shown publicly only as a masked hint. Bills you post: amount, category, description, bill photo, and payment method. Verification documents, which only the reviewer sees and which are deleted after review. Reports and complaints you send. One session cookie that keeps you logged in for 30 days.</p>'
+ +'<p>Profile: display name, age, country, city, about you, language, and an optional photo. Payout details: your eSewa or Khalti number, UPI ID, or bank details, encrypted and shown publicly only as a masked hint. Bills you post: amount, category, description, bill photo, and payment method. Verification documents, which only the reviewer sees and which are deleted after review. Reports and complaints you send. Session cookies that keep you logged in (see §8 for the list).</p>'
  +'<p>We do not collect email addresses, passwords, OTPs, MPINs, card numbers, or banking credentials.</p>'
  +'<h3>2. How we use it</h3>'
  +'<p>To run the service and show your bill to helpers; to review posts and keep the service safe; to show your payout details to a helper only at the Send step; and to answer complaints. We do not sell your data. We do not run third-party analytics or advertising trackers.</p>'
@@ -1871,16 +1873,29 @@ var LEGAL_PRIVACY_HTML=
  +'<h3>4. How it is protected</h3>'
  +'<p>Payout details are encrypted while stored. The admin console is protected by a PIN. Access is limited to what the service needs. No system is completely secure, and we cannot promise absolute security.</p>'
  +'<h3>5. How long we keep it</h3>'
- +'<p>Your data stays while your account or bill is active. Verification documents are deleted after review. When you delete a bill or your account, it is removed, including its payout details.</p>'
+ +'<p>We keep each kind of data only as long as it is needed:</p>'
+ +'<ul><li>Your profile and bills: until you delete them.</li><li>Verification documents: deleted after the review is decided.</li><li>Session records: 30 days for your login, 24 hours for the admin login.</li><li>Audit log entries (what happened and when — never your payout details): 1 year.</li></ul>'
+ +'<p>When you delete a bill or your account, it is removed, including its payout details.</p>'
  +'<h3>6. Your rights</h3>'
- +'<p>Edit your profile in Settings. Delete your account in Settings at any time. Ask about your data, or request a copy or deletion, through the Help Centre complaint form. We respect your rights under the Individual Privacy Act 2075 of Nepal and the Digital Personal Data Protection Act 2023 of India.</p>'
+ +'<p>Edit your profile in Settings. Delete your account in Settings at any time. Ask about your data, or request a copy or deletion, through the Help Centre complaint form. We answer access and export requests within 30 days. We respect your rights under the Individual Privacy Act 2075 of Nepal and the Digital Personal Data Protection Act 2023 of India.</p>'
  +'<h3>7. Children</h3>'
  +'<p>Sahay Pay is for adults aged 18 and over only. We do not knowingly collect data from anyone under 18. Under-18 sign-ups are blocked and no account is created.</p>'
  +'<h3>8. Cookies</h3>'
- +'<p>We use one strictly necessary session cookie to keep you logged in. We use no advertising or tracking cookies.</p>'
+ +'<p>We use two strictly necessary session cookies and no advertising or tracking cookies. Both are HttpOnly and SameSite=Lax, and are marked Secure whenever the site runs in production mode.</p>'
+ +'<table class="cookie-table"><tr><th>Cookie</th><th>Purpose</th><th>Lasts</th></tr><tr><td>sp_session</td><td>Keeps you logged in</td><td>30 days (renewed when you use the app)</td></tr><tr><td>sp_admin</td><td>Keeps the admin console logged in</td><td>24 hours</td></tr></table>'
  +'<h3>9. Changes and contact</h3>'
  +'<p>If this policy changes, the version shown in the app applies. Contact us through the Help Centre complaint form.</p>';
+var ABOUT_HTML=
+ '<p>Sahay Pay connects people in Nepal and India who need help with a bill with people willing to help. A supporter pays the person directly, from their own payment app, using the payout details shown in the app. Sahay Pay never holds, receives, processes, or guarantees gift money.</p>'
+ +'<p>Every post is reviewed by the owner before it goes public. The service is run from Bhairahawa, Nepal, and is currently in Demo Mode: no real payment integration is connected yet, so fees shown are quotes and are not collected.</p>';
+var REFUNDS_HTML=
+ '<p>No payments are taken while Demo Mode is active, so no refunds arise. Gifts go directly from supporter to recipient, outside Sahay Pay, and Sahay Pay cannot refund or reverse them (see Terms §6).</p>'
+ +'<p>When real payments launch, any fee collected through a payment provider will be refunded through that provider, under that provider\'s rules. If a post was fake or the payout details were wrong, report it through the Help Centre complaint form — the owner reviews every report.</p>';
+var CONTENT_RULES_HTML=
+ '<p>Do not post: fake bills or false claims; defamation; hate speech; threats, harassment, or bullying; misinformation; illegal goods or services; sexual content involving minors (reported to the authorities); other people\'s private details; content you do not have the right to share; spam or scams.</p>'
+ +'<p>To report content, use the Help Centre complaint form: include a link to the post, which rule it breaks, and why. Reported content is reviewed by a human. Posts that break these rules are removed, and accounts that break them may be suspended. Copyright reports go through the same form (see Terms §11).</p>';
 var HELP_TOPICS=[
+  {id:"about", titleKey:"topic_about", body:function(){ return '<p>'+esc(t("about_body"))+'</p>'+ABOUT_HTML; }},
   {id:"helping", titleKey:"topic_helping", body:function(){ return '<p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'<p class="small">'+esc(t("fee_sentence_supporter"))+' '+esc(t("fee_sentence_zero"))+'</p>'+crossBorderHtml(); }},
   {id:"posting", titleKey:"topic_posting", body:function(){ return '<p>'+esc(t("how_posting_body"))+'</p><p>'+esc(t("owner_approval_note"))+'</p>'; }},
   {id:"faq", titleKey:"topic_faq", body:function(){
@@ -1893,7 +1908,9 @@ var HELP_TOPICS=[
   }},
   {id:"verification", titleKey:"topic_verification", body:function(){ return '<p>'+esc(t("verify_bill_help"))+'</p><p>'+esc(t("verify_id_help"))+'</p><p>'+esc(t("verify_name_help"))+'</p><p>'+esc(t("verify_biller_help"))+'</p><p class="small">'+esc(t("badge_checked"))+'</p>'; }},
   {id:"fees", titleKey:"topic_fees", body:function(){ return '<p>'+esc(feeSentence())+'</p><p>'+esc(t("charity_free"))+'</p><p>'+esc(t("tip_separate"))+'</p>'; }},
+  {id:"refunds", titleKey:"topic_refunds", body:function(){ return '<p>'+esc(t("refunds_body"))+'</p>'+REFUNDS_HTML; }},
   {id:"safety", titleKey:"topic_safety", body:function(){ return '<p>'+esc(t("safety_body"))+'</p><p class="small">'+esc(t("crisis_note"))+'</p>'; }},
+  {id:"content-rules", titleKey:"topic_content_rules", body:function(){ return '<p>'+esc(t("content_rules_body"))+'</p>'+CONTENT_RULES_HTML; }},
   {id:"complaints", titleKey:"topic_complaints", body:function(){ return '<p>'+esc(t("complaints_body"))+'</p><div id="complaint-form"></div>'; }},
   {id:"privacy", titleKey:"topic_privacy", body:function(){ return '<p>'+esc(t("privacy_body"))+'</p>'+LEGAL_PRIVACY_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }},
   {id:"terms", titleKey:"topic_terms", body:function(){ return '<p>'+esc(t("terms_body"))+'</p>'+LEGAL_TERMS_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }}
