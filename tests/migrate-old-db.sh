@@ -30,15 +30,16 @@ const db = new DatabaseSync('data/sahay-pay.db');
 db.exec(fs.readFileSync('/tmp/old-schema.sql', 'utf8'));
 db.close();
 " || { echo "FAIL: could not build old-schema DB"; exit 1; }
-# Sanity: the old DB really lacks the newest columns (phase-2 s1-2 bill
-# columns — the migration under test). Any pre-change base lacks them.
+# Sanity: the old DB really lacks the newest columns (phase-2 s4-6 bill
+# columns — the migration under test). Any pre-change base lacks them,
+# including b7637d2 (which already has the s1-2 columns).
 OLD_COLS=$(node -e "
 const { DatabaseSync } = require('node:sqlite');
 const db = new DatabaseSync('data/sahay-pay.db');
 const cols = db.prepare(\"PRAGMA table_info(bills)\").all().map(r => r.name);
-console.log(cols.includes('expires_at') ? 'HAS' : 'LACKS');
+console.log(cols.includes('share_count') ? 'HAS' : 'LACKS');
 db.close();")
-t "old DB lacks new bill columns (expires_at)" "LACKS" "$OLD_COLS"
+t "old DB lacks new bill columns (share_count)" "LACKS" "$OLD_COLS"
 
 # 2. Start the CURRENT server against the old DB.
 PORT=$PORT SESSION_SECRET=$(openssl rand -base64 48) PAYOUT_ENCRYPTION_KEY=$(openssl rand -base64 32) \
