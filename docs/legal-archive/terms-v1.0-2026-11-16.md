@@ -14,7 +14,7 @@ Sahay Pay is for adults aged 18 and over only. Anyone under 18 is blocked and no
 
 ## 3. Your account
 
-Your account is created from simple questions (name, age, country, city, about you). There is no email address or password. Your login stays on your device for 30 days. Keep your device secure, and log out on any device you share. You can delete your account in Settings at any time.
+Your account is created from simple questions (name, age, country, city, about you). There is no email address or password. When your account is created you are shown a one-time recovery code: write it down and keep it somewhere safe — it is the only way back into your account if you log out, clear your browser data, or change device, because Sahay Pay never stores the code itself. Your login stays on your device for 30 days. Keep your device secure, and log out on any device you share. You can delete your account in Settings at any time.
 
 ## 4. Posting a bill
 

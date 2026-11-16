@@ -4,7 +4,7 @@
 
 ## 1. What we collect
 
-Profile: display name, age, country, city, about you, language, and an optional photo. Payout details: your eSewa or Khalti number, UPI ID, or bank details, encrypted and shown publicly only as a masked hint. Bills you post: amount, category, description, bill photo, and payment method. Verification documents, which only the reviewer sees and which are deleted after review. Reports and complaints you send. Session cookies that keep you logged in (see §8 for the list).
+Profile: display name, age, country, city, about you, language, and an optional photo. Payout details: your eSewa or Khalti number, UPI ID, or bank details, encrypted and shown publicly only as a masked hint. Bills you post: amount, category, description, bill photo, and payment method. Verification documents, which only the reviewer sees and which are deleted after review. Reports and complaints you send. Session cookies that keep you logged in (see §8 for the list). A scrambled copy (hash) of your one-time recovery code, so we can check a code you enter without ever storing the code itself.
 
 We do not collect email addresses, passwords, OTPs, MPINs, card numbers, or banking credentials.
 

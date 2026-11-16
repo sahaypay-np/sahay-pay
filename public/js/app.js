@@ -1988,7 +1988,7 @@ var LEGAL_TERMS_HTML=
  +'<h3>2. Who can use Sahay Pay</h3>'
  +'<p>Sahay Pay is for adults aged 18 and over only. Anyone under 18 is blocked and no account is created. You must give true information about yourself, and you may only create one account.</p>'
  +'<h3>3. Your account</h3>'
- +'<p>Your account is created from simple questions (name, age, country, city, about you). There is no email address or password. Your login stays on your device for 30 days. Keep your device secure, and log out on any device you share. You can delete your account in Settings at any time.</p>'
+ +'<p>Your account is created from simple questions (name, age, country, city, about you). There is no email address or password. When your account is created you are shown a one-time recovery code: write it down and keep it somewhere safe — it is the only way back into your account if you log out, clear your browser data, or change device, because Sahay Pay never stores the code itself. Your login stays on your device for 30 days. Keep your device secure, and log out on any device you share. You can delete your account in Settings at any time.</p>'
  +'<h3>4. Posting a bill</h3>'
  +'<p>Post only real bills, described honestly. Every post is reviewed by the owner before it goes public, and the owner may approve it, reject it, or ask for changes. A material edit to a live bill sends it back to review. Keep other people personal details out of your photos. A bill may be paused if it is reported, and removed if it breaks these terms.</p>'
  +'<h3>5. Verification</h3>'
@@ -2016,7 +2016,7 @@ var LEGAL_TERMS_HTML=
 var LEGAL_PRIVACY_HTML=
  '<p class="small">Version 1.0 — Last updated 16 November 2026. Effective 16 November 2026. The English version of this policy is the binding version.</p>'
  +'<h3>1. What we collect</h3>'
- +'<p>Profile: display name, age, country, city, about you, language, and an optional photo. Payout details: your eSewa or Khalti number, UPI ID, or bank details, encrypted and shown publicly only as a masked hint. Bills you post: amount, category, description, bill photo, and payment method. Verification documents, which only the reviewer sees and which are deleted after review. Reports and complaints you send. Session cookies that keep you logged in (see §8 for the list).</p>'
+ +'<p>Profile: display name, age, country, city, about you, language, and an optional photo. Payout details: your eSewa or Khalti number, UPI ID, or bank details, encrypted and shown publicly only as a masked hint. Bills you post: amount, category, description, bill photo, and payment method. Verification documents, which only the reviewer sees and which are deleted after review. Reports and complaints you send. Session cookies that keep you logged in (see §8 for the list). A scrambled copy (hash) of your one-time recovery code, so we can check a code you enter without ever storing the code itself.</p>'
  +'<p>We do not collect email addresses, passwords, OTPs, MPINs, card numbers, or banking credentials.</p>'
  +'<h3>2. How we use it</h3>'
  +'<p>To run the service and show your bill to helpers; to review posts and keep the service safe; to show your payout details to a helper only at the Send step; and to answer complaints. We do not sell your data. We do not run third-party analytics or advertising trackers.</p>'
