@@ -41,7 +41,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_agent TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_code_lookup);
+-- NOTE: idx_users_recovery (users.recovery_code_lookup) is NOT created here:
+-- on an existing DB the CREATE TABLE above is a no-op, so the column does
+-- not exist yet when this file runs. migrate() in server/db.js creates it
+-- after the EXTRA_COLUMNS ALTERs (see the 2026-11-16 live-502 fix).
 
 CREATE TABLE IF NOT EXISTS bills (
   id TEXT PRIMARY KEY,

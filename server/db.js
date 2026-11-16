@@ -225,6 +225,11 @@ async function migrate() {
       if (!/duplicate column|already exists/i.test(err.message)) throw err;
     }
   }
+  // Indexes on columns added above must be created AFTER the ALTERs: on an
+  // existing DB the schema file's CREATE TABLE is a no-op, so an index on a
+  // not-yet-added column fails the whole migrate — this 502'd every live
+  // API route on 2026-11-16 (idx_users_recovery ran before the ALTERs).
+  await run('CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_code_lookup)');
   // Seed config defaults only (no content rows, ever).
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     await run(
