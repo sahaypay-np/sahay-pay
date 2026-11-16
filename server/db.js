@@ -126,6 +126,13 @@ const DEFAULT_SETTINGS = {
     'Government fees', 'Charity', 'Other',
   ]),
   min_gift_minor: '1000',
+  // Phase 2 section 3: per-currency minimums (206) + gift chips (201/290)
+  // + per-category charity fee-free list (217). The legacy min_gift_minor
+  // stays as the fallback when a per-currency value is missing.
+  min_gift_minor_npr: '1000',
+  min_gift_minor_inr: '1000',
+  gift_chips: JSON.stringify({ NPR: [10000, 25000, 50000, 100000], INR: [10000, 25000, 50000, 100000] }),
+  charity_fee_free_categories: JSON.stringify([]),
 };
 
 async function getSetting(key) {
@@ -207,6 +214,22 @@ const EXTRA_COLUMNS = [
   ['bills', 'expires_at', 'TEXT'],
   ['bills', 'extension_used', 'INTEGER NOT NULL DEFAULT 0'],
   ['bills', 'repost_count', 'INTEGER NOT NULL DEFAULT 0'],
+  // Phase 2 (section 3): gifting — message, anonymity, receipts, timeline,
+  // direct-pay, fee review, dispute escalation, lazy reminders/expiry.
+  ['gifts', 'message', "TEXT DEFAULT ''"],
+  ['gifts', 'anonymous', 'INTEGER NOT NULL DEFAULT 0'],
+  ['gifts', 'receipt_number', 'TEXT'],
+  ['gifts', 'details_shown_at', 'TEXT'],
+  ['gifts', 'reported_sent_at', 'TEXT'],
+  ['gifts', 'disputed_at', 'TEXT'],
+  ['gifts', 'direct_pay', 'INTEGER NOT NULL DEFAULT 0'],
+  ['gifts', 'biller_name', "TEXT DEFAULT ''"],
+  ['gifts', 'biller_ref', "TEXT DEFAULT ''"],
+  ['gifts', 'fee_review_status', "TEXT DEFAULT 'none'"],
+  ['gifts', 'fee_review_case', "TEXT DEFAULT ''"],
+  ['gifts', 'fee_review_at', 'TEXT'],
+  ['gifts', 'reminded_24h', 'INTEGER NOT NULL DEFAULT 0'],
+  ['gifts', 'reminded_72h', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 // Cold-start mitigation (checklist priority fix (g)): the full migrate is
@@ -261,6 +284,57 @@ async function migrate() {
     created_at TEXT NOT NULL
   )`);
   await run('CREATE INDEX IF NOT EXISTS idx_bill_edits_bill ON bill_edits(bill_id, created_at)');
+  // Phase 2 section 3: basket, pledges, gift messages, billers. New tables
+  // are safe on old DBs (CREATE TABLE IF NOT EXISTS); indexes on the new
+  // gifts columns are created AFTER the ALTERs above, same rule as
+  // idx_users_recovery (an index on a not-yet-added column 502s the live
+  // API on the existing database).
+  await run(`CREATE TABLE IF NOT EXISTS basket_items (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+    amount_minor INTEGER,
+    saved_for_later INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, bill_id)
+  )`);
+  await run('CREATE INDEX IF NOT EXISTS idx_basket_user ON basket_items(user_id, created_at)');
+  await run(`CREATE TABLE IF NOT EXISTS pledges (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+    frequency TEXT NOT NULL,
+    amount_minor INTEGER NOT NULL,
+    currency TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    next_due_at TEXT NOT NULL,
+    last_reminded_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+  await run('CREATE INDEX IF NOT EXISTS idx_pledges_user ON pledges(user_id, status)');
+  await run('CREATE INDEX IF NOT EXISTS idx_pledges_bill ON pledges(bill_id, status)');
+  await run(`CREATE TABLE IF NOT EXISTS gift_messages (
+    id TEXT PRIMARY KEY,
+    gift_id TEXT NOT NULL REFERENCES gifts(id) ON DELETE CASCADE,
+    sender_type TEXT NOT NULL,
+    sender_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`);
+  await run('CREATE INDEX IF NOT EXISTS idx_gift_messages_gift ON gift_messages(gift_id, created_at)');
+  await run(`CREATE TABLE IF NOT EXISTS billers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    country TEXT NOT NULL,
+    ref_format TEXT DEFAULT '',
+    ref_hint TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+  await run('CREATE INDEX IF NOT EXISTS idx_billers_active ON billers(active, country, category)');
+  await run('CREATE INDEX IF NOT EXISTS idx_gifts_receipt ON gifts(receipt_number)');
   // Seed config defaults only (no content rows, ever).
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     await run(

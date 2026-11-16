@@ -25,10 +25,10 @@ const CROSS_BORDER_NOTE = [
 
 router.get('/config', async (req, res, next) => {
   try {
-    // Parallel: these 7 settings reads are independent, and each is a
+    // Parallel: these 11 settings reads are independent, and each is a
     // ~200ms round trip to Supabase from the serverless function — run
     // sequentially, /config cost ~1.9s even warm (measured 2026-11-16).
-    const [feeModeRaw, feeConfig, brandPackages, founderTipConfig, paymentMethods, categories, minGiftRaw] =
+    const [feeModeRaw, feeConfig, brandPackages, founderTipConfig, paymentMethods, categories, minGiftRaw, minNprRaw, minInrRaw, giftChips, charityFreeCategories] =
       await Promise.all([
         db.getSetting('fee_mode'),
         db.getSettingJson('fee_config', {}),
@@ -37,9 +37,14 @@ router.get('/config', async (req, res, next) => {
         db.getSettingJson('payment_methods', {}),
         db.getSettingJson('categories', []),
         db.getSetting('min_gift_minor'),
+        db.getSetting('min_gift_minor_npr'),
+        db.getSetting('min_gift_minor_inr'),
+        db.getSettingJson('gift_chips', null),
+        db.getSettingJson('charity_fee_free_categories', []),
       ]);
     const feeMode = feeModeRaw || 'supporter_fee';
     const minGiftMinor = Number(minGiftRaw) || 1000;
+    const defaultChips = { NPR: [10000, 25000, 50000, 100000], INR: [10000, 25000, 50000, 100000] };
     res.json({
       appName: 'Sahay Pay',
       tagline: 'Small acts. Real help.',
@@ -53,10 +58,13 @@ router.get('/config', async (req, res, next) => {
       paymentMethods,
       categories,
       minGiftMinor,
+      minGiftMinorNPR: Number(minNprRaw) || minGiftMinor,
+      minGiftMinorINR: Number(minInrRaw) || minGiftMinor,
+      charityFeeFreeCategories: Array.isArray(charityFreeCategories) ? charityFreeCategories : [],
       cities: CITIES,
       policyVersion: { terms: TERMS_VERSION, privacy: PRIVACY_VERSION, effective: POLICY_EFFECTIVE_DATE },
       crossBorderNote: CROSS_BORDER_NOTE,
-      giftAmountChips: { NPR: [10000, 50000, 100000], INR: [10000, 50000, 100000] },
+      giftAmountChips: (giftChips && giftChips.NPR && giftChips.INR) ? giftChips : defaultChips,
     });
   } catch (err) {
     next(err);
@@ -547,6 +555,9 @@ router.get('/leaders', async (req, res, next) => {
     const periodRaw = req.query.period === '7' ? '7d' : req.query.period === '30' ? '30d' : req.query.period;
     const period = ['7d', '30d', 'all'].includes(periodRaw) ? periodRaw : '7d';
     const scope = ['NP', 'IN', 'all'].includes(req.query.scope) ? req.query.scope : 'all';
+    // Item 289: separate NPR / INR leaderboards — totals are never mixed
+    // across currencies. Default 'all' keeps the combined view.
+    const currency = ['NPR', 'INR'].includes(req.query.currency) ? req.query.currency : null;
     const since = period === 'all'
       ? null
       : new Date(Date.now() - (period === '7d' ? 7 : 30) * 24 * 3600000).toISOString();
@@ -555,6 +566,7 @@ router.get('/leaders', async (req, res, next) => {
     let where = `g.status = 'confirmed'`;
     if (since) { params.push(since); where += ` AND g.confirmed_at >= $${params.length}`; }
     if (scope !== 'all') { params.push(scope); where += ` AND b.country = $${params.length}`; }
+    if (currency) { params.push(currency); where += ` AND g.currency = $${params.length}`; }
 
     if (tab === 'top_supporters') {
       const { rows } = await db.query(
@@ -568,7 +580,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope,
+        tab, period, scope, currency: currency || 'all',
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
           photoUrl: r.photo_url, country: r.country, totalMinor: Number(r.total_minor),
@@ -589,7 +601,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope,
+        tab, period, scope, currency: currency || 'all',
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
           photoUrl: r.photo_url, country: r.country, totalMinor: Number(r.total_minor),
@@ -611,7 +623,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope,
+        tab, period, scope, currency: currency || 'all',
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, title: r.title, amountMinor: r.amount_minor,
           coveredMinor: r.covered_minor, currency: r.currency, country: r.country,
@@ -633,7 +645,7 @@ router.get('/leaders', async (req, res, next) => {
         params
       );
       return res.json({
-        tab, period, scope,
+        tab, period, scope, currency: currency || 'all',
         leaders: rows.map((r, i) => ({
           rank: i + 1, id: r.id, displayName: r.display_name, username: r.username,
           photoUrl: r.photo_url, country: r.country, billsPaid: Number(r.bills_paid),
@@ -654,7 +666,7 @@ router.get('/leaders', async (req, res, next) => {
        GROUP BY name ORDER BY asks DESC LIMIT 50`
     );
     return res.json({
-      tab, period, scope,
+      tab, period, scope, currency: currency || 'all',
       mostResponded: responded.rows.map((r, i) => ({ rank: i + 1, name: r.name, responses: Number(r.responses), countries: Number(r.countries) })),
       mostAsked: asked.rows.map((r, i) => ({ rank: i + 1, name: r.name, asks: Number(r.asks) })),
       emptyMessage: responded.rows.length === 0 && asked.rows.length === 0

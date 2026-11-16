@@ -62,6 +62,7 @@ const billsRouter = require('./routes/bills');
 app.use('/api/bills', billsRouter);
 app.use('/api/uploads', billsRouter.uploadsRouter);
 app.use('/api/gifts', require('./routes/gifts'));
+app.use('/api', require('./routes/gifting')); // /api/basket, /api/pledges, /api/billers
 app.use('/api/verification', require('./routes/verification'));
 app.use('/api/brands', require('./routes/brands'));
 app.use('/api/auctions', require('./routes/auctions'));

@@ -238,6 +238,50 @@ router.get('/:username', async (req, res, next) => {
          (SELECT COALESCE(SUM(g.amount_minor), 0) FROM gifts g JOIN bills b ON b.id = g.bill_id WHERE b.user_id = $2 AND g.status = 'confirmed') AS received`,
       [user.id, user.id]
     );
+    const completedAsks = await db.get(
+      `SELECT COUNT(*) AS c FROM bills WHERE user_id = $1 AND status = 'completed'`,
+      [user.id]
+    );
+    // Helper impact summary (item 299): confirmed-gift count, bills helped,
+    // giving streaks, split by currency. Only confirmed gifts count.
+    const impactRows = await db.query(
+      `SELECT currency, amount_minor, confirmed_at, bill_id
+       FROM gifts WHERE supporter_id = $1 AND status = 'confirmed' ORDER BY confirmed_at ASC`,
+      [user.id]
+    );
+    const byCurrency = {};
+    const billsHelped = new Set();
+    const daySet = new Set();
+    for (const r of impactRows.rows) {
+      const cur = r.currency || 'NPR';
+      if (!byCurrency[cur]) byCurrency[cur] = { count: 0, totalMinor: 0 };
+      byCurrency[cur].count++;
+      byCurrency[cur].totalMinor += r.amount_minor;
+      billsHelped.add(r.bill_id);
+      if (r.confirmed_at) daySet.add(r.confirmed_at.slice(0, 10));
+    }
+    // Streaks over UTC calendar days with at least one confirmed gift.
+    const days = [...daySet].sort();
+    let longestStreak = 0;
+    let run = 0;
+    let prev = null;
+    for (const d of days) {
+      const ms = new Date(`${d}T00:00:00Z`).getTime();
+      run = prev !== null && ms - prev === 86400000 ? run + 1 : 1;
+      prev = ms;
+      longestStreak = Math.max(longestStreak, run);
+    }
+    let currentStreak = 0;
+    if (days.length) {
+      const today = new Date().toISOString().slice(0, 10);
+      const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      let cursor = daySet.has(today) ? today : daySet.has(yesterday) ? yesterday : null;
+      while (cursor && daySet.has(cursor)) {
+        currentStreak++;
+        cursor = new Date(new Date(`${cursor}T00:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10);
+      }
+    }
+    const prefs = parsePrefs(user);
     res.json({
       user: {
         displayName: user.display_name,
@@ -254,6 +298,15 @@ router.get('/:username', async (req, res, next) => {
         coveredMinor: r.covered_minor, currency: r.currency, photoUrl: r.photo_url, createdAt: r.created_at,
       })),
       totals: { givenMinor: Number(totals?.given || 0), receivedMinor: Number(totals?.received || 0) },
+      completedAsks: Number(completedAsks?.c || 0),
+      showTotals: prefs.showTotals,
+      impact: {
+        confirmedGifts: impactRows.rows.length,
+        billsHelped: billsHelped.size,
+        byCurrency,
+        currentStreakDays: currentStreak,
+        longestStreakDays: longestStreak,
+      },
     });
   } catch (err) {
     next(err);

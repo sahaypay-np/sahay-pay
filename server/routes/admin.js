@@ -12,6 +12,7 @@
 'use strict';
 
 const express = require('express');
+const crypto = require('crypto');
 const db = require('../db');
 const { logAudit, nowIso } = require('../lib/audit');
 const {
@@ -126,6 +127,7 @@ const EXPORT_TABLES = [
   'bills', 'payout_methods', 'gifts', 'verifications', 'brands',
   'brand_connects', 'auctions', 'auction_bids', 'notifications',
   'reports', 'complaints', 'review_packets', 'audit_logs',
+  'basket_items', 'pledges', 'gift_messages', 'billers', 'bill_edits',
 ];
 const SECRET_SETTING_KEYS = new Set(['admin_pin_hash']);
 const SECRET_SETTING_PATTERN = /secret|token|password/i;
@@ -217,6 +219,24 @@ router.get('/metrics', async (req, res, next) => {
        FROM gifts WHERE status = 'confirmed' AND tip_minor > 0 GROUP BY currency`
     );
     const giftsByStatus = await db.query('SELECT status, COUNT(*) AS c FROM gifts GROUP BY status');
+    // Gift disputes (items 281/284): open disputes + fee reviews, and the
+    // escalation count — disputes unanswered by an admin for 48h+.
+    const openDisputes = await q(
+      `SELECT COUNT(*) AS c FROM gifts
+       WHERE status = 'disputed' OR fee_review_status IN ('requested', 'acknowledged')`
+    );
+    const staleCutoff = new Date(Date.now() - 48 * 3600000).toISOString();
+    const staleDisputes = await q(
+      `SELECT COUNT(*) AS c FROM gifts g
+       WHERE (g.status = 'disputed' OR g.fee_review_status IN ('requested', 'acknowledged'))
+         AND COALESCE(g.disputed_at, g.fee_review_at, g.created_at) <= $1
+         AND NOT EXISTS (
+           SELECT 1 FROM gift_messages m
+           WHERE m.gift_id = g.id AND m.sender_type = 'admin'
+             AND m.created_at > COALESCE(g.disputed_at, g.fee_review_at, g.created_at)
+         )`,
+      [staleCutoff]
+    );
     res.json({
       users: Number(users.c || 0),
       suspendedUsers: Number(suspended.c || 0),
@@ -228,6 +248,8 @@ router.get('/metrics', async (req, res, next) => {
       confirmedHelpVolume: volume.rows.map((r) => ({ currency: r.currency, totalMinor: Number(r.total), gifts: Number(r.gifts) })),
       founderTipsConfirmed: tips.rows.map((r) => ({ currency: r.currency, totalMinor: Number(r.total) })),
       giftsByStatus: Object.fromEntries(giftsByStatus.rows.map((r) => [r.status, Number(r.c)])),
+      openDisputes: Number(openDisputes.c || 0),
+      staleDisputes: Number(staleDisputes.c || 0),
     });
   } catch (err) {
     next(err);
@@ -443,17 +465,27 @@ router.get('/fees', async (req, res, next) => {
   try {
     // Parallel: independent settings reads (see /config — each is a
     // ~200ms Supabase round trip from the serverless function).
-    const [feeModeRaw, feeConfig, founderTipConfig, minGiftRaw] = await Promise.all([
+    const [feeModeRaw, feeConfig, founderTipConfig, minGiftRaw, minNprRaw, minInrRaw, giftChips, charityFreeCategories] = await Promise.all([
       db.getSetting('fee_mode'),
       db.getSettingJson('fee_config', {}),
       db.getSettingJson('founder_tip_config', {}),
       db.getSetting('min_gift_minor'),
+      db.getSetting('min_gift_minor_npr'),
+      db.getSetting('min_gift_minor_inr'),
+      db.getSettingJson('gift_chips', null),
+      db.getSettingJson('charity_fee_free_categories', []),
     ]);
     res.json({
       feeMode: feeModeRaw || 'supporter_fee',
       feeConfig,
       founderTipConfig,
       minGiftMinor: Number(minGiftRaw) || 1000,
+      minGiftMinorNPR: Number(minNprRaw) || Number(minGiftRaw) || 1000,
+      minGiftMinorINR: Number(minInrRaw) || Number(minGiftRaw) || 1000,
+      giftChips: (giftChips && giftChips.NPR && giftChips.INR)
+        ? giftChips
+        : { NPR: [10000, 25000, 50000, 100000], INR: [10000, 25000, 50000, 100000] },
+      charityFeeFreeCategories: Array.isArray(charityFreeCategories) ? charityFreeCategories : [],
     });
   } catch (err) {
     next(err);
@@ -467,8 +499,9 @@ router.put('/fees', async (req, res, next) => {
       if (!['supporter_fee', 'zero_fee_plus_tip'].includes(body.feeMode)) {
         return res.status(400).json({ error: { code: 'VALIDATION', message: 'feeMode must be supporter_fee or zero_fee_plus_tip.' } });
       }
+      const oldMode = (await db.getSetting('fee_mode')) || 'supporter_fee';
       await db.setSetting('fee_mode', body.feeMode);
-      await logAudit('admin', 'owner', 'fee_mode_changed', 'settings', 'fee_mode', { feeMode: body.feeMode });
+      await logAudit('admin', 'owner', 'fee_mode_changed', 'settings', 'fee_mode', { oldValue: oldMode, newValue: body.feeMode, changedAt: nowIso() });
     }
     if (body.feeConfig !== undefined) {
       if (typeof body.feeConfig !== 'object' || Array.isArray(body.feeConfig)) {
@@ -484,12 +517,19 @@ router.put('/fees', async (req, res, next) => {
           }
         }
       }
+      // Item 216: fee-rule changes log admin + old/new values + timestamp.
+      const oldConfig = await db.getSettingJson('fee_config', {});
       await db.setSetting('fee_config', JSON.stringify(body.feeConfig));
-      await logAudit('admin', 'owner', 'fee_config_changed', 'settings', 'fee_config', {});
+      await logAudit('admin', 'owner', 'fee_config_changed', 'settings', 'fee_config', {
+        admin: 'owner', oldValue: oldConfig, newValue: body.feeConfig, changedAt: nowIso(),
+      });
     }
     if (body.founderTipConfig !== undefined) {
+      const oldTip = await db.getSettingJson('founder_tip_config', {});
       await db.setSetting('founder_tip_config', JSON.stringify(body.founderTipConfig));
-      await logAudit('admin', 'owner', 'founder_tip_config_changed', 'settings', 'founder_tip_config', {});
+      await logAudit('admin', 'owner', 'founder_tip_config_changed', 'settings', 'founder_tip_config', {
+        admin: 'owner', oldValue: oldTip, newValue: body.founderTipConfig, changedAt: nowIso(),
+      });
     }
     if (body.minGiftMinor !== undefined) {
       if (!Number.isSafeInteger(body.minGiftMinor) || body.minGiftMinor <= 0) {
@@ -497,6 +537,368 @@ router.put('/fees', async (req, res, next) => {
       }
       await db.setSetting('min_gift_minor', String(body.minGiftMinor));
     }
+    // Item 206: per-currency minimums.
+    for (const [key, setting] of [['minGiftMinorNPR', 'min_gift_minor_npr'], ['minGiftMinorINR', 'min_gift_minor_inr']]) {
+      if (body[key] !== undefined) {
+        if (!Number.isSafeInteger(body[key]) || body[key] <= 0) {
+          return res.status(400).json({ error: { code: 'VALIDATION', message: `${key} must be a positive integer.` } });
+        }
+        const oldVal = await db.getSetting(setting);
+        await db.setSetting(setting, String(body[key]));
+        await logAudit('admin', 'owner', 'min_gift_changed', 'settings', setting, {
+          admin: 'owner', oldValue: oldVal, newValue: String(body[key]), changedAt: nowIso(),
+        });
+      }
+    }
+    // Item 290: gift-chip amounts per currency (2–6 chips, ascending).
+    if (body.giftChips !== undefined) {
+      if (typeof body.giftChips !== 'object' || Array.isArray(body.giftChips)) {
+        return res.status(400).json({ error: { code: 'VALIDATION', message: 'giftChips must be an object keyed by currency.' } });
+      }
+      for (const [cur, chips] of Object.entries(body.giftChips)) {
+        if (!['NPR', 'INR'].includes(cur) || !Array.isArray(chips) || chips.length < 2 || chips.length > 6
+          || chips.some((c) => !Number.isSafeInteger(c) || c <= 0)
+          || chips.some((c, i) => i > 0 && c <= chips[i - 1])) {
+          return res.status(400).json({ error: { code: 'VALIDATION', message: `giftChips.${cur} must be 2–6 ascending positive integers.` } });
+        }
+      }
+      await db.setSetting('gift_chips', JSON.stringify(body.giftChips));
+      await logAudit('admin', 'owner', 'gift_chips_changed', 'settings', 'gift_chips', { admin: 'owner', newValue: body.giftChips, changedAt: nowIso() });
+    }
+    // Item 217: per-category charity fee-free list.
+    if (body.charityFeeFreeCategories !== undefined) {
+      if (!Array.isArray(body.charityFeeFreeCategories) || body.charityFeeFreeCategories.some((c) => typeof c !== 'string')) {
+        return res.status(400).json({ error: { code: 'VALIDATION', message: 'charityFeeFreeCategories must be an array of category names.' } });
+      }
+      const oldList = await db.getSettingJson('charity_fee_free_categories', []);
+      await db.setSetting('charity_fee_free_categories', JSON.stringify(body.charityFeeFreeCategories));
+      await logAudit('admin', 'owner', 'charity_fee_free_changed', 'settings', 'charity_fee_free_categories', {
+        admin: 'owner', oldValue: oldList, newValue: body.charityFeeFreeCategories, changedAt: nowIso(),
+      });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/fees/history — fee-change history (item 219): past fee
+// rules with effective dates, from the audit trail.
+router.get('/fees/history', async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM audit_logs
+       WHERE action IN ('fee_config_changed', 'fee_mode_changed', 'min_gift_changed', 'gift_chips_changed', 'charity_fee_free_changed', 'founder_tip_config_changed')
+       ORDER BY created_at DESC LIMIT 100`
+    );
+    res.json({
+      history: rows.map((r) => {
+        let meta = {};
+        try { meta = JSON.parse(r.meta_json || '{}'); } catch { meta = {}; }
+        return {
+          id: r.id, action: r.action, actorId: r.actor_id,
+          oldValue: meta.oldValue !== undefined ? meta.oldValue : null,
+          newValue: meta.newValue !== undefined ? meta.newValue : (meta.feeMode || null),
+          changedAt: meta.changedAt || r.created_at, createdAt: r.created_at,
+        };
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/tips — optional founder-tip totals in Demo Mode gifts,
+// grouped by week and currency (item 225). No payment is ever taken.
+router.get('/tips', async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT currency, tip_minor, created_at FROM gifts WHERE tip_minor > 0 ORDER BY created_at DESC LIMIT 1000`
+    );
+    const weeks = {};
+    for (const r of rows) {
+      const d = new Date(r.created_at);
+      const monday = new Date(d);
+      const dow = (d.getUTCDay() + 6) % 7;
+      monday.setUTCDate(d.getUTCDate() - dow);
+      monday.setUTCHours(0, 0, 0, 0);
+      const key = `${monday.toISOString().slice(0, 10)}|${r.currency}`;
+      if (!weeks[key]) {
+        weeks[key] = { weekStart: monday.toISOString().slice(0, 10), currency: r.currency, totalMinor: 0, gifts: 0 };
+      }
+      weeks[key].totalMinor += r.tip_minor;
+      weeks[key].gifts++;
+    }
+    res.json({ weeks: Object.values(weeks).sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/analytics/gifts — gift-flow funnel (item 297), last 30
+// days by default. Sheet-opened is a client event; amount chosen / fee
+// step passed / details shown / marked sent / confirmed are derived from
+// the audit log. Demo Mode only — no payment data exists.
+router.get('/analytics/gifts', async (req, res, next) => {
+  try {
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+    const since = new Date(Date.now() - days * 24 * 3600000).toISOString();
+    const { rows } = await db.query(
+      `SELECT action, COUNT(*) AS c FROM audit_logs
+       WHERE created_at >= $1
+         AND action IN ('gift_sheet_opened', 'gift_created', 'payout_revealed', 'gift_reported_sent', 'gift_confirmed', 'gift_disputed', 'gift_not_received')
+       GROUP BY action`,
+      [since]
+    );
+    const counts = Object.fromEntries(rows.map((r) => [r.action, Number(r.c)]));
+    res.json({
+      days,
+      funnel: {
+        sheetOpened: counts.gift_sheet_opened || 0,
+        amountChosen: counts.gift_created || 0,
+        feeStepPassed: counts.gift_created || 0,
+        detailsShown: counts.payout_revealed || 0,
+        markedSent: counts.gift_reported_sent || 0,
+        confirmed: counts.gift_confirmed || 0,
+        disputed: counts.gift_disputed || 0,
+        notReceived: counts.gift_not_received || 0,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Gift dispute centre (items 281/282/284) ---
+
+router.get('/disputes', async (req, res, next) => {
+  try {
+    const status = req.query.status === 'resolved' ? 'resolved' : 'open';
+    const where = status === 'open'
+      ? `g.status = 'disputed' OR g.fee_review_status IN ('requested', 'acknowledged')`
+      : `g.fee_review_status = 'resolved'`;
+    const { rows } = await db.query(
+      `SELECT g.*, b.title AS bill_title, b.request_code AS bill_code,
+              u.display_name AS supporter_name,
+              (SELECT body FROM gift_messages m WHERE m.gift_id = g.id AND m.sender_type = 'admin' ORDER BY m.created_at DESC LIMIT 1) AS last_admin_message,
+              (SELECT created_at FROM gift_messages m WHERE m.gift_id = g.id AND m.sender_type = 'admin' ORDER BY m.created_at DESC LIMIT 1) AS last_admin_message_at,
+              (SELECT COUNT(*) FROM gift_messages m WHERE m.gift_id = g.id) AS message_count
+       FROM gifts g JOIN bills b ON b.id = g.bill_id JOIN users u ON u.id = g.supporter_id
+       WHERE ${where} ORDER BY COALESCE(g.disputed_at, g.fee_review_at, g.created_at) ASC LIMIT 100`
+    );
+    res.json({
+      disputes: rows.map((r) => ({
+        giftId: r.id,
+        billId: r.bill_id,
+        billTitle: r.bill_title,
+        billCode: r.bill_code,
+        supporterName: r.supporter_name,
+        amountMinor: r.amount_minor,
+        currency: r.currency,
+        status: r.status,
+        disputeNote: r.dispute_note,
+        disputedAt: r.disputed_at,
+        directPay: r.direct_pay === 1,
+        feeReviewStatus: r.fee_review_status,
+        feeReviewCase: r.fee_review_case,
+        feeReviewAt: r.fee_review_at,
+        lastAdminMessage: r.last_admin_message || null,
+        lastAdminMessageAt: r.last_admin_message_at || null,
+        messageCount: Number(r.message_count || 0),
+        createdAt: r.created_at,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/disputes/:giftId', async (req, res, next) => {
+  try {
+    const gift = await db.get('SELECT * FROM gifts WHERE id = $1', [req.params.giftId]);
+    if (!gift) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Gift not found.' } });
+    const bill = await db.get('SELECT * FROM bills WHERE id = $1', [gift.bill_id]);
+    const supporter = await db.get('SELECT display_name, username FROM users WHERE id = $1', [gift.supporter_id]);
+    const poster = bill ? await db.get('SELECT display_name, username FROM users WHERE id = $1', [bill.user_id]) : null;
+    const { rows } = await db.query(
+      `SELECT * FROM gift_messages WHERE gift_id = $1 ORDER BY created_at ASC LIMIT 200`,
+      [gift.id]
+    );
+    res.json({
+      gift: {
+        id: gift.id, billId: gift.bill_id, amountMinor: gift.amount_minor, currency: gift.currency,
+        feeMinor: gift.fee_minor, tipMinor: gift.tip_minor, status: gift.status,
+        reference: gift.reference, disputeNote: gift.dispute_note, disputedAt: gift.disputed_at,
+        directPay: gift.direct_pay === 1, billerName: gift.biller_name, billerRef: gift.biller_ref,
+        feeReviewStatus: gift.fee_review_status, feeReviewCase: gift.fee_review_case, feeReviewAt: gift.fee_review_at,
+        createdAt: gift.created_at, confirmedAt: gift.confirmed_at,
+      },
+      bill: bill ? { id: bill.id, title: bill.title, requestCode: bill.request_code, status: bill.status } : null,
+      supporter: supporter ? { displayName: supporter.display_name, username: supporter.username } : null,
+      poster: poster ? { displayName: poster.display_name, username: poster.username } : null,
+      messages: rows.map((r) => ({ id: r.id, senderType: r.sender_type, body: r.body, createdAt: r.created_at })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+async function postAdminDisputeMessage(giftId, body, req) {
+  const id = crypto.randomUUID();
+  const now = nowIso();
+  await db.run(
+    `INSERT INTO gift_messages (id, gift_id, sender_type, sender_id, body, created_at) VALUES ($1, $2, 'admin', 'admin', $3, $4)`,
+    [id, giftId, body, now]
+  );
+  const gift = await db.get('SELECT * FROM gifts WHERE id = $1', [giftId]);
+  const bill = gift ? await db.get('SELECT * FROM bills WHERE id = $1', [gift.bill_id]) : null;
+  if (gift) {
+    await createNotification(gift.supporter_id, 'gift_message_admin', 'Message from Sahay Pay', 'The Sahay Pay team wrote about your gift.', '#/mybills');
+    if (bill) await createNotification(bill.user_id, 'gift_message_admin', 'Message from Sahay Pay', 'The Sahay Pay team wrote about a gift on your bill.', '#/mybills');
+  }
+  return id;
+}
+
+router.post('/disputes/:giftId/acknowledge', async (req, res, next) => {
+  try {
+    const gift = await db.get('SELECT * FROM gifts WHERE id = $1', [req.params.giftId]);
+    if (!gift) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Gift not found.' } });
+    if (gift.fee_review_status === 'requested') {
+      await db.run(`UPDATE gifts SET fee_review_status = 'acknowledged' WHERE id = $1`, [gift.id]);
+    }
+    await logAudit('admin', 'owner', 'dispute_acknowledged', 'gift', gift.id, {});
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/disputes/:giftId/message', async (req, res, next) => {
+  try {
+    const gift = await db.get('SELECT * FROM gifts WHERE id = $1', [req.params.giftId]);
+    if (!gift) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Gift not found.' } });
+    const body = cleanStr(req.body?.body || '', 1000);
+    if (!body) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Write a message first.' } });
+    await postAdminDisputeMessage(gift.id, body, req);
+    await logAudit('admin', 'owner', 'dispute_messaged', 'gift', gift.id, {});
+    res.status(201).json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/disputes/:giftId/resolve', async (req, res, next) => {
+  try {
+    const gift = await db.get('SELECT * FROM gifts WHERE id = $1', [req.params.giftId]);
+    if (!gift) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Gift not found.' } });
+    const note = cleanStr(req.body?.note || '', 600);
+    // A resolved dispute returns the gift to donor-reported (the parties
+    // can still confirm it) unless it was a fee review, which is marked
+    // resolved on its own field. Nothing here moves money.
+    if (gift.status === 'disputed') {
+      await db.run(`UPDATE gifts SET status = 'donor_reported_sent' WHERE id = $1`, [gift.id]);
+    }
+    if (['requested', 'acknowledged'].includes(gift.fee_review_status)) {
+      await db.run(`UPDATE gifts SET fee_review_status = 'resolved' WHERE id = $1`, [gift.id]);
+    }
+    if (note) await postAdminDisputeMessage(gift.id, note, req);
+    await logAudit('admin', 'owner', 'dispute_resolved', 'gift', gift.id, { note });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- Biller directory admin tooling (item 277) ---
+
+const BILLER_CATEGORIES = ['electricity', 'water', 'internet', 'school', 'hospital', 'other'];
+
+router.get('/billers', async (req, res, next) => {
+  try {
+    const { rows } = await db.query('SELECT * FROM billers ORDER BY active DESC, category ASC, name ASC LIMIT 200');
+    res.json({
+      billers: rows.map((r) => ({
+        id: r.id, name: r.name, category: r.category, country: r.country,
+        refFormat: r.ref_format || '', refHint: r.ref_hint || '',
+        active: r.active === 1, createdAt: r.created_at, updatedAt: r.updated_at,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/billers', async (req, res, next) => {
+  try {
+    const name = cleanStr(req.body?.name, 120);
+    const category = cleanStr(req.body?.category, 32);
+    const country = cleanStr(req.body?.country, 2);
+    if (!name || name.length < 2) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Biller name must be 2+ characters.' } });
+    }
+    if (!BILLER_CATEGORIES.includes(category)) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Category must be electricity, water, internet, school, hospital or other.' } });
+    }
+    if (!['NP', 'IN'].includes(country)) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Country must be NP or IN.' } });
+    }
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    await db.run(
+      `INSERT INTO billers (id, name, category, country, ref_format, ref_hint, active, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)`,
+      [id, name, category, country, cleanStr(req.body?.refFormat, 120), cleanStr(req.body?.refHint, 300), now]
+    );
+    await logAudit('admin', 'owner', 'biller_added', 'biller', id, { name, category, country });
+    res.status(201).json({ ok: true, id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/billers/:id', async (req, res, next) => {
+  try {
+    const row = await db.get('SELECT * FROM billers WHERE id = $1', [req.params.id]);
+    if (!row) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Biller not found.' } });
+    const name = req.body?.name !== undefined ? cleanStr(req.body.name, 120) : '';
+    const category = req.body?.category !== undefined ? cleanStr(req.body.category, 32) : '';
+    const country = req.body?.country !== undefined ? cleanStr(req.body.country, 2) : '';
+    if (req.body?.name !== undefined && name.length < 2) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Biller name must be 2+ characters.' } });
+    }
+    if (category && !BILLER_CATEGORIES.includes(category)) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Invalid biller category.' } });
+    }
+    if (country && !['NP', 'IN'].includes(country)) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Country must be NP or IN.' } });
+    }
+    const next = {
+      name: name || row.name,
+      category: category || row.category,
+      country: country || row.country,
+      ref_format: req.body?.refFormat !== undefined ? cleanStr(req.body.refFormat, 120) : row.ref_format,
+      ref_hint: req.body?.refHint !== undefined ? cleanStr(req.body.refHint, 300) : row.ref_hint,
+      active: req.body?.active !== undefined ? (req.body.active ? 1 : 0) : row.active,
+    };
+    await db.run(
+      `UPDATE billers SET name = $1, category = $2, country = $3, ref_format = $4, ref_hint = $5, active = $6, updated_at = $7 WHERE id = $8`,
+      [next.name, next.category, next.country, next.ref_format, next.ref_hint, next.active, nowIso(), row.id]
+    );
+    await logAudit('admin', 'owner', 'biller_updated', 'biller', row.id, { oldValue: { name: row.name, category: row.category, country: row.country, active: row.active }, newValue: next });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/billers/:id', async (req, res, next) => {
+  try {
+    const row = await db.get('SELECT * FROM billers WHERE id = $1', [req.params.id]);
+    if (!row) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Biller not found.' } });
+    // Deactivate rather than delete: the change log (audit trail) keeps the
+    // record, and old receipts still resolve the biller name.
+    await db.run(`UPDATE billers SET active = 0, updated_at = $1 WHERE id = $2`, [nowIso(), row.id]);
+    await logAudit('admin', 'owner', 'biller_deactivated', 'biller', row.id, { name: row.name });
     res.json({ ok: true });
   } catch (err) {
     next(err);

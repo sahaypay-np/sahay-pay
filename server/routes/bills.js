@@ -23,6 +23,7 @@ const {
 const { parseMajorToMinor, isMinorAmount } = require('../lib/money');
 const { upload, isPrivateKind, isKnownKind, publicUrlFor, privateRefFor, encryptAccount, PUBLIC_DIR, PRIVATE_DIR, fileMatchesMime } = require('../lib/storage');
 const { createReviewPacket, billPacketPayload } = require('../lib/notify');
+const { containsBlockedTerm } = require('../lib/message-blocklist');
 
 const router = express.Router();
 
@@ -782,9 +783,14 @@ router.get('/:id', async (req, res, next) => {
       [bill.user_id]
     );
     const supporters = await db.query(
-      `SELECT u.display_name, u.username, g.amount_minor, g.confirmed_at
+      `SELECT u.display_name, u.username, g.amount_minor, g.confirmed_at, g.message, g.anonymous
        FROM gifts g JOIN users u ON u.id = g.supporter_id
        WHERE g.bill_id = $1 AND g.status = 'confirmed' ORDER BY g.confirmed_at DESC LIMIT 50`,
+      [bill.id]
+    );
+    // Pledge supporters (item 270): count only, never amounts.
+    const pledgeRow = await db.get(
+      `SELECT COUNT(*) AS c FROM pledges WHERE bill_id = $1 AND status = 'active'`,
       [bill.id]
     );
     // Count a view for non-owner public views.
@@ -794,8 +800,15 @@ router.get('/:id', async (req, res, next) => {
     const out = publicBill(bill, poster, !isOwner && !isAdmin);
     out.badges = [...new Set([...badges.rows.map((r) => r.type), ...userBadges.rows.map((r) => r.type)])];
     out.supporters = supporters.rows.map((r) => ({
-      displayName: r.display_name, username: r.username, amountMinor: r.amount_minor, confirmedAt: r.confirmed_at,
+      displayName: r.anonymous === 1 ? null : r.display_name,
+      username: r.anonymous === 1 ? null : r.username,
+      anonymous: r.anonymous === 1,
+      amountMinor: r.amount_minor, confirmedAt: r.confirmed_at,
+      // Gift message (item 260): shown with first name only; re-screened
+      // here as defence in depth (items 257).
+      message: r.message && !containsBlockedTerm(r.message) ? r.message : '',
     }));
+    out.pledgeCount = Number(pledgeRow?.c || 0);
     out.payoutHints = await getPayoutHints(bill.id);
     out.payoutHint = out.payoutHints.length ? out.payoutHints[0].hint : null;
     if (isOwner) {
