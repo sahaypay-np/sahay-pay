@@ -99,7 +99,7 @@ router.post('/onboard', rateLimit('onboard', 10, 60 * 60 * 1000), async (req, re
     );
     const user = await db.get('SELECT * FROM users WHERE id = $1', [id]);
     const session = await createSession(id);
-    res.cookie('sp_session', session.token, sessionCookieOptions(SESSION_DAYS * 24 * 60 * 60 * 1000));
+    res.cookie('sp_session', session.token, sessionCookieOptions(SESSION_DAYS * 24 * 60 * 60 * 1000, req));
     await logAudit('user', id, 'user_onboarded', 'user', id, { country: req.body.country });
     res.status(201).json({ user: publicUser(user), sessionExpiresAt: session.expiresAt });
   } catch (err) {

@@ -28,12 +28,16 @@ function isProd() {
   return process.env.NODE_ENV === 'production';
 }
 
-function sessionCookieOptions(maxAgeMs) {
+// Secure flag: set in production OR whenever the request arrived over HTTPS.
+// NODE_ENV is not guaranteed in the Netlify function runtime, so the
+// per-request scheme (trust proxy is on, index.js:21) is the reliable signal:
+// live traffic is always HTTPS, local dev over plain HTTP keeps working.
+function sessionCookieOptions(maxAgeMs, req) {
   return {
     httpOnly: true,
     sameSite: 'lax',
     path: '/',
-    secure: isProd(),
+    secure: isProd() || !!(req && req.secure),
     maxAge: maxAgeMs,
   };
 }
@@ -78,7 +82,7 @@ async function maybeRenewSession(req, res, sessionRow) {
     [newExpires.toISOString(), nowIso(), hashToken(req.cookies?.sp_session || '')]
   );
   if (req.cookies?.sp_session) {
-    res.cookie('sp_session', req.cookies.sp_session, sessionCookieOptions(SESSION_DAYS * 24 * 60 * 60 * 1000));
+    res.cookie('sp_session', req.cookies.sp_session, sessionCookieOptions(SESSION_DAYS * 24 * 60 * 60 * 1000, req));
   }
 }
 

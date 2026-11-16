@@ -63,7 +63,7 @@ router.post('/login', rateLimit('admin-login', 10, 15 * 60 * 1000), async (req, 
       return res.status(401).json({ error: { code: 'INVALID_PIN', message: 'Incorrect PIN.' } });
     }
     const session = await createAdminSession();
-    res.cookie('sp_admin', session.token, sessionCookieOptions(ADMIN_SESSION_HOURS * 60 * 60 * 1000));
+    res.cookie('sp_admin', session.token, sessionCookieOptions(ADMIN_SESSION_HOURS * 60 * 60 * 1000, req));
     await logAudit('admin', 'owner', 'admin_login', 'admin', 'login', {});
     res.json({ ok: true, sessionExpiresAt: session.expiresAt });
   } catch (err) {

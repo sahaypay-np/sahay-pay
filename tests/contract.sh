@@ -153,5 +153,15 @@ r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -X POST "$B/brands/$BRAN
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-helper.txt" -X POST "$B/brands/$BRAND_ID/connect" $J -d '{"brandName":"Test Bakery Ltd","contactName":"Ramesh","phone":"9841000000","plan":"free"}'); t "brand connect free, no email" 201 "$(code "$r")"
 r=$(curl -s "$B/brands?brand=Bakery"); has "brand search by brand param" "$r" 'Test Bakery'
 
+# --- cookie flags: Secure follows the request scheme (trust proxy on) ---
+r=$(curl -s -D - -o /dev/null -X POST "$B/auth/onboard" $J -d '{"displayName":"Cookie Plain","age":22,"country":"NP","city":"Pokhara"}')
+SC=$(echo "$r" | grep -i '^set-cookie: sp_session=')
+has "session cookie HttpOnly (http)" "$SC" 'HttpOnly'
+has "session cookie SameSite=Lax (http)" "$SC" 'SameSite=Lax'
+if echo "$SC" | grep -q 'Secure'; then echo "FAIL: session cookie Secure over plain http"; fail=$((fail+1)); else echo "PASS: session cookie not Secure over plain http"; pass=$((pass+1)); fi
+r=$(curl -s -D - -o /dev/null -H 'X-Forwarded-Proto: https' -X POST "$B/auth/onboard" $J -d '{"displayName":"Cookie TLS","age":22,"country":"NP","city":"Pokhara"}')
+SC=$(echo "$r" | grep -i '^set-cookie: sp_session=')
+has "session cookie Secure behind https proxy" "$SC" 'Secure'
+
 echo "=== $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
