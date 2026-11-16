@@ -158,7 +158,10 @@ CREATE TABLE IF NOT EXISTS gifts (
 );
 CREATE INDEX IF NOT EXISTS idx_gifts_bill ON gifts(bill_id, status);
 CREATE INDEX IF NOT EXISTS idx_gifts_supporter ON gifts(supporter_id, status);
-CREATE INDEX IF NOT EXISTS idx_gifts_receipt ON gifts(receipt_number);
+-- NOTE: idx_gifts_receipt (gifts.receipt_number) is NOT created here: on an
+-- existing DB the CREATE TABLE above is a no-op, so the column does not
+-- exist yet when this file runs. migrate() in server/db.js creates it
+-- after the EXTRA_COLUMNS ALTERs (same rule as idx_users_recovery).
 
 -- Phase 2 section 3: server-side basket (246) — one row per user+bill.
 CREATE TABLE IF NOT EXISTS basket_items (

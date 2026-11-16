@@ -30,15 +30,15 @@ const db = new DatabaseSync('data/sahay-pay.db');
 db.exec(fs.readFileSync('/tmp/old-schema.sql', 'utf8'));
 db.close();
 " || { echo "FAIL: could not build old-schema DB"; exit 1; }
-# Sanity: the old DB really lacks the newest columns (phase-2 s1-2 bill
+# Sanity: the old DB really lacks the newest columns (phase-2 s3 gift
 # columns — the migration under test). Any pre-change base lacks them.
 OLD_COLS=$(node -e "
 const { DatabaseSync } = require('node:sqlite');
 const db = new DatabaseSync('data/sahay-pay.db');
-const cols = db.prepare(\"PRAGMA table_info(bills)\").all().map(r => r.name);
-console.log(cols.includes('expires_at') ? 'HAS' : 'LACKS');
+const cols = db.prepare(\"PRAGMA table_info(gifts)\").all().map(r => r.name);
+console.log(cols.includes('receipt_number') ? 'HAS' : 'LACKS');
 db.close();")
-t "old DB lacks new bill columns (expires_at)" "LACKS" "$OLD_COLS"
+t "old DB lacks new gift columns (receipt_number)" "LACKS" "$OLD_COLS"
 
 # 2. Start the CURRENT server against the old DB.
 PORT=$PORT SESSION_SECRET=$(openssl rand -base64 48) PAYOUT_ENCRYPTION_KEY=$(openssl rand -base64 32) \
@@ -71,6 +71,11 @@ const billCols = db.prepare(\"PRAGMA table_info(bills)\").all().map(r => r.name)
 const newBillCols = ['for_whom','relationship','for_other_consent','about_me','biller_instructions','photos_json','story_lang','not_paid_consequence','tried_to_pay','money_means','bill_type_other','charity_name','business','business_name','business_desc','dream','dream_desc','expires_at','extension_used','repost_count'];
 const editsTbl = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='bill_edits'\").all();
 const editsIdx = db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name='idx_bill_edits_bill'\").all();
+// Phase 2 section 3: new gifts columns + basket/pledges/messages/billers tables.
+const giftCols = db.prepare(\"PRAGMA table_info(gifts)\").all().map(r => r.name);
+const newGiftCols = ['message','anonymous','receipt_number','details_shown_at','reported_sent_at','disputed_at','direct_pay','biller_name','biller_ref','fee_review_status','fee_review_case','fee_review_at','reminded_24h','reminded_72h'];
+const hasTbl = (n) => db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name=?\").all(n).length > 0;
+const hasIdx = (n) => db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name=?\").all(n).length > 0;
 console.log([
   cols.includes('recovery_code_lookup') ? 'COL_OK' : 'COL_MISSING',
   cols.includes('terms_accepted_version') ? 'CONSENT_OK' : 'CONSENT_MISSING',
@@ -81,9 +86,15 @@ console.log([
   newBillCols.every(c => billCols.includes(c)) ? 'BILLCOLS_OK' : 'BILLCOLS_MISSING',
   editsTbl.length ? 'BILLEDITS_OK' : 'BILLEDITS_MISSING',
   editsIdx.length ? 'BILLEDITSIDX_OK' : 'BILLEDITSIDX_MISSING',
+  newGiftCols.every(c => giftCols.includes(c)) ? 'GIFTCOLS_OK' : 'GIFTCOLS_MISSING',
+  hasTbl('basket_items') ? 'BASKET_OK' : 'BASKET_MISSING',
+  hasTbl('pledges') ? 'PLEDGES_OK' : 'PLEDGES_MISSING',
+  hasTbl('gift_messages') ? 'GIFTMSG_OK' : 'GIFTMSG_MISSING',
+  hasTbl('billers') ? 'BILLERS_OK' : 'BILLERS_MISSING',
+  hasIdx('idx_gifts_receipt') ? 'GIFTRECEIPTIDX_OK' : 'GIFTRECEIPTIDX_MISSING',
 ].join(' '));
 db.close();")
-for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK; do
+for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK GIFTCOLS_OK BASKET_OK PLEDGES_OK GIFTMSG_OK BILLERS_OK GIFTRECEIPTIDX_OK; do
   if echo "$CHECKS" | grep -q "$want"; then echo "PASS: $want"; pass=$((pass+1)); else echo "FAIL: $want — checks: $CHECKS"; fail=$((fail+1)); fi
 done
 
