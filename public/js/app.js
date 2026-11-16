@@ -153,13 +153,48 @@ var S = {
   viewMode:"deck", searchQ:"", facetCounts:null,
   post:null, gift:null, basket:loadBasket(), blocked:loadBlocked(), saved:loadSaved(),
   leadersTab:"top_supporters", leadersPeriod:"all", leadersScope:"all",
-  mybillsTab:"active", notifCache:[]
+  mybillsTab:"active", notifCache:[], giftStatusFilter:"all", basketQueue:[]
 };
 function defaultFilters(){ return {country:"own", categories:[], band:"", verifiedOnly:false, idVerifiedOnly:false, nameVerifiedOnly:false, verifiedFirst:false, payDirectOnly:false, charity:false, billShown:false, fundedOnly:false, posted:"any", city:"", near:"", radiusKm:50, amountMin:"", amountMax:"", askType:"", sort:"recommended"}; }
 function loadFilters(){ try{ var f=JSON.parse(localStorage.getItem("sp_filters")||"null"); if(f){ var d=defaultFilters(); Object.keys(d).forEach(function(k){ if(f[k]===undefined) f[k]=d[k]; }); return f; } }catch(e){} return defaultFilters(); }
 function saveFilters(){ try{ localStorage.setItem("sp_filters", JSON.stringify(S.filters)); }catch(e){} }
 function loadBasket(){ try{ return JSON.parse(localStorage.getItem("sp_basket")||"[]"); }catch(e){ return []; } }
 function saveBasket(){ try{ localStorage.setItem("sp_basket", JSON.stringify(S.basket)); }catch(e){} }
+/* ---------- server basket (items 246-255) ---------- */
+// Logged-in users get a server basket (amounts, saved-for-later, flags).
+// Logged-out users keep a local list of bill ids, merged on login.
+var basketServer=null;
+function basketCount(){ return (S.user&&basketServer)? basketServer.length : S.basket.length; }
+function updateBasketBadge(){
+  var b=document.querySelector("[data-basket-badge]");
+  if(b){ var n=basketCount(); b.textContent=String(n); b.hidden=n===0; }
+}
+async function syncBasketFromServer(){
+  if(!S.user){ updateBasketBadge(); return; }
+  try{
+    var d=await api("/basket");
+    basketServer=pickList(d,["items"]);
+    S.basket=basketServer.map(function(it){ return it.billId; });
+    saveBasket();
+  }catch(e){ basketServer=null; }
+  updateBasketBadge();
+}
+async function mergeLocalBasket(){
+  if(!S.user) return;
+  var local=S.basket.slice();
+  if(local.length){
+    try{ await api("/basket/merge", {method:"POST", body:{billIds:local}}); }catch(e){}
+  }
+  await syncBasketFromServer();
+}
+async function addToBasket(billId){
+  if(S.user){
+    try{ await api("/basket", {method:"POST", body:{billId:billId}}); await syncBasketFromServer(); toast(t("add_to_basket_done")); return true; }
+    catch(e){ toast(e.message||t("err_generic"), true); return false; }
+  }
+  if(S.basket.indexOf(billId)<0){ S.basket.push(billId); saveBasket(); updateBasketBadge(); toast(t("add_to_basket_done")); return true; }
+  toast(t("basket_in")); return false;
+}
 function loadBlocked(){ try{ return JSON.parse(localStorage.getItem("sp_blocked")||"[]"); }catch(e){ return []; } }
 function saveBlocked(){ try{ localStorage.setItem("sp_blocked", JSON.stringify(S.blocked)); }catch(e){} }
 function loadSeen(){ try{ S.seen=JSON.parse(localStorage.getItem("sp_seen")||"{}"); }catch(e){ S.seen={}; } }
@@ -568,6 +603,11 @@ var ROUTES = [
   {re:/^#\/notifications$/, fn:renderNotifications, chrome:true},
   {re:/^#\/verify$/, fn:renderVerify, chrome:true},
   {re:/^#\/gift\/([^\/\?]+)$/, fn:renderGift, chrome:true},
+  {re:/^#\/basket$/, fn:renderBasket, chrome:true, tab:"basket"},
+  {re:/^#\/receipt\/([^\/\?]+)$/, fn:renderReceipt, chrome:true},
+  {re:/^#\/summary$/, fn:renderSummary, chrome:true},
+  {re:/^#\/pledges$/, fn:renderPledges, chrome:true},
+  {re:/^#\/billers$/, fn:renderBillers, chrome:true},
   {re:/^#\/founder-tip$/, fn:renderFounderTip, chrome:true},
   {re:/^#\/admin$/, fn:renderAdminLogin, chrome:true},
   {re:/^#\/admin\/dashboard$/, fn:renderAdminDashboard, chrome:true},
@@ -576,6 +616,9 @@ var ROUTES = [
   {re:/^#\/admin\/verifications$/, fn:renderAdminVerifications, chrome:true},
   {re:/^#\/admin\/reports$/, fn:renderAdminReports, chrome:true},
   {re:/^#\/admin\/fees$/, fn:renderAdminFees, chrome:true},
+  {re:/^#\/admin\/disputes$/, fn:renderAdminDisputes, chrome:true},
+  {re:/^#\/admin\/billers$/, fn:renderAdminBillers, chrome:true},
+  {re:/^#\/admin\/currency$/, fn:renderAdminCurrency, chrome:true},
   {re:/^#\/admin\/audit$/, fn:renderAdminAudit, chrome:true}
 ];
 function queryParams(){
@@ -719,6 +762,7 @@ function renderOnboarding(){
       var res=await api("/auth/onboard", {method:"POST", body:payload});
       S.user=res.user||res;
       if(res.csrfToken) S.csrfToken=res.csrfToken;
+      mergeLocalBasket();
       try{ localStorage.setItem("sp_lang", chosenLang); }catch(e){}
       if(op!==NAV) return; // navigated away mid-submit; account exists, no clobber
       // Recovery code: shown ONCE, here only. The server stores only a
@@ -900,12 +944,14 @@ function swipeCardHtml(bill, pos, opts){
     +((bill.posterApprovedCount!=null&&bill.posterApprovedCount<=1)?'<span class="chip">🌱 '+esc(t("why_new_poster"))+'</span>':"")
     +((bill.supporterCount!=null&&bill.supporterCount<=1)?'<span class="chip">🤲 '+esc(t("why_few_supporters"))+'</span>':"")
     +(exp?'<span class="chip">⏳ '+esc(exp)+'</span>':"")
+    +((bill.pay_direct||bill.payDirect)?'<span class="chip">🏦 '+esc(t("pays_direct_label"))+'</span>':"")
     +(bill.payout_hint||bill.payoutHint?'<span class="chip">'+esc(bill.payout_hint||bill.payoutHint)+'</span>':"")+'</div>'
     + progressHtml(bill)
     +(why?'<p class="small muted">💡 '+esc(t("why_seeing"))+' '+esc(why)+'</p>':"")
     +'<p class="small muted">'+esc(t("tap_photo"))+'</p>'
     +'<p class="small" style="margin-top:6px">🆘 '+esc(t("support_banner"))+' <a href="#/help?topic=safety">'+esc(t("support_banner_link"))+'</a></p>'
-    +'<div style="display:flex;gap:6px;margin-top:8px"><button type="button" class="btn secondary small" data-act="save" aria-pressed="'+(saved?"true":"false")+'">'+(saved?"🔖 "+esc(t("saved_bill")):"🔖 "+esc(t("save_bill")))+'</button>'
+    +'<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"><button type="button" class="btn secondary small" data-act="save" aria-pressed="'+(saved?"true":"false")+'">'+(saved?"🔖 "+esc(t("saved_bill")):"🔖 "+esc(t("save_bill")))+'</button>'
+    +'<button type="button" class="btn secondary small" data-act="basket">🧺 '+esc(t("add_basket"))+'</button>'
     +'<button type="button" class="btn secondary small" data-act="flip">🔄 '+esc(t("flip_for_story"))+'</button>'
     +'<button type="button" class="btn secondary small" data-act="report">🚩 '+esc(t("report"))+'</button></div>'
     +'</div></div>';
@@ -958,7 +1004,9 @@ function pushRecentSearch(q){
 }
 function renderSwipe(){
   var streak=recordFeedVisit();
+  var demoDismissed=false; try{ demoDismissed=localStorage.getItem("sp_demo_dismissed")==="1"; }catch(e){}
   view('<h1>'+esc(t("feed_title"))+'</h1><p>'+esc(t("feed_sub"))+'</p>'
+    +(demoDismissed?"":'<div class="notice info" id="demo-feed-card" style="margin-bottom:10px"><strong>ℹ️ '+esc(t("demo_feed_title"))+'</strong><br>'+esc(t("demo_feed_body"))+'<div style="margin-top:6px"><button class="btn secondary small" id="demo-feed-dismiss">'+esc(t("demo_feed_dismiss"))+'</button></div></div>')
     +'<div id="feed-meta" class="small muted" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"></div>'
     +'<div style="position:relative;margin-bottom:10px"><label class="sr-only" for="feed-search">'+esc(t("search"))+'</label><input id="feed-search" type="search" value="'+esc(S.searchQ)+'" placeholder="'+esc(t("search_ph"))+'" autocomplete="off"><div id="feed-suggest"></div></div>'
     +'<div id="search-helpers" style="margin-bottom:8px"></div>'
@@ -978,6 +1026,8 @@ function renderSwipe(){
     +'<div id="feed-extra"></div>');
   // Saved-bill notices (items 81/82): checked on feed load, in-app only.
   checkSavedNotices();
+  var dfd=$("#demo-feed-dismiss");
+  if(dfd) dfd.onclick=function(){ try{ localStorage.setItem("sp_demo_dismissed","1"); }catch(e){} var c=$("#demo-feed-card"); if(c) c.remove(); };
   maybeShowTour();
   maybeShowCoachmark();
   $("#f-refresh").onclick=function(){ S.seen={}; saveSeen(); draw(true); };
@@ -1253,6 +1303,7 @@ function renderSwipe(){
             act.setAttribute("aria-pressed", nowSaved?"true":"false");
             toast(nowSaved?t("saved_bill"):t("saved_unsaved"));
           }
+          if(a==="basket" && bill) addToBasket(bill.id);
           if(a==="report" && bill) openReportSheet("bill", bill.id);
         }
       }
@@ -1413,18 +1464,44 @@ function renderBill(id){
       +(isOwner?'<div class="btn-row"><a class="btn secondary small" href="#/mybills">'+esc(t("my_bills"))+'</a></div>':"")
       +'</div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("supporters_title"))+' ('+supporters.length+')</h2>'
-      +(supporters.length? supporters.map(function(s){ return '<div class="kv"><span>'+esc(s.anonymous?t("anonymous"):(s.display_name||s.displayName||s.username||t("anonymous")))+'</span><b>'+esc(money(s.amount_minor||s.amountMinor||0,cur))+'</b></div>'; }).join("") : '<p>'+esc(t("no_supporters"))+'</p>')
+      +(supporters.length? supporters.map(function(s){
+          var sName=s.anonymous?t("anonymous"):(s.display_name||s.displayName||s.username||t("anonymous"));
+          var firstName=String(sName).split(" ")[0];
+          return '<div class="kv"><span>'+esc(sName)+'</span><b>'+esc(money(s.amount_minor||s.amountMinor||0,cur))+'</b></div>'
+            +(s.message?'<p class="small">💬 “'+esc(s.message)+'” — '+esc(firstName)+'</p>':"");
+        }).join("") : '<p>'+esc(t("no_supporters"))+'</p>')
+      +((bill.pledgeCount||0)>0?'<p class="small" style="margin-top:8px">🤝 '+esc(t("pledge_supporters",{n:bill.pledgeCount}))+'</p>':"")
+      +(!isOwner?'<div class="btn-row"><button class="btn secondary small" id="pledge-btn">🤝 '+esc(t("pledge_title"))+'</button></div>':"")
       +'</div>'
+      +'<div id="gift-timeline-wrap"></div>'
       +'<div class="card" style="margin-top:12px"><h2>'+esc(t("how_helping"))+'</h2><p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'</div>');
     $("#poster-row").onclick=function(){ if(uname) go("#/profile/"+encodeURIComponent(uname)); };
     $("#poster-row").addEventListener("keydown", function(e){ if((e.key==="Enter"||e.key===" ")&&uname){ e.preventDefault(); go("#/profile/"+encodeURIComponent(uname)); } });
     $("#share-btn").onclick=function(){ copyText(location.origin+location.pathname+"#/bill/"+bill.id, t("copied_link")); };
     $("#save-btn").onclick=function(){ var s=toggleSaved(bill); $("#save-btn").innerHTML="🔖 "+esc(s?t("saved_bill"):t("save_bill")); toast(s?t("saved_bill"):t("saved_unsaved")); };
-    $("#basket-btn").onclick=function(){
-      if(S.basket.indexOf(bill.id)<0){ S.basket.push(bill.id); saveBasket(); toast(t("add_to_basket_done")); } else toast(t("basket"));
-    };
+    $("#basket-btn").onclick=function(){ addToBasket(bill.id); };
     $("#report-btn").onclick=function(){ openReportSheet("bill", bill.id); };
+    var pb=$("#pledge-btn"); if(pb) pb.onclick=function(){ openPledgeSheet(bill); };
     var pd=$("#pay-direct-btn"); if(pd) pd.onclick=function(){ openPayDirect(bill); };
+    // Item 239: gift timeline — my gifts on this bill (poster sees all).
+    if(S.user){
+      api("/gifts/bill/"+encodeURIComponent(bill.id)).then(function(d){
+        var wrap=$("#gift-timeline-wrap"); if(!wrap) return;
+        var gifts=pickList(d,["gifts"]);
+        if(!gifts.length) return;
+        wrap.innerHTML='<div class="card" style="margin-top:12px"><h2>'+esc(t("gift_timeline"))+'</h2>'+gifts.map(function(g){
+          var evs=[];
+          evs.push([g.createdAt||g.created_at, "tl_started"]);
+          if(g.detailsShownAt) evs.push([g.detailsShownAt, "tl_details"]);
+          if(g.reportedSentAt) evs.push([g.reportedSentAt, "tl_sent"]);
+          if(g.status==="confirmed") evs.push([g.confirmedAt||g.confirmed_at, "tl_confirmed"]);
+          if(g.status==="disputed"||g.disputedAt) evs.push([g.disputedAt, "tl_disputed"]);
+          if(g.status==="expired") evs.push([null, "tl_expired"]);
+          return '<div style="margin-bottom:10px"><p><strong>'+esc(money(g.amountMinor||g.amount_minor||0, cur))+'</strong> · '+esc(giftStatusLabel(g.status))+'</p>'
+            +evs.map(function(e){ return '<p class="small">• '+esc(t(e[1]))+(e[0]?" — "+esc(fmtDate(e[0])):"")+'</p>'; }).join("")+'</div>';
+        }).join("")+'</div>';
+      }).catch(function(){});
+    }
   }).catch(function(e){
     if(tok!==NAV) return;
     view(emptyState("🧾", t("bill_not_found"), e.message||"", '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>', "h1"));
@@ -1439,6 +1516,145 @@ function openPayDirect(bill){
     +((bill.billerDestination||bill.biller_destination)?'<div class="kv"><span>'+esc(t("biller_destination"))+'</span><b>'+esc(bill.billerDestination||bill.biller_destination)+'</b></div>':"")
     +'<p>'+esc(t("pay_biller_steps"))+'</p>'
     +'<a class="btn" href="#/gift/'+encodeURIComponent(bill.id)+'?direct=1">'+esc(t("continue_btn"))+'</a>');
+}
+function openPledgeSheet(bill){
+  if(!needUser()) return;
+  var cur=bill.currency||curOf(bill.country);
+  var freq="monthly";
+  openSheet('<h2>'+esc(t("pledge_title"))+'</h2><p><strong>'+esc(bill.title||"")+'</strong></p>'
+    +'<label>'+esc(t("pledge_title"))+'</label><div class="seg" id="pl-freq"><button type="button" data-f="weekly">'+esc(t("pledge_weekly"))+'</button><button type="button" data-f="monthly" class="on">'+esc(t("pledge_monthly"))+'</button></div>'
+    +'<label for="pl-amt">'+esc(t("pledge_amount"))+' ('+(cur==="INR"?"₹":"रू")+')</label><input id="pl-amt" type="number" min="0" step="1">'
+    +'<p class="small">'+esc(t("pledge_note"))+'</p>'
+    +'<div class="field-err" id="pl-err" role="alert"></div>'
+    +'<div class="btn-row"><button class="btn secondary" id="pl-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="pl-send">'+esc(t("pledge_create"))+'</button></div>');
+  $all("#pl-freq button").forEach(function(b){ b.onclick=function(){ freq=b.getAttribute("data-f"); $all("#pl-freq button").forEach(function(x){ x.classList.toggle("on", x===b); }); }; });
+  $("#pl-cancel").onclick=closeSheets;
+  $("#pl-send").onclick=async function(){
+    var amt=toMinor($("#pl-amt").value);
+    if(amt<=0){ $("#pl-err").textContent=t("amount_positive"); return; }
+    var btn=$("#pl-send"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      await api("/pledges", {method:"POST", body:{billId:bill.id, frequency:freq, amountMinor:amt}});
+      closeSheets(); toast(t("pledge_created"));
+    }catch(e){ btn.disabled=false; btn.textContent=t("pledge_create"); $("#pl-err").textContent=(e&&e.status===409)?t("pledge_exists"):(e.message||t("err_generic")); }
+  };
+}
+
+/* ---------- basket (items 246-255, 291) ---------- */
+function renderBasket(){
+  view('<h1>'+esc(t("basket_title"))+'</h1><div id="basket-body">'+skeleton(2)+'</div>');
+  load();
+  async function load(){
+    var body=$("#basket-body"); if(!body) return;
+    if(!S.user){
+      if(!S.basket.length){ body.innerHTML=emptyState("🧺", t("basket_empty"), t("basket_empty_body"), '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>'); return; }
+      try{
+        var bills=[];
+        for(var i=0;i<S.basket.length;i++){ try{ bills.push(await fetchBill(S.basket[i])); }catch(e){} }
+        body.innerHTML='<p class="small">'+esc(t("basket_note"))+'</p>'
+          +bills.map(function(b){
+            var cur=b.currency||"NPR";
+            return '<div class="card list-item"><strong>'+esc(b.title||"")+'</strong><p class="small">'+esc(money(b.amount_minor||b.amountMinor||0,cur))+' · '+esc(b.category||"")+'</p>'
+              +'<div style="display:flex;gap:6px;flex-wrap:wrap"><a class="btn small" href="#/gift/'+encodeURIComponent(b.id)+'">💙 '+esc(t("help_this_bill"))+'</a>'
+              +'<button class="btn secondary small" data-local-remove="'+esc(b.id)+'">'+esc(t("remove_from_basket"))+'</button></div></div>';
+          }).join("");
+        $all("[data-local-remove]", body).forEach(function(btn){ btn.onclick=function(){ var id=btn.getAttribute("data-local-remove"); S.basket=S.basket.filter(function(x){ return String(x)!==String(id); }); saveBasket(); updateBasketBadge(); load(); }; });
+      }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
+      return;
+    }
+    try{
+      var d=await api("/basket");
+      var items=pickList(d,["items"]);
+      basketServer=items;
+      updateBasketBadge();
+      if(!items.length){ body.innerHTML=emptyState("🧺", t("basket_empty"), t("basket_empty_body"), '<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>'); return; }
+      var active=items.filter(function(it){ return !it.savedForLater; });
+      var later=items.filter(function(it){ return it.savedForLater; });
+      var totals={NPR:{gifts:0,fees:0},INR:{gifts:0,fees:0}};
+      active.forEach(function(it){
+        if(it.flag) return;
+        var cur=it.currency||"NPR";
+        var q=quoteLocal(it.amountMinor||0, cur, !!(it.bill&&it.bill.charity));
+        if(!totals[cur]) totals[cur]={gifts:0,fees:0};
+        totals[cur].gifts+=it.amountMinor||0;
+        totals[cur].fees+=q.feeMinor||0;
+      });
+      var totalsHtml=Object.keys(totals).filter(function(c){ return totals[c].gifts>0; }).map(function(c){
+        return '<div class="kv"><span>'+esc(t("basket_total_gifts"))+' ('+c+')</span><b>'+esc(money(totals[c].gifts,c))+'</b></div>'
+          +'<div class="kv"><span>'+esc(t("basket_total_fees"))+' ('+c+')</span><b>'+esc(money(totals[c].fees,c))+'</b></div>'
+          +'<div class="kv"><span><strong>'+esc(t("basket_total_all"))+' ('+c+')</strong></span><b>'+esc(money(totals[c].gifts+totals[c].fees,c))+'</b></div>';
+      }).join("");
+      body.innerHTML='<div class="card"><h2>'+esc(t("basket_total_all"))+'</h2>'+(totalsHtml||'<p class="small">'+esc(t("basket_empty"))+'</p>')
+        +'<p class="small">'+esc(t("basket_checkout_note"))+'</p>'
+        +(active.some(function(it){ return !it.flag; })?'<div class="btn-row"><button class="btn" id="basket-gift-all">'+esc(t("basket_gift_all"))+'</button></div>':"")+'</div>'
+        +active.map(function(it){ return basketRow(it); }).join("")
+        +(later.length?'<h2 style="margin-top:16px">'+esc(t("basket_saved_later"))+'</h2>'+later.map(function(it){ return basketRow(it); }).join(""):"");
+      var ga=$("#basket-gift-all");
+      if(ga) ga.onclick=function(){
+        var queue=active.filter(function(it){ return !it.flag && (it.amountMinor||0)>0; }).map(function(it){ return {billId:it.billId, amountMinor:it.amountMinor, currency:it.currency, title:it.bill?it.bill.title:""}; });
+        if(!queue.length){ toast(t("basket_empty"), true); return; }
+        var first=queue.shift();
+        S.basketQueue=queue;
+        go("#/gift/"+encodeURIComponent(first.billId)+"?basket=1&amount="+first.amountMinor);
+      };
+      bindRows(body, items);
+    }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
+  }
+  function basketRow(it){
+    var b=it.bill||{};
+    var cur=it.currency||"NPR";
+    var flagKey=it.flag==="funded"?"basket_flag_funded":it.flag==="paused"?"basket_flag_paused":it.flag==="expired"?"basket_flag_expired":null;
+    var q=quoteLocal(it.amountMinor||0, cur, !!b.charity);
+    return '<div class="card list-item" data-basket-row="'+esc(it.billId)+'"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(b.title||it.billId)+'</strong>'+(flagKey?'<span class="chip">⚠️ '+esc(t(flagKey))+'</span>':"")+'</div>'
+      +'<p class="small">'+esc(b.category||"")+' · '+flag(b.country)+' '+esc(b.city||"")+'</p>'
+      +'<label>'+esc(t("basket_amount_label"))+' ('+(cur==="INR"?"₹":"रू")+')</label><input type="number" min="0" step="1" data-basket-amt="'+esc(it.billId)+'" value="'+fromMinor(it.amountMinor||0)+'">'
+      +'<p class="small">'+esc(t("fee_label"))+': '+esc(money(q.feeMinor||0,cur))+' · '+esc(t("total_send"))+': '+esc(money((it.amountMinor||0)+(q.feeMinor||0),cur))+'</p>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'
+      +(it.flag?"":'<a class="btn small" href="#/gift/'+encodeURIComponent(it.billId)+'?amount='+encodeURIComponent(it.amountMinor||"")+'">💙 '+esc(t("help_this_bill"))+'</a>')
+      +'<a class="btn secondary small" href="#/bill/'+encodeURIComponent(it.billId)+'">'+esc(t("view_bill"))+'</a>'
+      +(it.savedForLater
+        ?'<button class="btn secondary small" data-basket-move="'+esc(it.billId)+'" data-later="0">'+esc(t("basket_move_active"))+'</button>'
+        :'<button class="btn secondary small" data-basket-move="'+esc(it.billId)+'" data-later="1">'+esc(t("basket_move_later"))+'</button>')
+      +'<button class="btn secondary small" data-basket-remove="'+esc(it.billId)+'">'+esc(t("remove_from_basket"))+'</button>'
+      +'</div></div>';
+  }
+  function bindRows(body, items){
+    $all("[data-basket-amt]", body).forEach(function(inp){
+      inp.addEventListener("change", async function(){
+        var id=inp.getAttribute("data-basket-amt");
+        var amt=toMinor(inp.value);
+        try{ await api("/basket/"+encodeURIComponent(id), {method:"PUT", body:{amountMinor:amt}}); load(); }
+        catch(e){ toast(e.message||t("err_generic"), true); load(); }
+      });
+    });
+    $all("[data-basket-move]", body).forEach(function(btn){
+      btn.onclick=async function(){
+        var id=btn.getAttribute("data-basket-move");
+        try{ await api("/basket/"+encodeURIComponent(id), {method:"PUT", body:{savedForLater:btn.getAttribute("data-later")==="1"}}); load(); }
+        catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    });
+    $all("[data-basket-remove]", body).forEach(function(btn){
+      btn.onclick=async function(){
+        var id=btn.getAttribute("data-basket-remove");
+        var item=items.find(function(x){ return String(x.billId)===String(id); });
+        try{
+          await api("/basket/"+encodeURIComponent(id), {method:"DELETE"});
+          await syncBasketFromServer();
+          // Item 252: inline undo — re-add with the same amount.
+          var row=body.querySelector('[data-basket-row="'+CSS.escape(id)+'"]');
+          if(row){
+            row.innerHTML='<p class="small">'+esc(t("basket_removed"))+'</p><button class="btn secondary small" id="basket-undo">'+esc(t("basket_undo"))+'</button>';
+            $("#basket-undo").onclick=async function(){
+              try{ await api("/basket", {method:"POST", body:{billId:id, amountMinor:item?item.amountMinor:undefined}}); if(item&&item.savedForLater) await api("/basket/"+encodeURIComponent(id), {method:"PUT", body:{savedForLater:true}}); }
+              catch(e){ toast(e.message||t("err_generic"), true); }
+              load();
+            };
+          } else load();
+        }catch(e){ toast(e.message||t("err_generic"), true); }
+      };
+    });
+  }
 }
 function openReportSheet(targetType, targetId, preselect){
   if(!needUser()) return;
@@ -2003,6 +2219,8 @@ function renderGift(billId, q){
       };
     }
     function drawConfirmed(){
+      // Basket gifts leave the basket once reported sent (item 254).
+      if(g.fromBasket && S.user) api("/basket/"+encodeURIComponent(bill.id), {method:"DELETE"}).then(function(){ syncBasketFromServer(); }).catch(function(){});
       // Item 254: gift-all queue — continue to the next basket bill.
       var queue=S.basketQueue||[];
       var nextBtn="";
@@ -3116,7 +3334,14 @@ function renderMyBills(){
         var d=await api("/gifts/mine?type="+S.mybillsTab);
         var gifts=pickList(d,["gifts"]);
         if(!gifts.length){ body.innerHTML=emptyState("💙", t("empty_gifts"), S.mybillsTab==="given"?t("no_gifts_given"):t("no_gifts_received"), S.mybillsTab==="given"?'<a class="btn small" href="#/swipe">'+esc(t("go_swipe"))+'</a>':""); return; }
-        body.innerHTML=gifts.map(function(g){ return giftRowHtml(g); }).join("");
+        // Item 245: filter by gift status.
+        var statuses=["initiated","details_shown","donor_reported_sent","verification_pending","confirmed","disputed","expired","failed","reversed"];
+        var curFilter=S.giftStatusFilter||"all";
+        var shown=curFilter==="all"?gifts:gifts.filter(function(x){ return x.status===curFilter; });
+        body.innerHTML='<label for="mb-gift-filter">'+esc(t("filter_status"))+'</label><select id="mb-gift-filter"><option value="all">'+esc(t("status_all"))+'</option>'+statuses.map(function(s){ return '<option value="'+s+'"'+(curFilter===s?" selected":"")+'>'+esc(giftStatusLabel(s))+'</option>'; }).join("")+'</select>'
+          +(shown.length? shown.map(function(g){ return giftRowHtml(g); }).join("") : '<p class="small">'+esc(t("empty_gifts"))+'</p>');
+        var gf=$("#mb-gift-filter");
+        if(gf) gf.onchange=function(){ S.giftStatusFilter=gf.value; load(); };
         bindGiftRows(body);
       }catch(e){ body.innerHTML=errBox(e.message); bindErrRetry(load); }
       return;
@@ -3173,24 +3398,33 @@ function renderMyBills(){
   }
 }
 function giftStatusLabel(s){
-  var map={initiated:t("gift_status_initiated"),details_shown:t("gift_status_details"),donor_reported_sent:t("gift_status_reported"),verification_pending:t("gift_status_pending"),confirmed:t("gift_status_confirmed"),failed:t("gift_status_failed"),disputed:t("gift_status_disputed"),reversed:t("gift_status_reversed")};
+  var map={initiated:t("gift_status_initiated"),details_shown:t("gift_status_details"),donor_reported_sent:t("gift_status_reported"),verification_pending:t("gift_status_pending"),confirmed:t("gift_status_confirmed"),failed:t("gift_status_failed"),disputed:t("gift_status_disputed"),reversed:t("gift_status_reversed"),expired:t("gift_status_expired")};
   return map[s]||s||"";
 }
 function giftRowHtml(g){
   var cur=g.currency||"NPR";
   var other=g.bill_title||g.billTitle||g.other_name||"";
+  var feeReviewOpen=g.feeReviewStatus==="requested"||g.feeReviewStatus==="acknowledged";
+  var canFeeReview=S.mybillsTab==="given" && ["initiated","details_shown","disputed","expired"].indexOf(g.status)>=0 && !feeReviewOpen && g.feeReviewStatus!=="resolved";
   return '<div class="card list-item"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+esc(money(g.amount_minor||g.amountMinor||0,cur))+'</strong><span class="chip">'+esc(giftStatusLabel(g.status))+'</span></div>'
     +'<p class="small">'+esc(other)+' · '+esc(timeAgo(g.created_at||g.createdAt))+(g.reference?" · "+esc(t("reference_label"))+": "+esc(g.reference):"")+'</p>'
+    +(g.message?'<p class="small">💬 “'+esc(g.message)+'”</p>':"")
+    +(feeReviewOpen?'<p class="small">⏳ '+esc(t("fee_review_open"))+'</p>':"")
     +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
     +((g.billId||g.bill_id)?'<a class="btn secondary small" href="#/bill/'+encodeURIComponent(g.billId||g.bill_id)+'">'+esc(t("view_bill"))+'</a>':"")
+    +(g.status==="confirmed"?'<a class="btn secondary small" href="#/receipt/'+encodeURIComponent(g.id)+'">🧾 '+esc(t("view_receipt"))+'</a>':"")
     +(g.status==="donor_reported_sent"&&S.mybillsTab==="received"?'<button class="btn small" data-gift="confirm" data-id="'+esc(g.id)+'">'+esc(t("confirm_yes"))+'</button><button class="btn secondary small" data-gift="notreceived" data-id="'+esc(g.id)+'">'+esc(t("not_received"))+'</button>':"")
     +(g.status!=="confirmed"&&g.status!=="disputed"?'<button class="btn secondary small" data-gift="dispute" data-id="'+esc(g.id)+'">'+esc(t("dispute"))+'</button>':"")
+    +((g.status==="disputed"||feeReviewOpen)?'<button class="btn secondary small" data-gift="thread" data-id="'+esc(g.id)+'">💬 '+esc(t("gift_messages"))+'</button>':"")
+    +(canFeeReview?'<button class="btn secondary small" data-gift="feereview" data-id="'+esc(g.id)+'">'+esc(t("fee_review_btn"))+'</button>':"")
     +'</div></div>';
 }
 function bindGiftRows(root){
   $all("[data-gift]", root).forEach(function(btn){
     btn.onclick=async function(){
       var act=btn.getAttribute("data-gift"), id=btn.getAttribute("data-id");
+      if(act==="thread"){ openGiftThread(id); return; }
+      if(act==="feereview"){ openFeeReview(id); return; }
       if(act!=="dispute") btn.disabled=true;
       try{
         if(act==="confirm"){ await api("/gifts/"+encodeURIComponent(id)+"/confirm", {method:"POST"}); toast(t("gift_confirmed_msg")); }
@@ -3204,6 +3438,51 @@ function bindGiftRows(root){
       }catch(e){ btn.disabled=false; toast(e.message||t("err_generic"), true); }
     };
   });
+}
+function openGiftThread(giftId){
+  openSheet('<h2>'+esc(t("gift_thread_title"))+'</h2><div id="gt-body">'+skeleton(1)+'</div>'
+    +'<label for="gt-input">'+esc(t("gift_messages"))+'</label><textarea id="gt-input" maxlength="600" placeholder="'+esc(t("gift_thread_ph"))+'"></textarea>'
+    +'<div class="btn-row"><button class="btn secondary" id="gt-close">'+esc(t("cancel"))+'</button><button class="btn" id="gt-send">'+esc(t("gift_thread_send"))+'</button></div>');
+  $("#gt-close").onclick=closeSheets;
+  load();
+  function load(){
+    api("/gifts/"+encodeURIComponent(giftId)+"/messages").then(function(d){
+      var body=$("#gt-body"); if(!body) return;
+      var msgs=pickList(d,["messages"]);
+      if(!msgs.length){ body.innerHTML='<p class="small">'+esc(t("gift_thread_empty"))+'</p>'; return; }
+      body.innerHTML=msgs.map(function(m){
+        var role=m.senderType==="admin"?"sender_admin":m.senderType==="poster"?"sender_poster":"sender_helper";
+        return '<div style="margin-bottom:10px"><p class="small"><strong>'+esc(t(role))+'</strong> · '+esc(timeAgo(m.createdAt||m.created_at))+'</p><p>'+esc(m.body||"")+'</p></div>';
+      }).join("");
+    }).catch(function(e){ var body=$("#gt-body"); if(body) body.innerHTML=errBox(e.message); });
+  }
+  $("#gt-send").onclick=async function(){
+    var body=$("#gt-input").value.trim();
+    if(!body) return;
+    var btn=$("#gt-send"); btn.disabled=true; btn.textContent=t("loading");
+    try{ await api("/gifts/"+encodeURIComponent(giftId)+"/messages", {method:"POST", body:{body:body}}); $("#gt-input").value=""; load(); }
+    catch(e){ toast(e.message||t("err_generic"), true); }
+    btn.disabled=false; btn.textContent=t("gift_thread_send");
+  };
+}
+function openFeeReview(giftId){
+  openSheet('<h2>'+esc(t("fee_review_title"))+'</h2><p class="small">'+esc(t("fee_review_body"))+'</p>'
+    +'<label>'+esc(t("fee_review_title"))+'</label><div id="fr-cases" style="display:grid;gap:6px">'
+    +'<button type="button" class="btn secondary small" style="text-align:left" data-c="details_never_shown">'+esc(t("fee_review_case1"))+'</button>'
+    +'<button type="button" class="btn secondary small" style="text-align:left" data-c="post_removed">'+esc(t("fee_review_case2"))+'</button>'
+    +'<button type="button" class="btn secondary small" style="text-align:left" data-c="details_didnt_work">'+esc(t("fee_review_case3"))+'</button></div>'
+    +'<label for="fr-note">'+esc(t("dispute_note_label"))+'</label><textarea id="fr-note" maxlength="600"></textarea>'
+    +'<div class="btn-row"><button class="btn secondary" id="fr-cancel">'+esc(t("cancel"))+'</button><button class="btn" id="fr-send" disabled>'+esc(t("fee_review_btn"))+'</button></div>');
+  var chosen=null;
+  $all("#fr-cases button").forEach(function(b){ b.onclick=function(){ chosen=b.getAttribute("data-c"); $all("#fr-cases button").forEach(function(x){ x.style.borderColor=""; }); b.style.borderColor="var(--accent)"; $("#fr-send").disabled=false; }; });
+  $("#fr-cancel").onclick=closeSheets;
+  $("#fr-send").onclick=async function(){
+    var btn=$("#fr-send"); btn.disabled=true; btn.textContent=t("loading");
+    try{
+      await api("/gifts/"+encodeURIComponent(giftId)+"/fee-review", {method:"POST", body:{case:chosen, note:$("#fr-note").value.trim()||undefined}});
+      closeSheets(); toast(t("fee_review_sent")); route();
+    }catch(e){ btn.disabled=false; btn.textContent=t("fee_review_btn"); toast(e.message||t("err_generic"), true); }
+  };
 }
 function openEditHistory(bill){
   openSheet('<h2>'+esc(t("edit_history_title"))+'</h2><p class="small">'+esc(bill.title||"")+'</p><div id="eh-body">'+skeleton(1)+'</div>');
@@ -4142,6 +4421,15 @@ function renderAdminAudit(){
 }
 
 /* ---------- boot ---------- */
+/* ---------- phase 2 s3: receipts / summary / pledges / billers / admin (stubs — replaced in the next commit) ---------- */
+function renderReceipt(id){ view(emptyState("🧾", t("receipt_title"), "", "")); }
+function renderSummary(){ view(emptyState("📊", t("month_summary_title"), "", "")); }
+function renderPledges(){ view(emptyState("🤝", t("my_pledges"), "", "")); }
+function renderBillers(){ view(emptyState("🏦", t("billers_title"), "", "")); }
+function renderAdminDisputes(){ view(emptyState("⚖️", t("dispute_centre"), "", "")); }
+function renderAdminBillers(){ view(emptyState("🏦", t("admin_billers"), "", "")); }
+function renderAdminCurrency(){ view(emptyState("💱", t("currency_settings"), "", "")); }
+
 async function boot(){
   if(S.booted) return; S.booted=true;
   // /config, /auth/me and the admin session check are independent — fetch
@@ -4161,9 +4449,11 @@ async function boot(){
   if(me&&me.csrfToken) S.csrfToken=me.csrfToken;
   if(S.user&&S.user.language) I.setLang(S.user.language);
   if(S.user&&S.user.country) S.country=countryCode(S.user.country);
+  if(S.user) mergeLocalBasket(); // merge any local basket into the server basket
 
   if(!location.hash) location.hash="#/splash";
   updateSavedBadge();
+  updateBasketBadge();
   route();
   window.addEventListener("online", function(){ hideOfflineBanner(); toast(t("session_restored")); });
   window.addEventListener("offline", function(){ showOfflineBanner(true); });
