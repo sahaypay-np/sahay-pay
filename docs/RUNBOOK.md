@@ -264,10 +264,6 @@ Within one week of any P1/P2 (and any P3 that taught something):
 - Data export (weekly backup): Admin → Dashboard → Export data. Save the
   downloaded `sahay-pay-export-YYYY-MM-DD.json` somewhere safe (encrypted
   drive or USB — never in the repo, email, or chat). See below.
-- Dependency audit (Phase 2 item 889): run
-  `./scripts/dependency-audit.sh`. HIGH/CRITICAL findings are fixed
-  within 48h; moderate/low at the next weekly review. Record the
-  outcome in the weekly review note.
 
 ### Data export — the weekly backup (admin database export)
 
@@ -303,11 +299,6 @@ re-import job, not a one-click operation.
 - Login-attempt log review: failed admin logins for the month.
 - Broken-link check: run `./tests/check-live.sh` (covers robots,
   sitemap, headers, health) and click through the Help topics.
-- Secrets review (Phase 2 item 891): check the secrets inventory in
-  `docs/HANDOVER.md` — is any rotation due (admin PIN every 90 days,
-  keys every 12 months)? Confirm no secret has leaked into the repo
-  (`./scripts/check-secrets.sh` must pass) and that the pre-commit
-  hook is installed in every active clone.
 
 ### Six-monthly (item 260)
 
@@ -339,29 +330,6 @@ re-import job, not a one-click operation.
   `docs/legal-archive/`.
 - Security architecture review: re-read `docs/SECURITY.md` (threat
   model) and update it for anything that changed.
-
-### Yearly self-review checklist (Phase 2 item 999)
-
-Once a year, work through this list and record the date + outcome for
-each line (keep the record in `docs/` as `SELF-REVIEW-YYYY.md`):
-
-- [ ] Re-read the Terms + Privacy Policy; update the version if the
-      legal meaning changed (see `docs/LEGAL-REWRITE-PLAN.md`).
-- [ ] Re-run the data-minimisation audit (`docs/DATA-MINIMISATION-AUDIT.md`):
-      any new data type without a stated purpose is removed.
-- [ ] Rotate `SESSION_SECRET` and `PAYOUT_ENCRYPTION_KEY` (see
-      `docs/KEY-ROTATION.md`); rotate the admin PIN.
-- [ ] Re-check every vendor in `docs/VENDORS.md` (plan, price, region,
-      terms) and confirm the free tiers still cover usage.
-- [ ] Re-read the incident playbooks (`docs/INCIDENT-PLAYBOOKS.md`) and
-      run one tabletop exercise (walk through Scenario 1 out loud).
-- [ ] Re-run the penetration self-assessments (`docs/PEN-ASSESSMENT-*.md`)
-      against a local dev instance and file the new report.
-- [ ] Check the transparency reports were published monthly; publish
-      any missing month.
-- [ ] Check backups exist and restore from one (if backups were set up).
-- [ ] Review the Help Centre: every topic still accurate, no dead links,
-      known-scams page current.
 
 ### PIN rotation (item 959)
 

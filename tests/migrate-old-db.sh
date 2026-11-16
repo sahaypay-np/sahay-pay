@@ -10,11 +10,9 @@
 # Usage: ./tests/migrate-old-db.sh [base-commit]  (default b8defcb, pre-B)
 # Exits non-zero on any failure. Uses a throwaway local SQLite DB only.
 # The premise check asserts the old DB lacks the NEWEST schema additions
-# (phase-2 §9 session columns), so any pre-change base works — including a
-# recent one such as the live schema. The post-migrate checks cover the
-# phase-1 columns, the phase-2 s1-2 bill columns + bill_edits table, and
-# the phase-2 §9 columns + uploads table. When a later workstream adds
-# newer columns, move the premise check to one of those.
+# (phase-2 s1-2 bill columns), so any pre-change base works — including a
+# recent one such as the live schema. The post-migrate checks cover both
+# the phase-1 columns and the phase-2 bill columns + bill_edits table.
 set -u
 BASE_COMMIT="${1:-b8defcb}"
 PORT="${MIGRATE_TEST_PORT:-3105}"
@@ -32,15 +30,15 @@ const db = new DatabaseSync('data/sahay-pay.db');
 db.exec(fs.readFileSync('/tmp/old-schema.sql', 'utf8'));
 db.close();
 " || { echo "FAIL: could not build old-schema DB"; exit 1; }
-# Sanity: the old DB really lacks the newest columns (phase-2 §9 session
+# Sanity: the old DB really lacks the newest columns (phase-2 s1-2 bill
 # columns — the migration under test). Any pre-change base lacks them.
 OLD_COLS=$(node -e "
 const { DatabaseSync } = require('node:sqlite');
 const db = new DatabaseSync('data/sahay-pay.db');
-const cols = db.prepare(\"PRAGMA table_info(sessions)\").all().map(r => r.name);
-console.log(cols.includes('ua_family_hash') ? 'HAS' : 'LACKS');
+const cols = db.prepare(\"PRAGMA table_info(bills)\").all().map(r => r.name);
+console.log(cols.includes('expires_at') ? 'HAS' : 'LACKS');
 db.close();")
-t "old DB lacks newest columns (ua_family_hash)" "LACKS" "$OLD_COLS"
+t "old DB lacks new bill columns (expires_at)" "LACKS" "$OLD_COLS"
 
 # 2. Start the CURRENT server against the old DB.
 PORT=$PORT SESSION_SECRET=$(openssl rand -base64 48) PAYOUT_ENCRYPTION_KEY=$(openssl rand -base64 32) \
@@ -73,12 +71,6 @@ const billCols = db.prepare(\"PRAGMA table_info(bills)\").all().map(r => r.name)
 const newBillCols = ['for_whom','relationship','for_other_consent','about_me','biller_instructions','photos_json','story_lang','not_paid_consequence','tried_to_pay','money_means','bill_type_other','charity_name','business','business_name','business_desc','dream','dream_desc','expires_at','extension_used','repost_count'];
 const editsTbl = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='bill_edits'\").all();
 const editsIdx = db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name='idx_bill_edits_bill'\").all();
-// Phase 2 §9 columns/table (EXTRA_COLUMNS + schema file).
-const giftCols = db.prepare(\"PRAGMA table_info(gifts)\").all().map(r => r.name);
-const complaintCols = db.prepare(\"PRAGMA table_info(complaints)\").all().map(r => r.name);
-const adminSessCols = db.prepare(\"PRAGMA table_info(admin_sessions)\").all().map(r => r.name);
-const uploadsTbl = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='uploads'\").all();
-const uploadsIdx = db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name='idx_uploads_user'\").all();
 console.log([
   cols.includes('recovery_code_lookup') ? 'COL_OK' : 'COL_MISSING',
   cols.includes('terms_accepted_version') ? 'CONSENT_OK' : 'CONSENT_MISSING',
@@ -89,17 +81,9 @@ console.log([
   newBillCols.every(c => billCols.includes(c)) ? 'BILLCOLS_OK' : 'BILLCOLS_MISSING',
   editsTbl.length ? 'BILLEDITS_OK' : 'BILLEDITS_MISSING',
   editsIdx.length ? 'BILLEDITSIDX_OK' : 'BILLEDITSIDX_MISSING',
-  (sessCols.includes('ua_family_hash') && sessCols.includes('trusted_note') && sessCols.includes('reauthed_at')) ? 'SESS9_OK' : 'SESS9_MISSING',
-  cols.includes('ua_hash') ? 'UAHASH_OK' : 'UAHASH_MISSING',
-  (billCols.includes('payout_edited_at') && billCols.includes('payout_consent_at')) ? 'BILLS9_OK' : 'BILLS9_MISSING',
-  giftCols.includes('payment_method') ? 'GIFTS9_OK' : 'GIFTS9_MISSING',
-  complaintCols.includes('category') ? 'COMPLAINTS9_OK' : 'COMPLAINTS9_MISSING',
-  adminSessCols.includes('elevated_until') ? 'ADMINSESS9_OK' : 'ADMINSESS9_MISSING',
-  uploadsTbl.length ? 'UPLOADS_OK' : 'UPLOADS_MISSING',
-  uploadsIdx.length ? 'UPLOADS_IDX_OK' : 'UPLOADS_IDX_MISSING',
 ].join(' '));
 db.close();")
-for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK SESS9_OK UAHASH_OK BILLS9_OK GIFTS9_OK COMPLAINTS9_OK ADMINSESS9_OK UPLOADS_OK UPLOADS_IDX_OK; do
+for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK; do
   if echo "$CHECKS" | grep -q "$want"; then echo "PASS: $want"; pass=$((pass+1)); else echo "FAIL: $want — checks: $CHECKS"; fail=$((fail+1)); fi
 done
 

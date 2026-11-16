@@ -17,15 +17,13 @@ const { logAudit, nowIso } = require('../lib/audit');
 const {
   isPinSet, setupPin, verifyAdminPin, changePin,
   createAdminSession, destroyAdminSession, requireAdmin, lookupAdminSession,
-  requireElevated, elevateAdminSession, rotateAdminSession,
   sessionCookieOptions, ADMIN_SESSION_HOURS, rateLimit,
   getOrCreateCsrfToken,
 } = require('../lib/auth');
 const { cleanStr } = require('../lib/validate');
 const { applyReviewDecision, createNotification } = require('../lib/notify');
 const { deletePrivateFile } = require('../lib/storage');
-const { getMaintenanceState, setMaintenanceMode, getFreezeState, setEmergencyFreeze } = require('../lib/maintenance');
-const { accountsOverRevealThreshold, recentRevealAnomalies } = require('../lib/security');
+const { getMaintenanceState, setMaintenanceMode } = require('../lib/maintenance');
 
 const router = express.Router();
 
@@ -192,26 +190,7 @@ router.post('/change-pin', async (req, res, next) => {
   try {
     const result = await changePin(req.body?.oldPin, req.body?.newPin);
     if (!result.ok) return res.status(400).json({ error: { code: 'PIN_CHANGE_FAILED', message: result.error } });
-    // Item 802: rotate the admin session token on PIN change.
-    await rotateAdminSession(req, res);
     res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// POST /api/admin/elevate {pin} — item 808: re-enter the owner PIN to
-// unlock sensitive actions (fee changes, review decisions) for 10 minutes.
-router.post('/elevate', rateLimit('admin-elevate', 10, 15 * 60 * 1000), async (req, res, next) => {
-  try {
-    const ok = await verifyAdminPin(req.body?.pin);
-    if (!ok) {
-      await logAudit('admin', 'owner', 'admin_elevate_failed', 'admin', 'elevate', {});
-      return res.status(401).json({ error: { code: 'INVALID_PIN', message: 'Incorrect PIN.' } });
-    }
-    await elevateAdminSession(req.cookies?.sp_admin);
-    await logAudit('admin', 'owner', 'admin_elevated', 'admin', 'elevate', {});
-    res.json({ ok: true, elevatedMinutes: 10 });
   } catch (err) {
     next(err);
   }
@@ -282,8 +261,7 @@ router.get('/queue', async (req, res, next) => {
 });
 
 // POST /api/admin/review/:packetId {decision: approve|reject|changes, reason}
-// Item 808: bill approval decisions need a fresh PIN re-auth (elevation).
-router.post('/review/:packetId', requireElevated, async (req, res, next) => {
+router.post('/review/:packetId', async (req, res, next) => {
   try {
     const result = await applyReviewDecision(
       req.params.packetId,
@@ -422,41 +400,16 @@ router.get('/reports', async (req, res, next) => {
   }
 });
 
-// POST /api/admin/reports/:id {action: dismiss|hide|pause|remove|suspend|restore|warn}
+// POST /api/admin/reports/:id {action: dismiss|hide|pause|remove|suspend|restore}
 router.post('/reports/:id', async (req, res, next) => {
   try {
     const report = await db.get('SELECT * FROM reports WHERE id = $1', [req.params.id]);
     if (!report) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
     const action = req.body?.action;
-    if (!['dismiss', 'hide', 'pause', 'remove', 'suspend', 'restore', 'warn'].includes(action)) {
-      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Action must be dismiss, hide, pause, remove, suspend, restore or warn.' } });
+    if (!['dismiss', 'hide', 'pause', 'remove', 'suspend', 'restore'].includes(action)) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Action must be dismiss, hide, pause, remove, suspend or restore.' } });
     }
     const now = nowIso();
-    // Item 859: warn the poster (notification, no content change).
-    if (action === 'warn') {
-      let posterId = null;
-      if (report.target_type === 'bill') {
-        const bill = await db.get('SELECT user_id, title FROM bills WHERE id = $1', [report.target_id]);
-        if (bill) {
-          posterId = bill.user_id;
-          await createNotification(
-            bill.user_id, 'poster_warned', 'A warning about your bill',
-            `Your bill "${bill.title}" was reported (${report.reason}). Please check it follows the community guidelines — further reports may hide it.`,
-            '#/mybills'
-          );
-        }
-      } else if (report.target_type === 'user') {
-        posterId = report.target_id;
-        await createNotification(
-          report.target_id, 'poster_warned', 'A warning about your account',
-          'Your account was reported. Please check it follows the community guidelines.',
-          '#/help?topic=guidelines'
-        );
-      }
-      await db.run(`UPDATE reports SET status = 'resolved' WHERE id = $1`, [report.id]);
-      await logAudit('admin', 'owner', 'report_warn', 'report', report.id, { posterId });
-      return res.json({ ok: true, action });
-    }
     if (report.target_type === 'bill') {
       const bill = await db.get('SELECT * FROM bills WHERE id = $1', [report.target_id]);
       if (bill) {
@@ -507,7 +460,7 @@ router.get('/fees', async (req, res, next) => {
   }
 });
 
-router.put('/fees', requireElevated, async (req, res, next) => {
+router.put('/fees', async (req, res, next) => {
   try {
     const body = req.body || {};
     if (body.feeMode !== undefined) {
@@ -627,281 +580,6 @@ router.get('/gifts', async (req, res, next) => {
       params
     );
     res.json({ gifts: rows });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// --- Complaints log (item 909) + security-incident flag (item 882) ---
-
-router.get('/complaints', async (req, res, next) => {
-  try {
-    const status = req.query.status;
-    const category = req.query.category;
-    const params = [];
-    const clauses = [];
-    if (status) { params.push(status); clauses.push(`c.status = $${params.length}`); }
-    if (category) { params.push(category); clauses.push(`c.category = $${params.length}`); }
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const { rows } = await db.query(
-      `SELECT c.*, u.display_name AS user_name, u.username AS user_username
-       FROM complaints c JOIN users u ON u.id = c.user_id
-       ${where} ORDER BY c.created_at DESC LIMIT 100`,
-      params
-    );
-    res.json({ complaints: rows });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// POST /api/admin/complaints/:id {action: resolve|reopen} — closing a
-// complaint notifies the complainant (the in-app confirmation).
-router.post('/complaints/:id', async (req, res, next) => {
-  try {
-    const row = await db.get('SELECT * FROM complaints WHERE id = $1', [req.params.id]);
-    if (!row) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Complaint not found.' } });
-    const action = req.body?.action;
-    if (!['resolve', 'reopen'].includes(action)) {
-      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Action must be resolve or reopen.' } });
-    }
-    const status = action === 'resolve' ? 'resolved' : 'open';
-    await db.run('UPDATE complaints SET status = $1 WHERE id = $2', [status, row.id]);
-    if (action === 'resolve') {
-      await createNotification(
-        row.user_id, 'complaint_resolved', 'Your complaint was resolved',
-        `Your complaint "${row.subject}" has been reviewed and closed. Thank you for telling us.`,
-        '#/complaint-status'
-      );
-    }
-    await logAudit('admin', 'owner', `complaint_${action}`, 'complaint', row.id, {});
-    res.json({ ok: true, status });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// --- Abuse-report dashboard (item 858): aggregates over the reports list ---
-
-router.get('/abuse', async (req, res, next) => {
-  try {
-    const byReason = await db.query(
-      `SELECT reason, COUNT(*) AS c FROM reports WHERE status = 'open' GROUP BY reason ORDER BY c DESC`
-    );
-    const byTarget = await db.query(
-      `SELECT target_type, COUNT(*) AS c FROM reports WHERE status = 'open' GROUP BY target_type`
-    );
-    const topReporters = await db.query(
-      `SELECT r.reporter_id, u.display_name, u.username, COUNT(*) AS c
-       FROM reports r JOIN users u ON u.id = r.reporter_id
-       GROUP BY r.reporter_id, u.display_name, u.username
-       ORDER BY c DESC LIMIT 10`
-    );
-    const recentResolved = await db.query(
-      `SELECT * FROM reports WHERE status = 'resolved' ORDER BY created_at DESC LIMIT 20`
-    );
-    const open = await db.get(`SELECT COUNT(*) AS c FROM reports WHERE status = 'open'`);
-    res.json({
-      openReports: Number(open?.c || 0),
-      byReason: byReason.rows.map((r) => ({ reason: r.reason, count: Number(r.c) })),
-      byTarget: byTarget.rows.map((r) => ({ targetType: r.target_type, count: Number(r.c) })),
-      topReporters: topReporters.rows.map((r) => ({
-        reporterId: r.reporter_id, displayName: r.display_name, username: r.username, reports: Number(r.c),
-      })),
-      recentResolved: recentResolved.rows,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// --- Security view (items 826/827): reveal alerts + anomalies ---
-
-router.get('/security', async (req, res, next) => {
-  try {
-    const [overThreshold, anomalies] = await Promise.all([
-      accountsOverRevealThreshold(),
-      recentRevealAnomalies(50),
-    ]);
-    const blocked24h = await db.get(
-      `SELECT COUNT(*) AS c FROM audit_logs WHERE action = 'payout_reveal_blocked' AND created_at >= $1`,
-      [new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()]
-    );
-    const fingerprintChanges = await db.query(
-      `SELECT actor_id, created_at FROM audit_logs
-       WHERE action = 'session_fingerprint_changed' ORDER BY created_at DESC LIMIT 20`
-    );
-    res.json({
-      accountsOverRevealThreshold: overThreshold,
-      anomalies,
-      blockedReveals24h: Number(blocked24h?.c || 0),
-      fingerprintChanges: fingerprintChanges.rows.map((r) => ({ userId: r.actor_id, createdAt: r.created_at })),
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// --- Security status page content (item 886) ---
-
-router.get('/security-status', async (req, res, next) => {
-  try {
-    const stored = await db.getSettingJson('security_status', null);
-    res.json(stored || { status: 'normal', message: '', incidents: [] });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.put('/security-status', async (req, res, next) => {
-  try {
-    const body = req.body || {};
-    const status = ['normal', 'incident', 'maintenance'].includes(body.status) ? body.status : 'normal';
-    const message = cleanStr(body.message || '', 500);
-    const incidents = Array.isArray(body.incidents) ? body.incidents.slice(0, 20).map((i) => ({
-      date: cleanStr(i.date || '', 20),
-      title: cleanStr(i.title || '', 120),
-      body: cleanStr(i.body || '', 500),
-    })) : [];
-    const value = { status, message, incidents };
-    await db.setSetting('security_status', JSON.stringify(value));
-    await logAudit('admin', 'owner', 'security_status_changed', 'settings', 'security_status', { status });
-    res.json(value);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// --- Fraud-awareness banner (item 974) + known scams (item 976) ---
-
-router.get('/fraud-banner', async (req, res, next) => {
-  try {
-    res.json(await db.getSettingJson('fraud_banner', { active: false, message: '' }));
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.put('/fraud-banner', async (req, res, next) => {
-  try {
-    const value = {
-      active: req.body?.active === true,
-      message: cleanStr(req.body?.message || '', 300),
-    };
-    await db.setSetting('fraud_banner', JSON.stringify(value));
-    await logAudit('admin', 'owner', 'fraud_banner_changed', 'settings', 'fraud_banner', { active: value.active });
-    res.json(value);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get('/known-scams', async (req, res, next) => {
-  try {
-    res.json({ scams: await db.getSettingJson('known_scams', []) });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.put('/known-scams', async (req, res, next) => {
-  try {
-    const scams = Array.isArray(req.body?.scams) ? req.body.scams.slice(0, 20).map((s) => ({
-      title: cleanStr(s.title || '', 120),
-      body: cleanStr(s.body || '', 800),
-      addedAt: cleanStr(s.addedAt || '', 20) || nowIso().slice(0, 10),
-    })).filter((s) => s.title && s.body) : [];
-    await db.setSetting('known_scams', JSON.stringify(scams));
-    await logAudit('admin', 'owner', 'known_scams_changed', 'settings', 'known_scams', { count: scams.length });
-    res.json({ scams });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// --- Emergency freeze (item 883) ---
-
-router.get('/freeze', async (req, res, next) => {
-  try {
-    res.json(await getFreezeState());
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.put('/freeze', async (req, res, next) => {
-  try {
-    const enabled = req.body?.enabled;
-    if (typeof enabled !== 'boolean') {
-      return res.status(400).json({ error: { code: 'VALIDATION', message: 'enabled must be true or false.' } });
-    }
-    res.json(await setEmergencyFreeze(enabled, req.body?.message));
-  } catch (err) {
-    next(err);
-  }
-});
-
-// --- Monthly transparency report (item 966) ---
-// GET builds the report for a month (YYYY-MM) from live data; POST
-// publishes it (stored in settings, shown on the public transparency page).
-
-async function buildTransparencyReport(month) {
-  const [y, m] = month.split('-').map(Number);
-  const start = new Date(Date.UTC(y, m - 1, 1)).toISOString();
-  const end = new Date(Date.UTC(y, m, 1)).toISOString();
-  const q = async (sql, params = []) => (await db.get(sql, params)) || {};
-  const billsPosted = await q('SELECT COUNT(*) AS c FROM bills WHERE created_at >= $1 AND created_at < $2', [start, end]);
-  const approved = await q(`SELECT COUNT(*) AS c FROM audit_logs WHERE action = 'review_approve' AND created_at >= $1 AND created_at < $2`, [start, end]);
-  const rejected = await q(`SELECT COUNT(*) AS c FROM audit_logs WHERE action = 'review_reject' AND created_at >= $1 AND created_at < $2`, [start, end]);
-  const changes = await q(`SELECT COUNT(*) AS c FROM audit_logs WHERE action = 'review_changes' AND created_at >= $1 AND created_at < $2`, [start, end]);
-  const reportsFiled = await q(`SELECT COUNT(*) AS c FROM reports WHERE created_at >= $1 AND created_at < $2`, [start, end]);
-  const reportsResolved = await q(`SELECT COUNT(*) AS c FROM audit_logs WHERE action LIKE 'report_%' AND created_at >= $1 AND created_at < $2`, [start, end]);
-  const complaintsFiled = await q(`SELECT COUNT(*) AS c FROM complaints WHERE created_at >= $1 AND created_at < $2`, [start, end]);
-  const complaintsResolved = await q(`SELECT COUNT(*) AS c FROM audit_logs WHERE action = 'complaint_resolve' AND created_at >= $1 AND created_at < $2`, [start, end]);
-  const giftsConfirmed = await q(`SELECT COUNT(*) AS c, COALESCE(SUM(amount_minor),0) AS total FROM gifts WHERE status = 'confirmed' AND confirmed_at >= $1 AND confirmed_at < $2`, [start, end]);
-  const suspensions = await q(`SELECT COUNT(*) AS c FROM audit_logs WHERE action = 'user_suspended' AND created_at >= $1 AND created_at < $2`, [start, end]);
-  return {
-    month,
-    generatedAt: nowIso(),
-    billsPosted: Number(billsPosted.c || 0),
-    reviewDecisions: {
-      approved: Number(approved.c || 0),
-      rejected: Number(rejected.c || 0),
-      changesRequested: Number(changes.c || 0),
-    },
-    reportsFiled: Number(reportsFiled.c || 0),
-    reportsResolved: Number(reportsResolved.c || 0),
-    complaintsFiled: Number(complaintsFiled.c || 0),
-    complaintsResolved: Number(complaintsResolved.c || 0),
-    giftsConfirmed: Number(giftsConfirmed.c || 0),
-    giftsConfirmedTotalMinor: Number(giftsConfirmed.total || 0),
-    suspensions: Number(suspensions.c || 0),
-  };
-}
-
-router.get('/transparency-report', async (req, res, next) => {
-  try {
-    const month = /^\d{4}-\d{2}$/.test(String(req.query.month || ''))
-      ? String(req.query.month)
-      : new Date().toISOString().slice(0, 7);
-    const published = await db.getSettingJson('transparency_reports', {});
-    res.json({ report: await buildTransparencyReport(month), published: published[month] || null });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post('/transparency-report', async (req, res, next) => {
-  try {
-    const month = /^\d{4}-\d{2}$/.test(String(req.body?.month || ''))
-      ? String(req.body.month)
-      : new Date().toISOString().slice(0, 7);
-    const report = await buildTransparencyReport(month);
-    const published = await db.getSettingJson('transparency_reports', {});
-    published[month] = report;
-    await db.setSetting('transparency_reports', JSON.stringify(published));
-    await logAudit('admin', 'owner', 'transparency_report_published', 'settings', `transparency:${month}`, {});
-    res.json({ ok: true, report });
   } catch (err) {
     next(err);
   }

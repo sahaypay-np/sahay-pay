@@ -36,7 +36,7 @@ ALLOW='user:pass@|example\.com|example-|changeme|YOUR_|<[^>]*>|test-bridge-secre
 
 # Scan the working tree (tracked AND untracked files — a secret in a new
 # file must fail before it is ever committed).
-FILES=$(find . -path ./node_modules -prune -o -path ./.git -prune -o -path ./data -prune -o -type f -print | sed 's|^\./||' | grep -v -e '^\.env\.example$' -e '^scripts/check-secrets\.sh$' -e '^\.githooks/pre-commit$')
+FILES=$(find . -path ./node_modules -prune -o -path ./.git -prune -o -path ./data -prune -o -type f -print | sed 's|^\./||' | grep -v -e '^\.env\.example$' -e '^scripts/check-secrets\.sh$')
 
 for pat in "$P1" "$P2" "$P3" "$P4" "$P5" "$P6" "$P7" "$P8" "$P9"; do
   hits=$(echo "$FILES" | xargs -r grep -InE "$pat" 2>/dev/null | grep -vE "$ALLOW" || true)
