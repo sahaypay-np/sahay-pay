@@ -443,6 +443,14 @@ owner picks a monitor, document it here and in `docs/VENDORS.md`.
 - Never commit secrets, test data, or `.env`. Never run the suites
   against live. Never edit `tests/live-wipe.sql` without coordinator
   agreement.
+- Commits are SSH-signed (item 196): the local repo config sets
+  `gpg.format=ssh`, `user.signingkey=~/.ssh/id_ed25519.pub`, and
+  `commit.gpgsign=true`, so every commit carries a signature from the
+  deploy key. Verify with `git verify-commit HEAD` (needs
+  `gpg.ssh.allowedSignersFile` pointing at the repo's `allowed_signers`
+  file). GitHub shows the "Verified" badge only after the same public
+  key is added as a *signing* key on the sahaypay-np account — that step
+  is the owner's, in GitHub Settings → SSH and GPG keys.
 
 ## 12. "Update docs after every change" (item 974)
 
