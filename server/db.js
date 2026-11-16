@@ -126,6 +126,13 @@ const DEFAULT_SETTINGS = {
     'Government fees', 'Charity', 'Other',
   ]),
   min_gift_minor: '1000',
+  // Phase 2 section 3: per-currency minimums (206) + gift chips (201/290)
+  // + per-category charity fee-free list (217). The legacy min_gift_minor
+  // stays as the fallback when a per-currency value is missing.
+  min_gift_minor_npr: '1000',
+  min_gift_minor_inr: '1000',
+  gift_chips: JSON.stringify({ NPR: [10000, 25000, 50000, 100000], INR: [10000, 25000, 50000, 100000] }),
+  charity_fee_free_categories: JSON.stringify([]),
 };
 
 async function getSetting(key) {
@@ -218,15 +225,45 @@ const EXTRA_COLUMNS = [
   ['gifts', 'payment_method', "TEXT DEFAULT ''"],
   ['complaints', 'category', "TEXT DEFAULT 'general'"],
   ['admin_sessions', 'elevated_until', 'TEXT'],
+  // Phase 2 (section 3): gifting — message, anonymity, receipts, timeline,
+  // direct-pay, fee review, dispute escalation, lazy reminders/expiry.
+  ['gifts', 'message', "TEXT DEFAULT ''"],
+  ['gifts', 'anonymous', 'INTEGER NOT NULL DEFAULT 0'],
+  ['gifts', 'receipt_number', 'TEXT'],
+  ['gifts', 'details_shown_at', 'TEXT'],
+  ['gifts', 'reported_sent_at', 'TEXT'],
+  ['gifts', 'disputed_at', 'TEXT'],
+  ['gifts', 'direct_pay', 'INTEGER NOT NULL DEFAULT 0'],
+  ['gifts', 'biller_name', "TEXT DEFAULT ''"],
+  ['gifts', 'biller_ref', "TEXT DEFAULT ''"],
+  ['gifts', 'fee_review_status', "TEXT DEFAULT 'none'"],
+  ['gifts', 'fee_review_case', "TEXT DEFAULT ''"],
+  ['gifts', 'fee_review_at', 'TEXT'],
+  ['gifts', 'reminded_24h', 'INTEGER NOT NULL DEFAULT 0'],
+  ['gifts', 'reminded_72h', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 // Cold-start mitigation (checklist priority fix (g)): the full migrate is
-// ~20 statements (schema + ALTER probes + settings seeds). On a serverless
+// ~7 round trips (schema file + column probe + batched ALTERs + batched
+// tables/indexes + batched seeds + hash write). On a serverless
 // cold start each round trip costs, so when the stored schema hash matches
 // the current schema file + column list, skip the whole migrate with a
 // single cheap probe. The hash is written only AFTER a successful full
 // migrate, so a failed or partial migrate is retried on the next boot,
 // and a fresh DB (no settings table yet) always runs the full path.
+// Run a multi-statement SQL batch as ONE round trip (Postgres: pg sends
+// it as a simple query; SQLite: exec handles multiple statements). Used
+// by migrate() for the ALTER batch and the post-ALTER table/index batch
+// — keeping the full cold-start migrate at ~7 round trips no matter how
+// many columns later workstreams add.
+async function execBatch(sqlText) {
+  if (usePostgres) {
+    await pool.query(sqlText);
+  } else {
+    sqliteDb.exec(sqlText);
+  }
+}
+
 async function migrate() {
   const schemaFile = usePostgres ? 'schema.postgres.sql' : 'schema.sqlite.sql';
   const sql = loadSchema(schemaFile);
@@ -269,32 +306,98 @@ async function migrate() {
       for (const r of rows) existing.add(`${t}.${r.name}`);
     }
   }
-  let added = 0;
-  for (const [table, column, ddl] of EXTRA_COLUMNS) {
-    if (existing.has(`${table}.${column}`)) continue;
+  // ALTER only the missing columns — as ONE batched statement, not one round
+  // trip per column. The probe above makes per-statement duplicate tolerance
+  // unnecessary; the fallback loop below only runs if two cold starts race
+  // (the loser sees "duplicate column" from the batch). This keeps the full
+  // migrate at ~7 round trips no matter how many columns later workstreams
+  // add — the per-column loop is what took the live API down on 2026-11-16.
+  const missing = EXTRA_COLUMNS.filter(([table, column]) => !existing.has(`${table}.${column}`));
+  const added = missing.length;
+  if (missing.length > 0) {
+    const alterBatch = missing
+      .map(([table, column, ddl]) => `ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
+      .join(';\n');
     try {
-      await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
-      console.log(`[db] added column ${table}.${column}`);
-      added += 1;
+      await execBatch(alterBatch);
+      for (const [table, column] of missing) console.log(`[db] added column ${table}.${column}`);
     } catch (err) {
       if (!/duplicate column|already exists/i.test(err.message)) throw err;
+      // Race: another invocation added some columns between probe and batch.
+      for (const [table, column, ddl] of missing) {
+        try {
+          await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+          console.log(`[db] added column ${table}.${column}`);
+        } catch (err2) {
+          if (!/duplicate column|already exists/i.test(err2.message)) throw err2;
+        }
+      }
     }
   }
-  // Indexes on columns added above must be created AFTER the ALTERs: on an
-  // existing DB the schema file's CREATE TABLE is a no-op, so an index on a
-  // not-yet-added column fails the whole migrate — this 502'd every live
-  // API route on 2026-11-16 (idx_users_recovery ran before the ALTERs).
-  await run('CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_code_lookup)');
-  // Phase 2: bill edit history (new table — CREATE TABLE IF NOT EXISTS is
-  // safe on old DBs; its index is created after the table, same rule).
-  await run(`CREATE TABLE IF NOT EXISTS bill_edits (
-    id TEXT PRIMARY KEY,
-    bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
-    user_id TEXT NOT NULL,
-    changed_fields TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL
-  )`);
-  await run('CREATE INDEX IF NOT EXISTS idx_bill_edits_bill ON bill_edits(bill_id, created_at)');
+  // Tables/indexes that must be created AFTER the ALTERs: on an existing DB
+  // the schema file's CREATE TABLE is a no-op, so an index on a not-yet-added
+  // column fails the whole migrate — this 502'd every live API route on
+  // 2026-11-16 (idx_users_recovery ran before the ALTERs). All IF NOT EXISTS,
+  // run as ONE batch. The s3 tables also live in the schema files — these
+  // are belt-and-braces duplicates, kept because the batch costs one round
+  // trip either way.
+  await execBatch(`
+    CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_code_lookup);
+    CREATE TABLE IF NOT EXISTS bill_edits (
+      id TEXT PRIMARY KEY,
+      bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
+      changed_fields TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_bill_edits_bill ON bill_edits(bill_id, created_at);
+    CREATE TABLE IF NOT EXISTS basket_items (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+      amount_minor INTEGER,
+      saved_for_later INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, bill_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_basket_user ON basket_items(user_id, created_at);
+    CREATE TABLE IF NOT EXISTS pledges (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+      frequency TEXT NOT NULL,
+      amount_minor INTEGER NOT NULL,
+      currency TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      next_due_at TEXT NOT NULL,
+      last_reminded_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pledges_user ON pledges(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_pledges_bill ON pledges(bill_id, status);
+    CREATE TABLE IF NOT EXISTS gift_messages (
+      id TEXT PRIMARY KEY,
+      gift_id TEXT NOT NULL REFERENCES gifts(id) ON DELETE CASCADE,
+      sender_type TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_gift_messages_gift ON gift_messages(gift_id, created_at);
+    CREATE TABLE IF NOT EXISTS billers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      country TEXT NOT NULL,
+      ref_format TEXT DEFAULT '',
+      ref_hint TEXT DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_billers_active ON billers(active, country, category);
+    CREATE INDEX IF NOT EXISTS idx_gifts_receipt ON gifts(receipt_number)
+  `);
   // Seed config defaults only (no content rows, ever) — one batched INSERT,
   // not one round trip per key (same 10s-budget reason as the ALTER probe).
   const seedEntries = Object.entries(DEFAULT_SETTINGS);

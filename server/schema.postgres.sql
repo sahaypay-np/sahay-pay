@@ -143,11 +143,90 @@ CREATE TABLE IF NOT EXISTS gifts (
   reference TEXT DEFAULT '',
   dispute_note TEXT DEFAULT '',
   payment_method TEXT DEFAULT '',
+  -- Phase 2 section 3: gift message (256), anonymity (258), receipt (265),
+  -- timeline stamps (239), direct-pay (271/274), fee review (280),
+  -- dispute escalation (284), lazy reminders/expiry (243/244).
+  message TEXT DEFAULT '',
+  anonymous INTEGER NOT NULL DEFAULT 0,
+  receipt_number TEXT,
+  details_shown_at TEXT,
+  reported_sent_at TEXT,
+  disputed_at TEXT,
+  direct_pay INTEGER NOT NULL DEFAULT 0,
+  biller_name TEXT DEFAULT '',
+  biller_ref TEXT DEFAULT '',
+  fee_review_status TEXT DEFAULT 'none',
+  fee_review_case TEXT DEFAULT '',
+  fee_review_at TEXT,
+  reminded_24h INTEGER NOT NULL DEFAULT 0,
+  reminded_72h INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   confirmed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_gifts_bill ON gifts(bill_id, status);
 CREATE INDEX IF NOT EXISTS idx_gifts_supporter ON gifts(supporter_id, status);
+-- NOTE: idx_gifts_receipt (gifts.receipt_number) is NOT created here: on an
+-- existing DB the CREATE TABLE above is a no-op, so the column does not
+-- exist yet when this file runs. migrate() in server/db.js creates it
+-- after the EXTRA_COLUMNS ALTERs (same rule as idx_users_recovery).
+
+-- Phase 2 section 3: server-side basket (246) — one row per user+bill.
+CREATE TABLE IF NOT EXISTS basket_items (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+  amount_minor INTEGER,
+  saved_for_later INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, bill_id)
+);
+CREATE INDEX IF NOT EXISTS idx_basket_user ON basket_items(user_id, created_at);
+
+-- Phase 2 section 3: recurring-support pledges (266). No automatic
+-- payment — a pledge is only an in-app reminder schedule; the helper
+-- always sends manually. Statuses: active | paused | cancelled.
+CREATE TABLE IF NOT EXISTS pledges (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+  frequency TEXT NOT NULL,
+  amount_minor INTEGER NOT NULL,
+  currency TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  next_due_at TEXT NOT NULL,
+  last_reminded_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pledges_user ON pledges(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_pledges_bill ON pledges(bill_id, status);
+
+-- Phase 2 section 3: gift dispute / fee-review message threads (242/275/
+-- 280/282). sender_type: helper | poster | admin. Admin messages are
+-- visible to both parties; the admin's identity is never exposed.
+CREATE TABLE IF NOT EXISTS gift_messages (
+  id TEXT PRIMARY KEY,
+  gift_id TEXT NOT NULL REFERENCES gifts(id) ON DELETE CASCADE,
+  sender_type TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gift_messages_gift ON gift_messages(gift_id, created_at);
+
+-- Phase 2 section 3: manually curated biller directory (272/277).
+-- Maintained by admins only; no seeded rows (content, not config).
+CREATE TABLE IF NOT EXISTS billers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  country TEXT NOT NULL,
+  ref_format TEXT DEFAULT '',
+  ref_hint TEXT DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_billers_active ON billers(active, country, category);
 
 CREATE TABLE IF NOT EXISTS verifications (
   id TEXT PRIMARY KEY,

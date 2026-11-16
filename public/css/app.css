@@ -279,3 +279,11 @@ body.has-chrome .site-footer{padding-bottom:calc(var(--dock-h) + 28px + env(safe
 html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after{
   animation-duration:.01ms!important; transition-duration:.01ms!important;
 }
+
+/* Receipt print (item 262): hide chrome + buttons, clean card. */
+@media print {
+  #topbar, #dock, .skip-link, .no-print { display:none !important; }
+  body { background:#fff; }
+  #view { max-width:640px; margin:0 auto; }
+  .receipt-print .card { box-shadow:none; border:1px solid #ddd; }
+}

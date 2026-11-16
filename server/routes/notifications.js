@@ -8,11 +8,16 @@
 const express = require('express');
 const db = require('../db');
 const { requireAuth } = require('../lib/auth');
+const { runGiftMaintenanceSafe } = require('../lib/gift-maintenance');
 
 const router = express.Router();
 
 router.get('/', requireAuth, async (req, res, next) => {
   try {
+    // Lazy reminders + 7-day gift expiry + pledge reminders (243/244/267):
+    // evaluated when the user opens their notifications, so notices exist
+    // by the time the list is read.
+    await runGiftMaintenanceSafe(req.user.id);
     const { rows } = await db.query(
       `SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`,
       [req.user.id]

@@ -33,14 +33,16 @@ db.exec(fs.readFileSync('/tmp/old-schema.sql', 'utf8'));
 db.close();
 " || { echo "FAIL: could not build old-schema DB"; exit 1; }
 # Sanity: the old DB really lacks the newest columns (phase-2 §9 session
-# columns — the migration under test). Any pre-change base lacks them.
+# + section 3 gift columns — the migration under test). Any pre-change
+# base lacks them.
 OLD_COLS=$(node -e "
 const { DatabaseSync } = require('node:sqlite');
 const db = new DatabaseSync('data/sahay-pay.db');
-const cols = db.prepare(\"PRAGMA table_info(sessions)\").all().map(r => r.name);
-console.log(cols.includes('ua_family_hash') ? 'HAS' : 'LACKS');
+const sessCols = db.prepare(\"PRAGMA table_info(sessions)\").all().map(r => r.name);
+const giftCols = db.prepare(\"PRAGMA table_info(gifts)\").all().map(r => r.name);
+console.log((!sessCols.includes('ua_family_hash') && !giftCols.includes('receipt_number')) ? 'LACKS' : 'HAS');
 db.close();")
-t "old DB lacks newest columns (ua_family_hash)" "LACKS" "$OLD_COLS"
+t "old DB lacks newest columns (ua_family_hash + receipt_number)" "LACKS" "$OLD_COLS"
 
 # 2. Start the CURRENT server against the old DB.
 PORT=$PORT SESSION_SECRET=$(openssl rand -base64 48) PAYOUT_ENCRYPTION_KEY=$(openssl rand -base64 32) \
@@ -74,11 +76,15 @@ const newBillCols = ['for_whom','relationship','for_other_consent','about_me','b
 const editsTbl = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='bill_edits'\").all();
 const editsIdx = db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name='idx_bill_edits_bill'\").all();
 // Phase 2 §9 columns/table (EXTRA_COLUMNS + schema file).
-const giftCols = db.prepare(\"PRAGMA table_info(gifts)\").all().map(r => r.name);
 const complaintCols = db.prepare(\"PRAGMA table_info(complaints)\").all().map(r => r.name);
 const adminSessCols = db.prepare(\"PRAGMA table_info(admin_sessions)\").all().map(r => r.name);
 const uploadsTbl = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='uploads'\").all();
 const uploadsIdx = db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name='idx_uploads_user'\").all();
+// Phase 2 section 3: new gifts columns + basket/pledges/messages/billers tables.
+const giftCols = db.prepare(\"PRAGMA table_info(gifts)\").all().map(r => r.name);
+const newGiftCols = ['message','anonymous','receipt_number','details_shown_at','reported_sent_at','disputed_at','direct_pay','biller_name','biller_ref','fee_review_status','fee_review_case','fee_review_at','reminded_24h','reminded_72h'];
+const hasTbl = (n) => db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name=?\").all(n).length > 0;
+const hasIdx = (n) => db.prepare(\"SELECT name FROM sqlite_master WHERE type='index' AND name=?\").all(n).length > 0;
 console.log([
   cols.includes('recovery_code_lookup') ? 'COL_OK' : 'COL_MISSING',
   cols.includes('terms_accepted_version') ? 'CONSENT_OK' : 'CONSENT_MISSING',
@@ -97,9 +103,15 @@ console.log([
   adminSessCols.includes('elevated_until') ? 'ADMINSESS9_OK' : 'ADMINSESS9_MISSING',
   uploadsTbl.length ? 'UPLOADS_OK' : 'UPLOADS_MISSING',
   uploadsIdx.length ? 'UPLOADS_IDX_OK' : 'UPLOADS_IDX_MISSING',
+  newGiftCols.every(c => giftCols.includes(c)) ? 'GIFTCOLS_OK' : 'GIFTCOLS_MISSING',
+  hasTbl('basket_items') ? 'BASKET_OK' : 'BASKET_MISSING',
+  hasTbl('pledges') ? 'PLEDGES_OK' : 'PLEDGES_MISSING',
+  hasTbl('gift_messages') ? 'GIFTMSG_OK' : 'GIFTMSG_MISSING',
+  hasTbl('billers') ? 'BILLERS_OK' : 'BILLERS_MISSING',
+  hasIdx('idx_gifts_receipt') ? 'GIFTRECEIPTIDX_OK' : 'GIFTRECEIPTIDX_MISSING',
 ].join(' '));
 db.close();")
-for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK SESS9_OK UAHASH_OK BILLS9_OK GIFTS9_OK COMPLAINTS9_OK ADMINSESS9_OK UPLOADS_OK UPLOADS_IDX_OK; do
+for want in COL_OK CONSENT_OK IDX_OK HASH_OK CSRF_OK RATELIMIT_OK BILLCOLS_OK BILLEDITS_OK BILLEDITSIDX_OK SESS9_OK UAHASH_OK BILLS9_OK GIFTS9_OK COMPLAINTS9_OK ADMINSESS9_OK UPLOADS_OK UPLOADS_IDX_OK GIFTCOLS_OK BASKET_OK PLEDGES_OK GIFTMSG_OK BILLERS_OK GIFTRECEIPTIDX_OK; do
   if echo "$CHECKS" | grep -q "$want"; then echo "PASS: $want"; pass=$((pass+1)); else echo "FAIL: $want — checks: $CHECKS"; fail=$((fail+1)); fi
 done
 
