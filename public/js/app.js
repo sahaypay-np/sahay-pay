@@ -2400,40 +2400,57 @@ function renderSettings(){
 /* Full legal documents (English is the binding version; the short summary above each one is translated). */
 var LEGAL_TERMS_HTML=
  '<p class="small">Version 1.0 — Last updated 16 November 2026. Effective 16 November 2026. The English version of these terms is the binding version.</p>'
+ +'<div class="notice info"><h2 style="margin-top:0">What Sahay Pay is \u2014 and is not</h2>'
+ +'<p><strong>Sahay Pay is:</strong> a place to find real people who need help with a bill, and to pay them directly from your own payment app. Every post is reviewed by a human before it goes public.</p>'
+ +'<p><strong>Sahay Pay is not:</strong> a bank, a payment service, a charity, or a lender. It never holds, receives, or guarantees gift money, and it cannot refund or reverse a gift. It does not promise that any bill is genuine \u2014 a verification badge only means a human checked what was shown.</p></div>'
  +'<h2>1. What Sahay Pay is</h2>'
+ +'<div class="notice info"><strong>In short:</strong> Sahay Pay introduces people who need bill help to people willing to help. You pay the person directly from your own app. Sahay Pay never touches your money.</div>'
 
  +'<p>Sahay Pay connects people in Nepal and India who need help with a bill with people willing to help. A supporter pays the person directly, from their own payment app, using the payout details shown in the app. Sahay Pay never holds, receives, processes, or guarantees gift money.</p>'
  +'<p>Payments are currently in Demo Mode. The gift journey is a demonstration: fees shown are quotes and are not collected, and no real money moves through Sahay Pay. Any transfer you make is made by you, from your own payment app, directly to the other person.</p>'
  +'<h2>2. Who can use Sahay Pay</h2>'
+ +'<div class="notice info"><strong>In short:</strong> Adults only (18+). One account per person. Tell the truth about yourself.</div>'
  +'<p>Sahay Pay is for adults aged 18 and over only. Anyone under 18 is blocked and no account is created. You must give true information about yourself, and you may only create one account.</p>'
  +'<h2>3. Your account</h2>'
+ +'<div class="notice info"><strong>In short:</strong> No email, no password. Your recovery code is the only way back in \u2014 keep it safe. Your login lasts 30 days.</div>'
  +'<p>Your account is created from simple questions (name, age, country, city, about you). There is no email address or password. When your account is created you are shown a one-time recovery code: write it down and keep it somewhere safe — it is the only way back into your account if you log out, clear your browser data, or change device, because Sahay Pay never stores the code itself. Your login stays on your device for 30 days. Keep your device secure, and log out on any device you share. You can delete your account in Settings at any time.</p>'
  +'<h2>4. Posting a bill</h2>'
+ +'<div class="notice info"><strong>In short:</strong> Post only real bills, honestly. Every post is checked by the owner before it goes public.</div>'
 
  +'<p>Post only real bills, described honestly. Every post is reviewed by the owner before it goes public, and the owner may approve it, reject it, or ask for changes. A material edit to a live bill sends it back to review. Keep other people personal details out of your photos. A bill may be paused if it is reported, and removed if it breaks these terms.</p>'
  +'<h2>5. Verification</h2>'
+ +'<div class="notice info"><strong>In short:</strong> A badge means a human checked what was shown. It is not a promise that a bill is genuine.</div>'
  +'<p>Bill, ID, and Name badges are decided by a human reviewer. A badge means the reviewer checked what was shown to them. It is not a promise that a bill is genuine or that a person will use help in a particular way.</p>'
  +'<h2>6. Helping and gifts</h2>'
+ +'<div class="notice info"><strong>In short:</strong> Gifts are voluntary and final. Sahay Pay cannot refund or reverse them, because the money never passes through Sahay Pay.</div>'
  +'<p>Gifts are voluntary. A bill counts as helped only when the person confirms they received the money. No contract of sale is formed through Sahay Pay: a gift is a voluntary transfer between two users, and it counts only when the recipient confirms receipt. Sahay Pay cannot reverse a gift and cannot refund you, because the money never passes through Sahay Pay. Never send money you cannot afford to lose. Never share your MPIN, OTP, password, or card details with anyone. Sahay Pay never asks for them.</p>'
  +'<p>If a gift goes wrong, the dispute is between the two users involved. You can report the problem through the Help Centre complaint form and Sahay Pay will look into it and may suspend the account involved, but Sahay Pay cannot reverse a transfer it never held and cannot force a refund.</p>'
  +'<h2>7. Fees</h2>'
+ +'<div class="notice info"><strong>In short:</strong> The fee shown before you confirm is the fee that applies. In Demo Mode, fees are quoted only and not collected.</div>'
 
  +'<p>The fee shown at the Fee step is the current schedule: in Nepal, Rs 160 on gifts up to Rs 1,600, then 10% of the gift; in India, Rs 100 on gifts up to Rs 1,000, then 10% of the gift. Charity asks are free. While Demo Mode is active, fees are quoted only and are not collected. The fee may change, and the fee shown before you confirm always applies.</p>'
  +'<h2>8. Cross-border help</h2>'
+ +'<div class="notice info"><strong>In short:</strong> Follow your own country\u2019s law when helping across a border. This is general information, not legal advice.</div>'
  +'<p>If you help someone across a border, follow your own country law. Indian law generally restricts foreign citizens from donating to individuals in India without registration. Transfers between UPI and Nepal have limits (India to Nepal up to INR 200,000 per transaction; Nepal to India up to INR 15,000 per transaction). This is general information only, not legal advice.</p>'
  +'<h2>9. Brands and auctions</h2>'
+ +'<div class="notice info"><strong>In short:</strong> Brand deals and auctions are between you and the brand. Sahay Pay does not guarantee them.</div>'
  +'<p>Brand asks and auctions are arrangements between users and brands. Sahay Pay does not guarantee any brand deal, introduction, or auction outcome.</p>'
  +'<h2>10. What is not allowed</h2>'
+ +'<div class="notice info"><strong>In short:</strong> No fake bills, fraud, impersonation, harassment, or illegal content. Break the rules and your account may be suspended.</div>'
  +'<p>Fake bills, fraud, impersonation, illegal content, harassment, spam, scraping, and attempts to break the service are not allowed. Reported illegal content is removed promptly. Accounts that break these rules may be suspended.</p>'
  +'<h2>11. Your content</h2>'
+ +'<div class="notice info"><strong>In short:</strong> You own what you post. You give Sahay Pay permission to show it. Copyright problems can be reported through the complaint form.</div>'
  +'<p>You keep ownership of what you post. By posting, you allow Sahay Pay to display it on the service. You must have the right to share anything you post.</p>'
  +'<p>If you believe something posted on Sahay Pay infringes your copyright, report it through the Help Centre complaint form. Include: what was copied and where it appears on Sahay Pay, proof that you own it (or act for the owner), and how to reach you. Sahay Pay will review the report and remove content that breaks the rules.</p>'
  +'<h2>12. Liability</h2>'
+ +'<div class="notice info"><strong>In short:</strong> The service is provided as is. Sahay Pay is not responsible for transfers between users or for what users post.</div>'
 
  +'<p>The service is provided as is. Sahay Pay does not promise that you will receive help, does not guarantee any post, and is not responsible for transfers between users, for what users post, or for losses from using the service, to the fullest extent the law allows.</p>'
  +'<h2>13. Changes to these terms</h2>'
+ +'<div class="notice info"><strong>In short:</strong> These terms can change. The version in the app is the one that applies.</div>'
  +'<p>These terms may change. The version shown in the app always applies. If you keep using Sahay Pay after a change, you accept the new terms.</p>'
  +'<h2>14. Governing law and contact</h2>'
+ +'<div class="notice info"><strong>In short:</strong> Nepal law applies. Accepting these terms online is binding under Nepal\u2019s Electronic Transactions Act, 2063.</div>'
  +'<p>These terms are governed by the law of Nepal. By ticking "I agree" and using Sahay Pay, you accept these terms. Under Nepal\'s Electronic Transactions Act, 2063 (2008), electronic records and electronic acceptance form a binding agreement, so these terms bind you even though you never sign a paper copy. Questions or complaints can be sent through the Help Centre complaint form.</p>';
 var LEGAL_PRIVACY_HTML=
  '<p class="small">Version 1.0 — Last updated 16 November 2026. Effective 16 November 2026. The English version of this policy is the binding version.</p>'
@@ -2441,12 +2458,14 @@ var LEGAL_PRIVACY_HTML=
  +'<p>Profile: display name, age, country, city, about you, language, and an optional photo. Payout details: your eSewa or Khalti number, UPI ID, or bank details, encrypted and shown publicly only as a masked hint. Bills you post: amount, category, description, bill photo, and payment method. Verification documents, which only the reviewer sees and which are deleted after review. Reports and complaints you send. Session cookies that keep you logged in (see §8 for the list). A scrambled copy (hash) of your one-time recovery code, so we can check a code you enter without ever storing the code itself.</p>'
 
  +'<p>We do not collect email addresses, passwords, OTPs, MPINs, card numbers, or banking credentials.</p>'
+ +'<p><strong>We collect as little as possible.</strong> Every piece of data above has one purpose: your profile exists so helpers know who they are helping; your payout details exist so a helper can pay you; your bill exists so it can be shown and reviewed; verification documents exist only so a human can check them, and are deleted after review; session cookies exist only to keep you logged in; the scrambled recovery-code copy exists only so we can check a code you enter. We do not collect anything else, and we do not use your data for advertising.</p>'
  +'<h2>2. How we use it</h2>'
  +'<p>To run the service and show your bill to helpers; to review posts and keep the service safe; to show your payout details to a helper only at the Send step; and to answer complaints. We do not sell your data. We do not run third-party analytics or advertising trackers.</p>'
  +'<h2>3. Who sees it</h2>'
  +'<p>Your public profile and bill are visible to other users. Your full payout details are shown only to a helper at the Send step, and every reveal is logged. Verification documents are seen only by the reviewer. Our hosting providers, Netlify for the website and Supabase for the database in Mumbai, process data only to run the service.</p>'
  +'<h2>4. How it is protected</h2>'
  +'<p>Payout details are encrypted while stored. The admin console is protected by a PIN. Access is limited to what the service needs. No system is completely secure, and we cannot promise absolute security.</p>'
+ +'<p><strong>If something goes wrong:</strong> if your data is exposed in a security breach, we will tell you through the app and through the Help Centre as soon as we know what happened and what it affects, and we will tell you what to do. We will also report the breach to the relevant authority where the law requires it.</p>'
  +'<h2>5. How long we keep it</h2>'
  +'<p>We keep each kind of data only as long as it is needed:</p>'
  +'<ul><li>Your profile and bills: until you delete them.</li><li>Verification documents: deleted after the review is decided.</li><li>Session records: 30 days for your login, 24 hours for the admin login.</li><li>Audit log entries (what happened and when — never your payout details): 1 year.</li></ul>'
@@ -2463,13 +2482,147 @@ var LEGAL_PRIVACY_HTML=
  +'<p>If this policy changes, the version shown in the app applies. Contact us through the Help Centre complaint form.</p>';
 var ABOUT_HTML=
  '<p>Sahay Pay connects people in Nepal and India who need help with a bill with people willing to help. A supporter pays the person directly, from their own payment app, using the payout details shown in the app. Sahay Pay never holds, receives, processes, or guarantees gift money.</p>'
- +'<p>Every post is reviewed by the owner before it goes public. The service is run from Bhairahawa, Nepal, and is currently in Demo Mode: no real payment integration is connected yet, so fees shown are quotes and are not collected.</p>';
+ +'<p>Every post is reviewed by the owner before it goes public. The service is run from Bhairahawa, Nepal, and is currently in Demo Mode: no real payment integration is connected yet, so fees shown are quotes and are not collected.</p>'
+ +'<p><strong>For the press:</strong> Sahay Pay is a small, independent service from Bhairahawa, Nepal, built to help neighbours pay real bills directly \u2014 no middleman holding the money. For media enquiries, use the Help Centre complaint form and choose the \u201cpress\u201d category.</p>';
 var REFUNDS_HTML=
  '<p>No payments are taken while Demo Mode is active, so no refunds arise. Gifts go directly from supporter to recipient, outside Sahay Pay, and Sahay Pay cannot refund or reverse them (see Terms §6).</p>'
  +'<p>When real payments launch, any fee collected through a payment provider will be refunded through that provider, under that provider\'s rules. If a post was fake or the payout details were wrong, report it through the Help Centre complaint form — the owner reviews every report.</p>';
 var CONTENT_RULES_HTML=
  '<p>Do not post: fake bills or false claims; defamation; hate speech; threats, harassment, or bullying; misinformation; illegal goods or services; sexual content involving minors (reported to the authorities); other people\'s private details; content you do not have the right to share; spam or scams.</p>'
- +'<p>To report content, use the Help Centre complaint form: include a link to the post, which rule it breaks, and why. Reported content is reviewed by a human. Posts that break these rules are removed, and accounts that break them may be suspended. Copyright reports go through the same form (see Terms §11).</p>';
+ +'<p>To report content, use the Help Centre complaint form: include a link to the post, which rule it breaks, and why. Reported content is reviewed by a human. Posts that break these rules are removed, and accounts that break them may be suspended. Copyright reports go through the same form (see Terms §11).</p>'
+ +'<h3>Examples</h3><ul><li>Posting a bill that is not yours, or a bill that was already paid, is fake content.</li><li>Asking someone to pay a different number than the one on the bill is fraud.</li><li>Posting someone else\u2019s phone number, address, or ID is sharing private details.</li><li>Copying another person\u2019s photo or story without permission breaks the rules.</li><li>Repeatedly posting the same bill to stay at the top of the feed is spam.</li></ul>';
+/* Phase 2 §10 help topics. Legal pages are general guidance, not legal
+   advice — the legal note is shown on the topics that need it. */
+var FEE_SCHEDULE_HTML=
+ '<table class="tbl"><tr><th>Gift</th><th>Fee (Nepal)</th><th>Fee (India)</th></tr>'
+ +'<tr><td>Rs 100</td><td>Rs 160</td><td>Rs 100</td></tr>'
+ +'<tr><td>Rs 500</td><td>Rs 160</td><td>Rs 100</td></tr>'
+ +'<tr><td>Rs 1,000</td><td>Rs 160</td><td>Rs 100</td></tr>'
+ +'<tr><td>Rs 1,600 / Rs 1,000</td><td>Rs 160</td><td>Rs 100</td></tr>'
+ +'<tr><td>Rs 2,000</td><td>Rs 200 (10%)</td><td>Rs 200 (10%)</td></tr>'
+ +'<tr><td>Rs 5,000</td><td>Rs 500 (10%)</td><td>Rs 500 (10%)</td></tr>'
+ +'<tr><td>Rs 10,000</td><td>Rs 1,000 (10%)</td><td>Rs 1,000 (10%)</td></tr></table>'
+ +'<p><strong>Worked examples.</strong> In Nepal, a Rs 500 gift costs a Rs 160 fee — the helper sends Rs 500 to the person and the Rs 160 fee is quoted separately. A Rs 5,000 gift costs Rs 500 (10%). In India, a Rs 500 gift costs a Rs 100 fee; a Rs 5,000 gift costs Rs 500 (10%). Charity asks are always free — no fee at all.</p>'
+ +'<p>While Demo Mode is active, fees are quoted only and are not collected. The fee shown at the Fee step, before you confirm, always applies.</p>';
+var AGE_GATE_HTML=
+ '<p>Sahay Pay is for adults aged 18 and over only. When you create a profile, you tell us your age. If you are under 18, the app blocks you and no account is created — nothing about you is stored.</p>'
+ +'<p>Why 18? Gifts are money transfers between adults. Under-18s cannot enter into the agreements that a gift involves, and we do not want to hold data about children.</p>'
+ +'<p>If you are under 18, please come back when you turn 18. If you think you were blocked by mistake, ask an adult to help you file a complaint through the Help Centre.</p>';
+var PARENTAL_HTML=
+ '<p>Sahay Pay is an adults-only service (18+). If you are a parent or guardian, please know:</p>'
+ +'<ul><li>We do not knowingly collect data from anyone under 18. Under-18 sign-ups are blocked and no account is created.</li>'
+ +'<li>Gifts are real money transfers between adults. They cannot be reversed by Sahay Pay.</li>'
+ +'<li>If you believe a child is using Sahay Pay, file a complaint through the Help Centre and choose the "privacy" category — the account will be reviewed and removed.</li></ul>';
+var NEVER_ASK_HTML=
+ '<p><strong>Sahay Pay will never ask you for:</strong></p>'
+ +'<ul><li>Your MPIN, OTP, password, or PIN (except the admin PIN, inside the admin console only).</li>'
+ +'<li>Your card number, CVV, or bank login.</li>'
+ +'<li>Money to "unlock" a gift, a verification, or a payout.</li>'
+ +'<li>Your recovery code — anyone asking for it is trying to steal your account.</li></ul>'
+ +'<p>Anyone who asks for these things is not Sahay Pay, even if they use our name or logo. Report them through the complaint form and never send anything.</p>';
+var DEMO_MODE_HTML=
+ '<p>Sahay Pay is currently in <strong>Demo Mode</strong>. That means:</p>'
+ +'<ul><li>No real payment integration is connected. Fees shown are quotes and are not collected.</li>'
+ +'<li>Gifts still work as a demonstration: you go through the gift journey, see payout details, and report that you sent help — but no money moves through Sahay Pay, ever.</li>'
+ +'<li>Any transfer you make is made by you, from your own payment app, directly to the other person.</li></ul>'
+ +'<p>Demo Mode is labelled everywhere it matters — on the feed, on bills, on leaderboards, and in the footer — so you always know.</p>';
+var SCAM_WARNING_HTML=
+ '<p>Common scams seen in Nepal and India:</p>'
+ +'<ul><li><strong>"Pay a fee to unlock your gift."</strong> Sahay Pay never asks for money to unlock anything. If someone asks, it is a scam.</li>'
+ +'<li><strong>"Send money to this other number."</strong> Only ever pay the contacts shown inside the app at the Send step. A number sent by message, comment, or another app is not verified.</li>'
+ +'<li><strong>"Share your OTP/MPIN so we can verify you."</strong> Sahay Pay never asks for OTPs or MPINs. Anyone who asks is stealing.</li>'
+ +'<li><strong>Fake eSewa/Khalti screenshots.</strong> A screenshot of a payment proves nothing — only the recipient confirming in the app counts.</li>'
+ +'<li><strong>Fake bills.</strong> A bill photo can be copied from the internet. Check the name, the amount, and the story — and report anything that does not add up.</li></ul>'
+ +'<p>If you spot a scam, report the bill or the user from the bill page, or file a complaint and choose the "security" category.</p>';
+var ACCESSIBILITY_HTML=
+ '<p>Sahay Pay aims to be usable by everyone. What is in place:</p>'
+ +'<ul><li>Text size control and a high-contrast theme in Settings.</li>'
+ +'<li>A reduced-motion setting for people who prefer less animation.</li>'
+ +'<li>Keyboard navigation, visible focus, and labelled buttons throughout.</li>'
+ +'<li>Content in English, Nepali, and Hindi.</li></ul>'
+ +'<p>If something is hard to use, file a complaint and choose the "general" category, and describe the problem — accessibility reports are treated as bugs, not feedback.</p>';
+var PRESS_KIT_HTML=
+ '<p><strong>Sahay Pay</strong> is a small, independent service from Bhairahawa, Nepal. It connects people in Nepal and India who need help with a bill with people willing to help — supporters pay the person directly, and Sahay Pay never holds gift money.</p>'
+ +'<p><strong>Key facts:</strong> launched 2026; based in Bhairahawa, Nepal; Nepal (NPR, eSewa/Khalti/connectIPS) and India (INR, UPI); every post reviewed by a human before it goes public; currently in Demo Mode.</p>'
+ +'<p><strong>Media enquiries:</strong> use the Help Centre complaint form and choose the "press" category. Please include your outlet, your deadline, and what you need.</p>'
+ +'<p><strong>Logo:</strong> the Sahay Pay logo is shown at the top of every page. Do not alter it or use it to suggest endorsement.</p>';
+var PRESS_FAQ_HTML=
+ '<details class="help-topic card"><summary>What is Sahay Pay?</summary><p>A small service from Bhairahawa, Nepal, that connects people who need help with a bill to people willing to help. Supporters pay the person directly from their own payment app.</p></details>'
+ +'<details class="help-topic card"><summary>Does Sahay Pay hold money?</summary><p>No. Sahay Pay never holds, receives, processes, or guarantees gift money. Transfers happen between users, in their own payment apps.</p></details>'
+ +'<details class="help-topic card"><summary>How are posts checked?</summary><p>Every post is reviewed by a human (the owner) before it goes public. Reported bills can be paused immediately while they are checked.</p></details>'
+ +'<details class="help-topic card"><summary>Is Sahay Pay a charity?</summary><p>No. Sahay Pay is not a charity, a bank, or a lender. It is a small independent service, currently in Demo Mode.</p></details>'
+ +'<details class="help-topic card"><summary>Who runs it?</summary><p>Sahay Pay is run by its founder from Bhairahawa, Nepal. Media enquiries go through the Help Centre complaint form (category "press").</p></details>';
+var MODERATION_HTML=
+ '<p>How moderation works on Sahay Pay:</p>'
+ +'<ol><li><strong>Before it goes public:</strong> every bill is reviewed by the owner. It can be approved, rejected, or sent back for changes.</li>'
+ +'<li><strong>Reports:</strong> any user can report a bill, a user, a brand, or an auction. A credible fraud report pauses the bill immediately while the owner checks it.</li>'
+ +'<li><strong>Decisions:</strong> the owner can dismiss a report, warn the poster, hide or remove the bill, pause it, or suspend the account.</li>'
+ +'<li><strong>Appeals:</strong> if your post was rejected or your account suspended, file a complaint — every complaint is reviewed by a human.</li></ol>'
+ +'<p>No automated system decides what stays up. A human decides, every time.</p>';
+var COMMUNITY_HTML=
+ '<p>Sahay Pay is a small community built on trust. The guidelines are simple:</p>'
+ +'<ul><li><strong>Be honest.</strong> Post only real bills, described truthfully.</li>'
+ +'<li><strong>Be kind.</strong> No harassment, hate, or threats — towards anyone.</li>'
+ +'<li><strong>Respect privacy.</strong> Never post someone else\'s personal details.</li>'
+ +'<li><strong>Help in good faith.</strong> If you say you sent help, mean it. If you received help, confirm it.</li>'
+ +'<li><strong>Report, don\'t retaliate.</strong> If something looks wrong, report it and let the owner check.</li></ul>'
+ +'<p>Breaking these guidelines can lead to a warning, removal of a post, or suspension — see the content rules for the full list.</p>';
+var SAFETY_POSTERS_HTML=
+ '<p>Share these safety tips with anyone new to Sahay Pay:</p>'
+ +'<div class="card"><h2>🔒 1. Never share your MPIN, OTP, or password</h2><p>Sahay Pay never asks for them. Anyone who does is trying to steal from you.</p></div>'
+ +'<div class="card" style="margin-top:10px"><h2>👤 2. Check the name matches</h2><p>Before you pay, check the name on the account matches the name on the bill.</p></div>'
+ +'<div class="card" style="margin-top:10px"><h2>📱 3. Pay only inside the app\'s contacts</h2><p>Only use the payout details shown at the Send step. Never pay a number from a message.</p></div>'
+ +'<div class="card" style="margin-top:10px"><h2>💸 4. Gifts cannot be refunded</h2><p>Your money goes straight to the other person. Only send what you can afford to give.</p></div>'
+ +'<div class="card" style="margin-top:10px"><h2>🚩 5. Report anything suspicious</h2><p>Report the bill or the user — a credible fraud report pauses the bill immediately.</p></div>';
+var INSTALL_HTML=
+ '<h3>Android (Chrome)</h3><ol><li>Open Sahay Pay in Chrome.</li><li>Tap the menu (⋮) and choose "Add to Home screen" or "Install app".</li><li>Tap "Install". Sahay Pay appears on your home screen like any app.</li></ol>'
+ +'<h3>iPhone (Safari)</h3><ol><li>Open Sahay Pay in Safari.</li><li>Tap the Share button.</li><li>Choose "Add to Home Screen", then "Add".</li></ol>'
+ +'<p>The installed app works exactly like the website, with one-tap access and no address bar. Your login stays on the device for 30 days either way.</p>';
+var NEPAL_PRIVACY_HTML=
+ '<p>Under Nepal\'s <strong>Individual Privacy Act, 2075 (2018)</strong>, you have the right to:</p>'
+ +'<ul><li>Know what personal data is collected about you and why.</li>'
+ +'<li>Access your data and get a copy of it (download it any time from Settings).</li>'
+ +'<li>Correct data that is wrong, and delete your data (delete your account in Settings, or by recovery code if you are logged out).</li>'
+ +'<li>Object to your data being used in ways you did not agree to.</li></ul>'
+ +'<p>Sahay Pay collects as little as possible (see the Privacy Policy), never sells your data, and runs no third-party advertising trackers. This page is general information, not legal advice.</p>';
+var INDIA_DPDP_HTML=
+ '<p>Under India\'s <strong>Digital Personal Data Protection Act, 2023</strong>, you have the right to:</p>'
+ +'<ul><li>Know what personal data is collected about you and why.</li>'
+ +'<li>Access a summary of your data and get a copy of it (download it any time from Settings).</li>'
+ +'<li>Correct or erase your data, and withdraw your consent (deleting your account removes your data).</li>'
+ +'<li>Raise a grievance — file a complaint through the Help Centre and choose the "privacy" category.</li></ul>'
+ +'<p>Sahay Pay collects as little as possible (see the Privacy Policy), never sells your data, and runs no third-party advertising trackers. This page is general information, not legal advice.</p>';
+var CROSS_BORDER_GIVING_HTML=
+ '<p>Helping someone across the Nepal–India border is possible, but the rules are different:</p>'
+ +'<ul><li><strong>India to Nepal:</strong> UPI transfers to Nepal are allowed up to INR 200,000 per transaction.</li>'
+ +'<li><strong>Nepal to India:</strong> transfers are limited to INR 15,000 per transaction.</li>'
+ +'<li><strong>Indian law</strong> generally restricts foreign citizens from donating to individuals in India without registration.</li>'
+ +'<li>Always follow your own country\'s law. Sahay Pay cannot advise you on what is legal for you.</li></ul>'
+ +'<p>This page is general information, not legal advice.</p>';
+var CONTACT_OWNER_HTML=
+ '<p>The fastest way to reach the owner of Sahay Pay is the <a href="#/help?topic=complaints">complaint form</a>. Choose a category so it goes to the right place:</p>'
+ +'<ul><li><strong>General</strong> — questions, feedback, anything else.</li>'
+ +'<li><strong>Security</strong> — something unsafe, a scam, a hacked account.</li>'
+ +'<li><strong>Legal</strong> — a legal question or a problem with these pages.</li>'
+ +'<li><strong>Privacy</strong> — a question about your data or your rights.</li>'
+ +'<li><strong>Press</strong> — media enquiries.</li></ul>'
+ +'<p>Every message is read by a human. Please do not send personal documents (ID photos, bank statements) unless asked — and never send your recovery code, MPIN, or OTP.</p>';
+var COMPLAINT_TIMELINE_HTML=
+ '<p>What happens after you file a complaint:</p>'
+ +'<ol><li><strong>Day 0 — Filed.</strong> Your complaint is logged with an ID. Keep the ID to track it (<a href="#/complaint-status">track a complaint</a>).</li>'
+ +'<li><strong>Within 2 days — Read.</strong> A human reads it and, if it is about a live bill, pauses the bill while it is checked.</li>'
+ +'<li><strong>Within 7 days — Decided.</strong> Most complaints are resolved within a week. You are notified in the app when it is resolved.</li>'
+ +'<li><strong>If you disagree — Appeal.</strong> File another complaint referencing the first one, and it will be looked at again.</li></ol>'
+ +'<p>Security complaints (scams, hacked accounts) are read first.</p>';
+var KEEP_SAFE_HTML=
+ '<p>How Sahay Pay keeps you safe:</p>'
+ +'<ul><li><strong>Human review.</strong> Every bill is checked by the owner before it goes public.</li>'
+ +'<li><strong>Encrypted payout details.</strong> Account numbers are encrypted while stored, shown publicly only as a masked hint, and shown in full only to a helper at the Send step — and every reveal is logged.</li>'
+ +'<li><strong>Session protection.</strong> If your browser changes, your session is ended and you must sign in again with your recovery code.</li>'
+ +'<li><strong>Reveal limits.</strong> Payout details can only be revealed a limited number of times per day, and unusual patterns are flagged to the owner.</li>'
+ +'<li><strong>Report and pause.</strong> A credible fraud report pauses a bill immediately while the owner checks it.</li>'
+ +'<li><strong>No trackers.</strong> No third-party advertising or analytics trackers run on Sahay Pay.</li></ul>'
+ +'<p>See the security status page for the current status, and the known-scams page for scams going around right now.</p>';
 var HELP_TOPICS=[
   {id:"about", titleKey:"topic_about", body:function(){ return '<p>'+esc(t("about_body"))+'</p>'+ABOUT_HTML; }},
   {id:"helping", titleKey:"topic_helping", body:function(){ return '<p>'+esc(t("how_helping_body"))+'</p>'+neverHoldsHtml()+'<p class="small">'+esc(t("fee_sentence_supporter"))+' '+esc(t("fee_sentence_zero"))+'</p>'+crossBorderHtml(); }},
@@ -2488,28 +2641,143 @@ var HELP_TOPICS=[
   {id:"safety", titleKey:"topic_safety", body:function(){ return '<p>'+esc(t("safety_body"))+'</p><p class="small">'+esc(t("crisis_note"))+'</p>'; }},
   {id:"content-rules", titleKey:"topic_content_rules", body:function(){ return '<p>'+esc(t("content_rules_body"))+'</p>'+CONTENT_RULES_HTML; }},
   {id:"complaints", titleKey:"topic_complaints", body:function(){ return '<p>'+esc(t("complaints_body"))+'</p><div id="complaint-form"></div>'; }},
-  {id:"privacy", titleKey:"topic_privacy", body:function(){ return '<p>'+esc(t("privacy_body"))+'</p>'+LEGAL_PRIVACY_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }},
-  {id:"terms", titleKey:"topic_terms", body:function(){ return '<p>'+esc(t("terms_body"))+'</p>'+LEGAL_TERMS_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }}
+  {id:"privacy", titleKey:"topic_privacy", body:function(){ return '<p>'+esc(t("privacy_body"))+'</p>'+LEGAL_PRIVACY_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'+legalFeedbackHtml(); }},
+  {id:"terms", titleKey:"topic_terms", body:function(){ return '<p>'+esc(t("terms_body"))+'</p>'+LEGAL_TERMS_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'+legalFeedbackHtml(); }},
+  // Phase 2 §10 topics.
+  {id:"fee-schedule", titleKey:"topic_fee_schedule", body:function(){ return '<p>'+esc(t("fee_schedule_intro"))+'</p>'+FEE_SCHEDULE_HTML; }},
+  {id:"how-to-complain", titleKey:"topic_how_to_complain", body:function(){ return t("topic_how_to_complain_body"); }},
+  {id:"data-rights", titleKey:"topic_data_rights", body:function(){ return t("topic_data_rights_body"); }},
+  {id:"age-gate", titleKey:"topic_age_gate", body:function(){ return AGE_GATE_HTML; }},
+  {id:"parental-guidance", titleKey:"topic_parental_guidance", body:function(){ return PARENTAL_HTML; }},
+  {id:"never-ask", titleKey:"topic_never_ask", body:function(){ return NEVER_ASK_HTML; }},
+  {id:"demo-mode", titleKey:"topic_demo_mode", body:function(){ return DEMO_MODE_HTML; }},
+  {id:"how-direct-payments-work", titleKey:"topic_direct_payments", body:function(){ return t("topic_direct_payments_body"); }},
+  {id:"scam-warning", titleKey:"topic_scam_warning", body:function(){ return SCAM_WARNING_HTML; }},
+  {id:"accessibility", titleKey:"topic_accessibility", body:function(){ return ACCESSIBILITY_HTML; }},
+  {id:"press-kit", titleKey:"topic_press_kit", body:function(){ return PRESS_KIT_HTML; }},
+  {id:"press-faq", titleKey:"topic_press_faq", body:function(){ return PRESS_FAQ_HTML; }},
+  {id:"fact-sheet", titleKey:"topic_fact_sheet", body:function(){ return '<div id="fact-sheet-body">'+skeleton(2)+'</div>'; }},
+  {id:"transparency", titleKey:"topic_transparency", body:function(){ return '<div id="transparency-body">'+skeleton(2)+'</div>'; }},
+  {id:"changelog", titleKey:"topic_changelog", body:function(){ return '<div id="changelog-body">'+skeleton(2)+'</div>'; }},
+  {id:"how-moderation-works", titleKey:"topic_moderation", body:function(){ return MODERATION_HTML; }},
+  {id:"community-guidelines", titleKey:"topic_community", body:function(){ return COMMUNITY_HTML; }},
+  {id:"safety-posters", titleKey:"topic_safety_posters", body:function(){ return SAFETY_POSTERS_HTML; }},
+  {id:"known-scams", titleKey:"topic_known_scams", body:function(){ return knownScamsHtml(); }},
+  {id:"install", titleKey:"topic_install", body:function(){ return INSTALL_HTML; }},
+  {id:"glossary", titleKey:"topic_glossary", body:function(){ return t("topic_glossary_body"); }},
+  {id:"nepal-privacy-act", titleKey:"topic_nepal_privacy", body:function(){ return NEPAL_PRIVACY_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }},
+  {id:"india-dpdp", titleKey:"topic_india_dpdp", body:function(){ return INDIA_DPDP_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }},
+  {id:"cross-border-giving", titleKey:"topic_cross_border_giving", body:function(){ return CROSS_BORDER_GIVING_HTML+'<p class="legal">'+esc(t("legal_note"))+'</p>'; }},
+  {id:"contact-owner", titleKey:"topic_contact_owner", body:function(){ return CONTACT_OWNER_HTML; }},
+  {id:"complaint-timeline", titleKey:"topic_complaint_timeline", body:function(){ return COMPLAINT_TIMELINE_HTML; }},
+  {id:"how-we-keep-safe", titleKey:"topic_keep_safe", body:function(){ return KEEP_SAFE_HTML; }},
+  {id:"security-status", titleKey:"topic_security_status", body:function(){ return securityStatusHtml(); }}
 ];
+/* Item 988: feedback link on the legal pages — goes to the complaint
+   form with the legal category preselected. */
+function legalFeedbackHtml(){
+  return '<p class="small" style="margin-top:12px"><a href="#/help?topic=complaints&category=legal">'+esc(t("legal_feedback_link"))+'</a></p>';
+}
+/* Item 976: known-scams page from /api/config, with an honest empty
+   state when no scams are listed. */
+function knownScamsHtml(){
+  var list=(S.config&&S.config.knownScams)||[];
+  if(!list.length) return '<p>'+esc(t("known_scams_empty"))+'</p><p class="small">'+esc(t("known_scams_empty_body"))+'</p>';
+  return list.map(function(s){
+    return '<div class="card" style="margin-top:10px"><h2>'+esc(s.title||"")+'</h2><p>'+esc(s.body||"")+'</p>'+(s.addedAt?'<p class="small">'+esc(fmtDate(s.addedAt))+'</p>':"")+'</div>';
+  }).join("");
+}
+/* Item 886: security-status page from /api/config. */
+function securityStatusHtml(){
+  var ss=(S.config&&S.config.securityStatus)||{status:"normal", message:"", incidents:[]};
+  var h='<p><strong>'+esc(t("security_status_label"))+':</strong> '+esc(ss.status||"normal")+'</p>';
+  if(ss.message) h+='<p>'+esc(ss.message)+'</p>';
+  if(ss.incidents&&ss.incidents.length){
+    h+='<h2>'+esc(t("security_incidents"))+'</h2>'+ss.incidents.map(function(i){
+      return '<div class="card" style="margin-top:10px"><p><strong>'+esc(i.title||"")+'</strong></p><p>'+esc(i.body||"")+'</p>'+(i.date?'<p class="small">'+esc(fmtDate(i.date))+'</p>':"")+'</div>';
+    }).join("");
+  } else h+='<p>'+esc(t("security_no_incidents"))+'</p>';
+  return h;
+}
+/* Item 964: fact sheet from live /api/stats. */
+async function loadFactSheet(){
+  var box=$("#fact-sheet-body"); if(!box) return;
+  try{
+    var d=await api("/stats");
+    function vol(cur){ var r=(d.confirmedVolume||[]).find(function(x){ return x.currency===cur; }); return r?r.totalMinor:0; }
+    box.innerHTML='<p class="small">'+esc(t("fact_sheet_intro"))+'</p><div class="grid2">'
+      +'<div class="card stat"><div class="n">'+esc(d.billsPosted||0)+'</div><div class="l">'+esc(t("fact_bills_posted"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(d.billsApproved||0)+'</div><div class="l">'+esc(t("fact_bills_approved"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(d.billsCompleted||0)+'</div><div class="l">'+esc(t("fact_bills_completed"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(d.giftsConfirmed||0)+'</div><div class="l">'+esc(t("fact_gifts_confirmed"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(money(vol("NPR"),"NPR"))+'</div><div class="l">'+esc(t("fact_volume_npr"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(money(vol("INR"),"INR"))+'</div><div class="l">'+esc(t("fact_volume_inr"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(d.users||0)+'</div><div class="l">'+esc(t("fact_users"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(d.complaintsResolved||0)+' / '+esc(d.complaintsTotal||0)+'</div><div class="l">'+esc(t("fact_complaints"))+'</div></div></div>'
+      +'<p class="small" style="margin-top:10px">'+esc(t("fact_demo_note"))+'</p>';
+  }catch(e){ box.innerHTML=errBox(e.message); }
+}
+/* Item 965: transparency page — latest published report from /api/stats. */
+async function loadTransparency(){
+  var box=$("#transparency-body"); if(!box) return;
+  try{
+    var d=await api("/stats");
+    var rep=d.latestTransparencyReport;
+    if(!rep){ box.innerHTML='<p>'+esc(t("transparency_none"))+'</p>'; return; }
+    box.innerHTML='<h2>'+esc(t("transparency_latest"))+' — '+esc(rep.month||"")+'</h2>'
+      +'<div class="grid2">'
+      +'<div class="card stat"><div class="n">'+esc(rep.billsPosted!=null?rep.billsPosted:"—")+'</div><div class="l">'+esc(t("fact_bills_posted"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(rep.reviewDecisions?((rep.reviewDecisions.approved||0)+"/"+(rep.reviewDecisions.rejected||0)+"/"+(rep.reviewDecisions.changesRequested||0)):"—")+'</div><div class="l">'+esc(t("transparency_decisions"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(rep.giftsConfirmed!=null?rep.giftsConfirmed:"—")+'</div><div class="l">'+esc(t("fact_gifts_confirmed"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(rep.reportsFiled!=null?rep.reportsFiled:"—")+'</div><div class="l">'+esc(t("transparency_reports"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(rep.complaintsFiled!=null?rep.complaintsFiled:"—")+' / '+esc(rep.complaintsResolved!=null?rep.complaintsResolved:"—")+'</div><div class="l">'+esc(t("transparency_complaints"))+'</div></div>'
+      +'<div class="card stat"><div class="n">'+esc(rep.suspensions!=null?rep.suspensions:"—")+'</div><div class="l">'+esc(t("transparency_suspended"))+'</div></div></div>'
+      +(rep.generatedAt?'<p class="small" style="margin-top:10px">'+esc(t("transparency_published_at"))+' '+esc(fmtDate(rep.generatedAt))+'</p>':"");
+  }catch(e){ box.innerHTML=errBox(e.message); }
+}
+/* Item 967: changelog page from the repo CHANGELOG.md. */
+async function loadChangelog(){
+  var box=$("#changelog-body"); if(!box) return;
+  try{
+    var d=await api("/changelog");
+    box.innerHTML='<pre style="white-space:pre-wrap;font-size:13px">'+esc(d.changelog||"")+'</pre>';
+  }catch(e){ box.innerHTML=errBox(e.message); }
+}
 function renderHelp(id, q){
   var topic=q&&q.topic;
   if(topic){
     var tp=HELP_TOPICS.find(function(x){ return x.id===topic; });
     if(!tp){ go("#/help"); return; }
     view('<a href="#/help" class="small">← '+esc(t("back_to_help"))+'</a><h1 style="margin-top:8px">'+esc(t(tp.titleKey))+'</h1><div class="card">'+tp.body()+'</div>');
+    if(topic==="fact-sheet") loadFactSheet();
+    if(topic==="transparency") loadTransparency();
+    if(topic==="changelog") loadChangelog();
     if(topic==="complaints"){
       var form=$("#complaint-form");
       // Honeypot (item 788): hidden "website" field no human ever sees —
       // bots fill it and the server rejects the submission.
-      form.innerHTML='<label for="cp-subject">'+esc(t("complaint_subject"))+'</label><input id="cp-subject" maxlength="120" aria-describedby="cp-err"><label for="cp-body">'+esc(t("complaint_body"))+'</label><textarea id="cp-body" maxlength="2000" aria-describedby="cp-err"></textarea><input id="cp-website" name="website" autocomplete="off" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0"><div class="field-err" id="cp-err" role="alert"></div><button class="btn" id="cp-send" style="margin-top:10px">'+esc(t("file_complaint"))+'</button>';
+      // Item 882: category select (security incidents get their own
+      // category); subject/body/category prefilled from the query string
+      // when another page links here (failed payments, disputes, legal
+      // feedback).
+      form.innerHTML='<label for="cp-category">'+esc(t("complaint_category"))+'</label><select id="cp-category">'
+        +[["general",t("complaint_cat_general")],["security",t("complaint_cat_security")],["legal",t("complaint_cat_legal")],["privacy",t("complaint_cat_privacy")],["press",t("complaint_cat_press")]].map(function(o){ return '<option value="'+o[0]+'"'+((q&&q.category)===o[0]?" selected":"")+'>'+esc(o[1])+'</option>'; }).join("")
+        +'</select>'
+        +'<label for="cp-subject">'+esc(t("complaint_subject"))+'</label><input id="cp-subject" maxlength="120" value="'+esc((q&&q.subject)||"")+'" aria-describedby="cp-err"><label for="cp-body">'+esc(t("complaint_body"))+'</label><textarea id="cp-body" maxlength="2000" aria-describedby="cp-err">'+esc((q&&q.body)||"")+'</textarea><input id="cp-website" name="website" autocomplete="off" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0"><div class="field-err" id="cp-err" role="alert"></div><button class="btn" id="cp-send" style="margin-top:10px">'+esc(t("file_complaint"))+'</button><div id="cp-done" style="margin-top:10px"></div>';
       $("#cp-send").onclick=async function(){
         if(!needUser()) return;
         var s=$("#cp-subject").value.trim(), b=$("#cp-body").value.trim();
         if(!s||!b){ $("#cp-err").textContent=t("err_complaint_fields"); return; }
         $("#cp-err").textContent="";
         var btn=$("#cp-send"); btn.disabled=true; btn.textContent=t("loading");
-        try{ await api("/complaints", {method:"POST", body:{subject:s, body:b, website:($("#cp-website").value||"")}}); toast(t("complaint_sent")); var cs=$("#cp-subject"); if(cs) cs.value=""; var cb=$("#cp-body"); if(cb) cb.value=""; }
-
+        try{
+          var res=await api("/complaints", {method:"POST", body:{subject:s, body:b, category:$("#cp-category").value, website:($("#cp-website").value||"")}});
+          toast(t("complaint_sent"));
+          var cs=$("#cp-subject"); if(cs) cs.value=""; var cb=$("#cp-body"); if(cb) cb.value="";
+          // Item 908: show the complaint ID so it can be tracked.
+          var done=$("#cp-done");
+          if(done && res && res.complaintId) done.innerHTML='<div class="notice info">'+esc(t("complaint_id_saved"))+' <strong>'+esc(res.complaintId)+'</strong> — <a href="#/complaint-status?id='+encodeURIComponent(res.complaintId)+'">'+esc(t("complaint_track_link"))+'</a></div>';
+        }
         catch(e){ toast(e.message||t("err_generic"), true); }
         finally{ btn.disabled=false; btn.textContent=t("file_complaint"); }
       };
