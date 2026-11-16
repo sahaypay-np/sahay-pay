@@ -20,12 +20,16 @@ const { createNotification } = require('../lib/notify');
 
 const router = express.Router();
 
-// The 8 report reasons (Part C §15). The fraud set auto-pauses an approved bill.
+// The 10 report reasons (Part C §15 + Phase 2 §8 item 733: spam +
+// wrong_category). The fraud set auto-pauses an approved bill.
 const REASONS = [
   'possible_fraud', 'impersonation', 'deception', 'scam', 'personal_details',
-  'offensive', 'under_18', 'other',
+  'offensive', 'under_18', 'spam', 'wrong_category', 'other',
 ];
 const FRAUD_REASONS = new Set(['possible_fraud', 'impersonation', 'deception', 'scam']);
+// Item 762: critical severity = a fraud report on a bill over NPR 10,000
+// (1,000,000 minor) or threat keywords in the note.
+const THREAT_WORDS = ['threat', 'kill', 'hurt', 'harm', 'violence', 'blackmail', 'extort', 'attack'];
 
 router.post('/reports', requireActive, rateLimit('report', 20, 60 * 60 * 1000), async (req, res, next) => {
   try {
@@ -34,26 +38,43 @@ router.post('/reports', requireActive, rateLimit('report', 20, 60 * 60 * 1000), 
     const targetId = cleanStr(body.targetId, 64);
     const reason = cleanStr(body.reason, 32);
     const note = cleanStr(body.note || '', 600);
-    if (!['bill', 'brand', 'auction', 'user', 'message'].includes(targetType)) {
-      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Target type must be bill, brand, auction, user or message.' } });
+    // Item 732: reports can target messages and photos too.
+    if (!['bill', 'brand', 'auction', 'user', 'message', 'photo'].includes(targetType)) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Target type must be bill, brand, auction, user, message or photo.' } });
     }
     if (!targetId) return res.status(400).json({ error: { code: 'VALIDATION', message: 'A target is required.' } });
     if (!REASONS.includes(reason)) {
       return res.status(400).json({ error: { code: 'VALIDATION', message: 'Please choose a reason for the report.' } });
     }
+    // Item 762: severity is computed at filing time.
+    let severity = 'low';
+    const noteLower = note.toLowerCase();
+    if (THREAT_WORDS.some((w) => noteLower.includes(w))) severity = 'critical';
+    else if (FRAUD_REASONS.has(reason)) severity = 'high';
+    if (targetType === 'bill' && FRAUD_REASONS.has(reason)) {
+      const targetBill = await db.get('SELECT amount_minor FROM bills WHERE id = $1', [targetId]);
+      if (targetBill && Number(targetBill.amount_minor) > 1000000) severity = 'critical';
+    }
 
     const id = crypto.randomUUID();
     await db.run(
-      `INSERT INTO reports (id, reporter_id, target_type, target_id, reason, note, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'open', $7)`,
-      [id, req.user.id, targetType, targetId, reason, note, nowIso()]
+      `INSERT INTO reports (id, reporter_id, target_type, target_id, reason, note, status, severity, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'open', $7, $8)`,
+      [id, req.user.id, targetType, targetId, reason, note, severity, nowIso()]
     );
-    await logAudit('user', req.user.id, 'report_filed', targetType, targetId, { reportId: id, reason });
+    await logAudit('user', req.user.id, 'report_filed', targetType, targetId, { reportId: id, reason, severity });
 
     let paused = false;
     if (targetType === 'bill' && FRAUD_REASONS.has(reason)) {
+      // Item 765: when an open report on this bill is flagged needs_legal,
+      // the auto-pause is skipped — the legal path owns the decision.
+      const legalOpen = await db.get(
+        `SELECT id FROM reports WHERE target_type = 'bill' AND target_id = $1
+         AND status = 'open' AND needs_legal = 1 AND id != $2 LIMIT 1`,
+        [targetId, id]
+      );
       const bill = await db.get('SELECT * FROM bills WHERE id = $1', [targetId]);
-      if (bill && bill.status === 'approved' && bill.user_id !== req.user.id) {
+      if (bill && bill.status === 'approved' && bill.user_id !== req.user.id && !legalOpen) {
         await db.run(
           `UPDATE bills SET status = 'under_investigation', report_count = report_count + 1, updated_at = $1 WHERE id = $2`,
           [nowIso(), bill.id]

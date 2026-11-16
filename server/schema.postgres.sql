@@ -33,6 +33,12 @@ CREATE TABLE IF NOT EXISTS users (
   suspended_until TEXT,
   suspended_at TEXT,
   cover_url TEXT,
+  referral_code TEXT,
+  referred_by TEXT,
+  admin_notes TEXT DEFAULT '',
+  trusted_poster INTEGER NOT NULL DEFAULT 0,
+  watchlist INTEGER NOT NULL DEFAULT 0,
+  banned INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 
@@ -171,6 +177,9 @@ CREATE TABLE IF NOT EXISTS gifts (
   fee_review_at TEXT,
   reminded_24h INTEGER NOT NULL DEFAULT 0,
   reminded_72h INTEGER NOT NULL DEFAULT 0,
+  severity TEXT DEFAULT 'low',
+  assigned_to TEXT DEFAULT '',
+  needs_legal INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   confirmed_at TEXT
 );
@@ -328,6 +337,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   body TEXT NOT NULL,
   link TEXT DEFAULT '',
   is_read INTEGER NOT NULL DEFAULT 0,
+  deliver_at TEXT,
+  broadcast_id TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, is_read, created_at);
@@ -343,6 +354,9 @@ CREATE TABLE IF NOT EXISTS reports (
   decision TEXT DEFAULT '',
   decision_reason TEXT DEFAULT '',
   decided_at TEXT,
+  severity TEXT DEFAULT 'low',
+  assigned_to TEXT DEFAULT '',
+  needs_legal INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at);
@@ -365,12 +379,16 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   target_type TEXT NOT NULL,
   target_id TEXT NOT NULL,
   meta_json TEXT DEFAULT '{}',
+  prev_hash TEXT,
+  entry_hash TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
 
 CREATE TABLE IF NOT EXISTS admin_sessions (
   token_hash TEXT PRIMARY KEY,
+  admin_user_id TEXT,
+  user_agent TEXT,
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   csrf_token TEXT,
@@ -514,6 +532,33 @@ CREATE TABLE IF NOT EXISTS message_threads (
 );
 CREATE INDEX IF NOT EXISTS idx_threads_brand ON message_threads(brand_profile_id);
 CREATE INDEX IF NOT EXISTS idx_threads_asker ON message_threads(asker_id);
+-- Phase 2 (sections 7–8): bill messaging (gift_threads — the
+-- message_threads name is the §4–6 brand-ask threads), thank-you notes,
+-- appeals, case notes, per-admin accounts + invites, webhook delivery log,
+-- broadcasts, audit archive.
+CREATE TABLE IF NOT EXISTS gift_threads (
+  id TEXT PRIMARY KEY,
+  bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+  supporter_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  poster_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gift_threads_bill ON gift_threads(bill_id, supporter_id);
+CREATE INDEX IF NOT EXISTS idx_gift_threads_poster ON gift_threads(poster_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_gift_threads_supporter ON gift_threads(supporter_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS gift_thread_messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES gift_threads(id) ON DELETE CASCADE,
+  sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  is_read INTEGER NOT NULL DEFAULT 0,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gift_thread_messages_thread ON gift_thread_messages(thread_id, created_at);
 
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
@@ -571,6 +616,28 @@ CREATE TABLE IF NOT EXISTS csr_updates (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_csr_brand ON csr_updates(brand_profile_id, status);
+CREATE TABLE IF NOT EXISTS thank_you_notes (
+  id TEXT PRIMARY KEY,
+  bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+  gift_id TEXT NOT NULL REFERENCES gifts(id) ON DELETE CASCADE,
+  sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  is_public INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thank_notes_bill ON thank_you_notes(bill_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_thank_notes_recipient ON thank_you_notes(recipient_id, created_at);
+
+CREATE TABLE IF NOT EXISTS announcements (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  publish_at TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT 'owner',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_publish ON announcements(publish_at, created_at);
 
 CREATE TABLE IF NOT EXISTS appeals (
   id TEXT PRIMARY KEY,
@@ -580,11 +647,13 @@ CREATE TABLE IF NOT EXISTS appeals (
   body TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'open',
   reviewer_note TEXT DEFAULT '',
+  decided_by TEXT DEFAULT '',
   created_at TEXT NOT NULL,
   decided_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_appeals_user ON appeals(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_appeals_target ON appeals(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_appeals_status ON appeals(status, created_at);
 
 CREATE TABLE IF NOT EXISTS signin_history (
   id TEXT PRIMARY KEY,
@@ -632,3 +701,69 @@ CREATE TABLE IF NOT EXISTS anon_stats (
   bills_helped INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS case_notes (
+  id TEXT PRIMARY KEY,
+  case_type TEXT NOT NULL,
+  case_id TEXT NOT NULL,
+  admin_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_case_notes_case ON case_notes(case_type, case_id, created_at);
+
+CREATE TABLE IF NOT EXISTS admin_users (
+  id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'moderator',
+  pin_hash TEXT NOT NULL,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS admin_invites (
+  id TEXT PRIMARY KEY,
+  code_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'moderator',
+  created_by TEXT NOT NULL DEFAULT 'owner',
+  created_at TEXT NOT NULL,
+  used_at TEXT,
+  used_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id TEXT PRIMARY KEY,
+  target_url TEXT NOT NULL,
+  payload_kind TEXT NOT NULL DEFAULT 'review_packet',
+  status_code INTEGER,
+  error TEXT DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_created ON webhook_deliveries(created_at);
+
+CREATE TABLE IF NOT EXISTS broadcasts (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  audience_json TEXT NOT NULL DEFAULT '{}',
+  recipient_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL DEFAULT 'owner',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_archive (
+  id TEXT PRIMARY KEY,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  meta_json TEXT DEFAULT '{}',
+  prev_hash TEXT,
+  entry_hash TEXT,
+  created_at TEXT NOT NULL,
+  archived_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_archive_created ON audit_archive(created_at);

@@ -30,6 +30,7 @@ const { containsBlockedTerm } = require('../lib/message-blocklist');
 const { sha256File, averageHash, hammingDistance, AHASH_THRESHOLD } = require('../lib/images');
 const { flagSignal, scoreBill } = require('../lib/fraud');
 const { tierForCount } = require('../lib/achievements');
+const { maybeNotifyReferralMilestone } = require('../lib/referrals');
 
 const router = express.Router();
 
@@ -422,6 +423,9 @@ router.post('/', requireActive, rateLimit('post-bill', 10, 60 * 60 * 1000), asyn
       };
       packet = await createReviewPacket('bill', id, payload);
       await logAudit('user', req.user.id, 'bill_submitted', 'bill', id, { requestCode: bill.request_code });
+      // Item 674: the user's first submitted bill counts as a referral
+      // milestone for whoever invited them.
+      await maybeNotifyReferralMilestone(req.user.id, 'first_bill');
     }
     // Duplicate-bill detector (items 336/337): same biller reference +
     // amount, or same biller name + amount within 30 days, on another
@@ -679,11 +683,29 @@ router.get('/:id/history', requireAuth, async (req, res, next) => {
       'SELECT * FROM bill_edits WHERE bill_id = $1 ORDER BY created_at DESC LIMIT 50',
       [bill.id]
     );
+    // Item 704: include the review decisions + reasons alongside edits
+    // (from the audit log — approve/reject/changes on this bill's packets).
+    const { rows: reviewRows } = await db.query(
+      `SELECT * FROM audit_logs WHERE target_type = 'bill' AND target_id = $1
+       AND action IN ('review_approve', 'review_reject', 'review_changes')
+       ORDER BY created_at DESC LIMIT 50`,
+      [bill.id]
+    );
     res.json({
       edits: rows.map((r) => {
         let fields = [];
         try { fields = JSON.parse(r.changed_fields || '[]'); } catch { /* keep [] */ }
         return { id: r.id, changedFields: fields, createdAt: r.created_at };
+      }),
+      reviews: reviewRows.map((r) => {
+        let meta = {};
+        try { meta = JSON.parse(r.meta_json || '{}'); } catch { /* keep {} */ }
+        return {
+          id: r.id,
+          action: r.action,
+          reason: meta.reason || '',
+          decidedAt: r.created_at,
+        };
       }),
     });
   } catch (err) {

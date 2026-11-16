@@ -310,6 +310,10 @@ t "admin metrics after 31 min idle -> 401" 401 "$c"
 r=$(curl -s -w '\n%{http_code}' -c "$TMPD/c-admin.txt" -X POST "$B/admin/login" $J -d '{"pin":"smoke-pin-12345"}'); c=$(code "$r")
 t "admin re-login after idle expiry" 200 "$c"
 T_ADMIN=$(curl -s -b "$TMPD/c-admin.txt" "$B/admin/csrf" | jget "['csrfToken']")
+# Re-login starts a fresh, non-elevated session — re-elevate so the
+# review calls below (single + bulk + hold, all requireElevated) pass.
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/elevate" $J -d '{"pin":"smoke-pin-12345"}'); c=$(code "$r")
+t "admin re-elevate after re-login" 200 "$c"
 r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/metrics"); c=$(code "$r")
 t "admin metrics after re-login" 200 "$c"
 
@@ -435,9 +439,322 @@ echo "$r" | grep -q '"currency":"NPR"' && { echo "PASS: leaders currency=NPR ech
 SUP_UNAME=$(curl -s -b "$TMPD/c-supporter.txt" "$B/auth/me" | jget "['user']['username']")
 r=$(curl -s "$B/profile/$SUP_UNAME")
 echo "$r" | grep -q '"impact"' && echo "$r" | grep -q '"confirmedGifts":1' && { echo "PASS: profile impact has 1 confirmed gift"; pass=$((pass+1)); } || { echo "FAIL: profile impact: $r"; fail=$((fail+1)); }
+# --- Phase 2 §7–8: notifications, messages, thanks, referrals, digest, appeals, admin console ---
+# (Runs before the rate-limit block: it uses the existing admin session and
+# adds NO admin logins, so the 4-of-5 login count below still holds.)
+POSTER_ID=$(curl -s -b "$TMPD/c-poster.txt" "$B/auth/me" | jget "['user']['id']")
+SUPPORTER_ID=$(curl -s -b "$TMPD/c-supporter.txt" "$B/auth/me" | jget "['user']['id']")
+REPORTER_ID=$(curl -s -b "$TMPD/c-reporter.txt" "$B/auth/me" | jget "['user']['id']")
+
+# notifications: the gift flow created alerts for the poster (645/647/648)
+# and the giver (gift_confirmed goes to the supporter, not the poster)
+r=$(curl -s -b "$TMPD/c-supporter.txt" "$B/notifications")
+echo "$r" | grep -q 'gift_confirmed' && { echo "PASS: giver notified of confirmed gift"; pass=$((pass+1)); } || { echo "FAIL: gift_confirmed notification: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/notifications")
+echo "$r" | grep -q 'first_gift' && { echo "PASS: first-gift milestone notification"; pass=$((pass+1)); } || { echo "FAIL: first_gift notification"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" "$B/notifications?kind=gifts"); c=$(code "$r")
+t "notifications kind filter (gifts)" 200 "$c"
+NOTIF_ID=$(curl -s -b "$TMPD/c-poster.txt" "$B/notifications?limit=1" | jget "['notifications'][0]['id']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" "$B/notifications/$NOTIF_ID"); c=$(code "$r")
+t "notification detail (606)" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X DELETE "$B/notifications/$NOTIF_ID"); c=$(code "$r")
+t "notification dismiss (603)" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" "$B/notifications/$NOTIF_ID"); c=$(code "$r")
+t "dismissed notification -> 404" 404 "$c"
+# notification prefs (612-618) round-trip through /auth/me
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X PATCH "$B/profile/me" $J -d '{"notifyTypes":{"digest":false},"soundEnabled":true}'); c=$(code "$r")
+t "PATCH prefs (notifyTypes + sound)" 200 "$c"
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/auth/me")
+echo "$r" | grep -q '"digest":false' && { echo "PASS: per-event opt-out stored"; pass=$((pass+1)); } || { echo "FAIL: prefs round-trip: $r"; fail=$((fail+1)); }
+# lazy reminders (659/661/664)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/notifications/reminders" $J -d '{}'); c=$(code "$r")
+t "POST /notifications/reminders" 200 "$c"
+echo "$(body "$r")" | grep -q '"reminders"' && { echo "PASS: reminders array"; pass=$((pass+1)); } || { echo "FAIL: reminders shape"; fail=$((fail+1)); }
+
+# messages (681-691): gate, send, filter, block
+r=$(curl -s -b "$TMPD/c-supporter.txt" "$B/messages/can-message?billId=$BILL_ID")
+echo "$r" | grep -q '"canMessage":true' && { echo "PASS: can-message true after gift"; pass=$((pass+1)); } || { echo "FAIL: can-message: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-reporter.txt" "$B/messages/can-message?billId=$BILL_ID")
+echo "$r" | grep -q '"canMessage":false' && { echo "PASS: can-message false without gift"; pass=$((pass+1)); } || { echo "FAIL: can-message gate: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-reporter.txt" -H "X-CSRF-Token: $T_REPORTER" -X POST "$B/messages/thread" $J -d "{\"billId\":\"$BILL_ID\"}"); c=$(code "$r")
+t "thread without gift -> 403" 403 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "X-CSRF-Token: $T_SUPPORTER" -X POST "$B/messages/thread" $J -d "{\"billId\":\"$BILL_ID\"}"); c=$(code "$r")
+t "open message thread" 201 "$c"
+THREAD_ID=$(body "$r" | jget "['thread']['id']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "X-CSRF-Token: $T_SUPPORTER" -X POST "$B/messages/$THREAD_ID" $J -d '{"body":"Hi, I sent the money — please confirm when it arrives."}'); c=$(code "$r")
+t "send message" 201 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "X-CSRF-Token: $T_SUPPORTER" -X POST "$B/messages/$THREAD_ID" $J -d '{"body":"Call me on 9845671234 to sort it out."}'); c=$(code "$r")
+t "message with phone number -> 400" 400 "$c"
+echo "$(body "$r")" | grep -q MESSAGE_BLOCKED && { echo "PASS: MESSAGE_BLOCKED code"; pass=$((pass+1)); } || { echo "FAIL: MESSAGE_BLOCKED code"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/messages/unread-count")
+echo "$r" | grep -q '"unreadCount":1' && { echo "PASS: poster unread count 1"; pass=$((pass+1)); } || { echo "FAIL: unread count: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" "$B/messages/$THREAD_ID"); c=$(code "$r")
+t "poster reads thread" 200 "$c"
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/messages/unread-count")
+echo "$r" | grep -q '"unreadCount":0' && { echo "PASS: unread cleared after read"; pass=$((pass+1)); } || { echo "FAIL: unread after read: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/messages/$THREAD_ID/block" $J -d '{}'); c=$(code "$r")
+t "block thread" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "X-CSRF-Token: $T_SUPPORTER" -X POST "$B/messages/$THREAD_ID" $J -d '{"body":"Are you there?"}'); c=$(code "$r")
+t "send on blocked thread -> 403" 403 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/messages/$THREAD_ID/unblock" $J -d '{}'); c=$(code "$r")
+t "unblock thread" 200 "$c"
+
+# thank-you notes (692-695)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/thanks" $J -d "{\"giftId\":\"$GIFT_ID\",\"body\":\"Thank you so much, this means the world.\",\"isPublic\":true}"); c=$(code "$r")
+t "thank-you note for confirmed gift" 201 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/thanks" $J -d "{\"giftId\":\"$GIFT_ID\",\"body\":\"A second note.\",\"isPublic\":false}"); c=$(code "$r")
+t "second thank-you note -> 409" 409 "$c"
+r=$(curl -s "$B/thanks/bill/$BILL_ID")
+echo "$r" | grep -q 'Thank you so much' && { echo "PASS: public thank-you wall"; pass=$((pass+1)); } || { echo "FAIL: thanks wall: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-supporter.txt" "$B/thanks/mine")
+echo "$r" | grep -q 'Thank you so much' && { echo "PASS: giver sees received note"; pass=$((pass+1)); } || { echo "FAIL: thanks mine"; fail=$((fail+1)); }
+
+# referrals (671-680) + digest (654-658)
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/referrals/me")
+echo "$r" | grep -q '"code":"' && { echo "PASS: referral code issued"; pass=$((pass+1)); } || { echo "FAIL: referral code: $r"; fail=$((fail+1)); }
+REF_CODE=$(echo "$r" | jget "['code']")
+r=$(curl -s "$B/referrals/landing/$REF_CODE")
+echo "$r" | grep -q '"referrerFirstName":"Test"' && { echo "PASS: referral landing (first name only)"; pass=$((pass+1)); } || { echo "FAIL: referral landing: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' "$B/referrals/leaders"); c=$(code "$r")
+t "referral leaders" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" "$B/digest/weekly"); c=$(code "$r")
+t "weekly digest" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" "$B/digest/monthly"); c=$(code "$r")
+t "monthly digest" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/digest/opt-out" $J -d '{}'); c=$(code "$r")
+t "digest opt-out" 200 "$c"
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/digest/weekly")
+echo "$r" | grep -q '"optedOut":true' && { echo "PASS: digest opted out"; pass=$((pass+1)); } || { echo "FAIL: digest opt-out: $r"; fail=$((fail+1)); }
+curl -s -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/digest/opt-in" $J -d '{}' > /dev/null
+
+# bill history with review decisions (704)
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/bills/$BILL_ID/history")
+echo "$r" | grep -q 'review_approve' && { echo "PASS: bill history has review decisions"; pass=$((pass+1)); } || { echo "FAIL: bill history reviews: $r"; fail=$((fail+1)); }
+
+# appeals (739-740): file, list, admin approve
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/appeals" $J -d "{\"targetType\":\"bill\",\"targetId\":\"$BILL_ID\",\"explanation\":\"Please review my bill again — it was paused and I believe that was a mistake.\"}"); c=$(code "$r")
+t "file appeal" 201 "$c"
+APPEAL_ID=$(body "$r" | jget "['appealId']")
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/appeals/mine")
+echo "$r" | grep -q "$APPEAL_ID" && { echo "PASS: appeal in my appeals"; pass=$((pass+1)); } || { echo "FAIL: appeals mine"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/appeals")
+echo "$r" | grep -q "$APPEAL_ID" && { echo "PASS: appeal in admin queue"; pass=$((pass+1)); } || { echo "FAIL: admin appeals"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/appeals/$APPEAL_ID" $J -d '{"decision":"approve","note":"Reviewed — restored."}'); c=$(code "$r")
+t "admin approve appeal" 200 "$c"
+
+# admin queue: filters (709-711), bulk (705-708), hold (713)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-reporter.txt" -H "X-CSRF-Token: $T_REPORTER" -X POST "$B/bills" $J -d '{"title":"Bulk test bill","category":"Rent","story":"A second bill for the bulk-review test.","amountMinor":50000,"submit":true,"payoutConsent":true,"payoutMethods":[{"method":"upi","holderName":"Reporter Raj","account":"raj@okhdfc"}]}'); c=$(code "$r")
+t "second bill for bulk test" 201 "$c"
+PACKET2=$(body "$r" | jget "['reviewPacketId']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/bills" $J -d '{"title":"Hold test bill","category":"Medical expenses","story":"A third bill for the hold test.","amountMinor":30000,"submit":true,"payoutConsent":true,"payoutMethods":[{"method":"esewa","holderName":"Test Poster","account":"9845671234"}]}'); c=$(code "$r")
+t "third bill for hold test" 201 "$c"
+PACKET3=$(body "$r" | jget "['reviewPacketId']")
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/queue?status=pending&order=oldest")
+echo "$r" | grep -q "$PACKET2" && { echo "PASS: queue oldest order"; pass=$((pass+1)); } || { echo "FAIL: queue order: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/queue?status=pending&q=Bulk%20test")
+echo "$r" | grep -q "$PACKET2" && { echo "PASS: queue search"; pass=$((pass+1)); } || { echo "FAIL: queue search: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/queue?status=pending&flagged=1"); c=$(code "$r")
+t "queue flagged filter" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/review/bulk" $J -d "{\"packetIds\":[\"$PACKET2\"],\"decision\":\"approve\"}"); c=$(code "$r")
+t "bulk approve" 200 "$c"
+echo "$(body "$r")" | grep -q '"decided":1' && { echo "PASS: bulk decided 1"; pass=$((pass+1)); } || { echo "FAIL: bulk result: $(body "$r")"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/review/$PACKET3/hold" $J -d '{"note":"Waiting for more info."}'); c=$(code "$r")
+t "hold packet" 200 "$c"
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/queue?status=held")
+echo "$r" | grep -q "$PACKET3" && { echo "PASS: held packet in held tab"; pass=$((pass+1)); } || { echo "FAIL: held tab: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/review/$PACKET3/unhold" $J -d '{}'); c=$(code "$r")
+t "unhold packet" 200 "$c"
+curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/review/$PACKET3" $J -d '{"decision":"approve"}' > /dev/null
+
+# admin users (723-731): detail, suspend with reason, temp suspension, ban, notes, flags
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/users/$POSTER_ID")
+echo "$r" | grep -q 'trustedSuggested' && echo "$r" | grep -q "$BILL_ID" && { echo "PASS: user detail with bills"; pass=$((pass+1)); } || { echo "FAIL: user detail: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$REPORTER_ID/suspend" $J -d '{}'); c=$(code "$r")
+t "suspend without reason -> 400" 400 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$REPORTER_ID/suspend" $J -d '{"reason":"Smoke test suspension","days":7}'); c=$(code "$r")
+t "suspend 7 days with reason" 200 "$c"
+echo "$(body "$r")" | grep -q 'suspendedUntil' && { echo "PASS: temp suspension has until date"; pass=$((pass+1)); } || { echo "FAIL: suspendedUntil: $(body "$r")"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$REPORTER_ID/restore" $J -d '{}'); c=$(code "$r")
+t "restore user" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -c "$TMPD/c-bantest.txt" -X POST "$B/auth/onboard" $J -d '{"displayName":"Ban Test","age":25,"country":"NP","city":"Bhairahawa","termsAccepted":true,"privacyAccepted":true}'); c=$(code "$r")
+t "onboard ban-test user" 201 "$c"
+BAN_ID=$(body "$r" | jget "['user']['id']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$BAN_ID/ban" $J -d '{"confirm":"WRONG","reason":"Smoke test ban"}'); c=$(code "$r")
+t "ban without typed BAN -> 400" 400 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$BAN_ID/ban" $J -d '{"confirm":"BAN","reason":"Smoke test ban"}'); c=$(code "$r")
+t "ban with typed BAN" 200 "$c"
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/users?q=Ban%20Test")
+echo "$r" | grep -q '"banned":true' && { echo "PASS: banned flag set"; pass=$((pass+1)); } || { echo "FAIL: banned flag: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$POSTER_ID/notes" $J -d '{"notes":"Smoke test admin note."}'); c=$(code "$r")
+t "admin notes on user" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$POSTER_ID/trusted" $J -d '{"trusted":true}'); c=$(code "$r")
+t "trusted-poster flag" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$POSTER_ID/watchlist" $J -d '{"watchlist":true}'); c=$(code "$r")
+t "watchlist flag" 200 "$c"
+curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$POSTER_ID/trusted" $J -d '{"trusted":false}' > /dev/null
+curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/users/$POSTER_ID/watchlist" $J -d '{"watchlist":false}' > /dev/null
+
+# admin reports (734/735/761/765-767): detail, severity/assign/legal, case notes, escalate
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/reports/$REP_ID")
+echo "$r" | grep -q 'caseNotes' && echo "$r" | grep -q 'timeline' && { echo "PASS: report detail with notes + timeline"; pass=$((pass+1)); } || { echo "FAIL: report detail: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X PATCH "$B/admin/reports/$REP_ID" $J -d '{"severity":"high","assignedTo":"owner","note":"Smoke test case note."}'); c=$(code "$r")
+t "report PATCH severity/assign/note" 200 "$c"
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/reports/$REP_ID")
+echo "$r" | grep -q 'Smoke test case note' && { echo "PASS: case note attached"; pass=$((pass+1)); } || { echo "FAIL: case note: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/case-notes" $J -d "{\"caseType\":\"report\",\"caseId\":\"$REP_ID\",\"body\":\"Second smoke note.\"}"); c=$(code "$r")
+t "POST case note" 201 "$c"
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/case-notes?caseType=report&caseId=$REP_ID")
+echo "$r" | grep -q 'Second smoke note' && { echo "PASS: case notes listed"; pass=$((pass+1)); } || { echo "FAIL: case notes list: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/reports/$REP_ID" $J -d '{"action":"escalate"}'); c=$(code "$r")
+t "escalate report" 200 "$c"
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/escalations")
+echo "$r" | grep -q "$REP_ID" && { echo "PASS: escalated report in escalations"; pass=$((pass+1)); } || { echo "FAIL: escalations: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/reports/$REP_ID" $J -d '{"action":"dismiss"}'); c=$(code "$r")
+t "dismiss report" 200 "$c"
+
+# admin complaints (768-770): resolve with response, reopen
+COMPLAINT_ID=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/complaints" | jget "['complaints'][0]['id']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/complaints/$COMPLAINT_ID" $J -d '{"action":"resolve","response":"Thank you — we looked into it and fixed it."}'); c=$(code "$r")
+t "resolve complaint with response" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/complaints/$COMPLAINT_ID" $J -d '{"action":"reopen"}'); c=$(code "$r")
+t "reopen complaint" 200 "$c"
+
+# analytics (741-750), payouts (751-759), gift status override (756)
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/analytics")
+echo "$r" | grep -q '"funnel"' && echo "$r" | grep -q '"visitors"' && { echo "PASS: analytics with funnel"; pass=$((pass+1)); } || { echo "FAIL: analytics: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/analytics/export"); c=$(code "$r")
+t "analytics CSV export" 200 "$c"
+echo "$(body "$r")" | grep -q 'section,date' && { echo "PASS: analytics CSV header"; pass=$((pass+1)); } || { echo "FAIL: analytics CSV"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/payouts")
+echo "$r" | grep -q 'monthlySummary' && { echo "PASS: payouts monthly summary"; pass=$((pass+1)); } || { echo "FAIL: payouts: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/gifts?status=confirmed")
+echo "$r" | grep -q "$GIFT_ID" && { echo "PASS: gifts filter by status"; pass=$((pass+1)); } || { echo "FAIL: gifts filter: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/gifts?from=2000-01-01&to=2100-01-01"); c=$(code "$r")
+t "gifts date-range filter" 200 "$c"
+
+# disputes (754): user disputes a fresh gift, admin resolves it
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "X-CSRF-Token: $T_SUPPORTER" -X POST "$B/gifts" $J -d "{\"billId\":\"$BILL_ID\",\"amountMinor\":10000}"); c=$(code "$r")
+t "second gift for dispute test" 201 "$c"
+GIFT2_ID=$(body "$r" | jget "['gift']['id']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-supporter.txt" -H "X-CSRF-Token: $T_SUPPORTER" -X POST "$B/gifts/$GIFT2_ID/dispute" $J -d '{"note":"Money sent but the recipient says it never arrived."}'); c=$(code "$r")
+t "user disputes gift" 200 "$c"
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/disputes")
+echo "$r" | grep -q "$GIFT2_ID" && echo "$r" | grep -q 'timeline' && { echo "PASS: dispute in admin queue with timeline"; pass=$((pass+1)); } || { echo "FAIL: disputes: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/gifts/$GIFT2_ID/dispute" $J -d '{"action":"resolve-confirm"}'); c=$(code "$r")
+t "admin resolve-confirm dispute" 200 "$c"
+echo "$(body "$r")" | grep -q '"status":"confirmed"' && { echo "PASS: dispute resolved as confirmed"; pass=$((pass+1)); } || { echo "FAIL: dispute resolve: $(body "$r")"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-supporter.txt" -H "X-CSRF-Token: $T_SUPPORTER" -X POST "$B/gifts" $J -d "{\"billId\":\"$BILL_ID\",\"amountMinor\":10000}")
+GIFT3_ID=$(echo "$r" | jget "['gift']['id']")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/gifts/$GIFT3_ID/status" $J -d '{"status":"failed","note":"Smoke test override."}'); c=$(code "$r")
+t "gift status override" 200 "$c"
+
+# auction moderation (785): create + approve an auction, then pause/restore/remove
+ENDS=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=2)).isoformat())")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-poster.txt" -H "X-CSRF-Token: $T_POSTER" -X POST "$B/auctions" $J -d "{\"title\":\"Smoke test vase\",\"description\":\"A handmade vase, auctioned to test moderation end to end.\",\"category\":\"Other\",\"startBidMinor\":50000,\"endsAt\":\"$ENDS\"}")
+t "create auction" 201 "$(code "$r")"
+AUC_ID=$(body "$r" | jget "['auction']['id']")
+AUC_PACKET=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/queue?target_type=auction" | python3 -c "import sys,json;ps=json.load(sys.stdin)['packets'];print(next((p['id'] for p in ps if p.get('targetId')=='$AUC_ID'),''))")
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/review/$AUC_PACKET" $J -d '{"decision":"approve"}')
+t "approve auction packet" 200 "$(code "$r")"
+r=$(curl -s "$B/auctions")
+echo "$r" | grep -q "$AUC_ID" && { echo "PASS: approved auction is public"; pass=$((pass+1)); } || { echo "FAIL: auction public list: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/auctions?status=approved")
+echo "$r" | grep -q "$AUC_ID" && echo "$r" | grep -q 'seller' && { echo "PASS: admin auctions list with seller"; pass=$((pass+1)); } || { echo "FAIL: admin auctions: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/$AUC_ID/pause" $J -d '{}')
+t "pause auction" 200 "$(code "$r")"
+echo "$(body "$r")" | grep -q '"status":"paused"' && { echo "PASS: pause returns paused"; pass=$((pass+1)); } || { echo "FAIL: pause: $(body "$r")"; fail=$((fail+1)); }
+r=$(curl -s "$B/auctions")
+echo "$r" | grep -q "$AUC_ID" && { echo "FAIL: paused auction still public"; fail=$((fail+1)); } || { echo "PASS: paused auction hidden from public list"; pass=$((pass+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/$AUC_ID/pause" $J -d '{}')
+t "double pause -> 409" 409 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/$AUC_ID/restore" $J -d '{}')
+t "restore auction" 200 "$(code "$r")"
+r=$(curl -s "$B/auctions")
+echo "$r" | grep -q "$AUC_ID" && { echo "PASS: restored auction public again"; pass=$((pass+1)); } || { echo "FAIL: restore public: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/$AUC_ID/remove" $J -d '{}')
+t "remove auction" 200 "$(code "$r")"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/auctions/no-such-auction/pause" $J -d '{}')
+t "pause missing auction -> 404" 404 "$(code "$r")"
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/notifications?kind=account")
+echo "$r" | grep -q 'auction_paused' && echo "$r" | grep -q 'auction_removed' && { echo "PASS: seller notified of pause + remove"; pass=$((pass+1)); } || { echo "FAIL: auction seller notifications: $r"; fail=$((fail+1)); }
+
+# admin accounts (771-773): create, invite, redeem, delete
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/admins" $J -d '{"displayName":"Smoke Mod","role":"moderator","pin":"222222"}'); c=$(code "$r")
+t "create admin account" 201 "$c"
+MOD_ID=$(body "$r" | jget "['adminUser']['id']")
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/admins")
+echo "$r" | grep -q "$MOD_ID" && { echo "PASS: admin listed"; pass=$((pass+1)); } || { echo "FAIL: admins list: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/invites" $J -d '{"role":"viewer"}'); c=$(code "$r")
+t "create admin invite" 201 "$c"
+INVITE_CODE=$(body "$r" | jget "['invite']['code']")
+echo "$INVITE_CODE" | grep -qE '^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$' && { echo "PASS: invite code shown once (XXXX-XXXX-XXXX-XXXX)"; pass=$((pass+1)); } || { echo "FAIL: invite code: $INVITE_CODE"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -X POST "$B/admin/redeem-invite" $J -d "{\"code\":\"$INVITE_CODE\",\"displayName\":\"Smoke Viewer\",\"pin\":\"333333\"}"); c=$(code "$r")
+t "redeem invite" 201 "$c"
+VIEWER_ID=$(body "$r" | jget "['adminUser']['id']")
+r=$(curl -s -w '\n%{http_code}' -X POST "$B/admin/redeem-invite" $J -d "{\"code\":\"$INVITE_CODE\",\"displayName\":\"Second Viewer\",\"pin\":\"444444\"}"); c=$(code "$r")
+t "redeem same invite twice -> 400" 400 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X DELETE "$B/admin/admins/$VIEWER_ID"); c=$(code "$r")
+t "delete redeemed admin" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X DELETE "$B/admin/admins/$MOD_ID"); c=$(code "$r")
+t "delete moderator admin" 200 "$c"
+
+# activity (774), security (775/788/789), availability (791/792), bridge (794/795), webhook (796/797)
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/activity")
+echo "$r" | grep -q 'admin_login' && { echo "PASS: admin activity log"; pass=$((pass+1)); } || { echo "FAIL: activity: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/security")
+echo "$r" | grep -q 'lastSignIns' && echo "$r" | grep -q 'securitySettings' && { echo "PASS: security page data"; pass=$((pass+1)); } || { echo "FAIL: security: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/security-settings"); c=$(code "$r")
+t "GET security settings" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X PUT "$B/admin/security-settings" $J -d '{"pinMinLength":6}'); c=$(code "$r")
+t "PUT security settings" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X PUT "$B/admin/availability" $J -d '{"available":true}'); c=$(code "$r")
+t "admin availability on" 200 "$c"
+r=$(curl -s "$B/config")
+echo "$r" | grep -q '"adminAvailable":true' && { echo "PASS: /config shows admin available"; pass=$((pass+1)); } || { echo "FAIL: config adminAvailable: $r"; fail=$((fail+1)); }
+curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X PUT "$B/admin/availability" $J -d '{"available":false}' > /dev/null
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/bridge-health")
+echo "$r" | grep -q '"status":"ok"' && { echo "PASS: bridge health ok (approve counted as ping)"; pass=$((pass+1)); } || { echo "FAIL: bridge health: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/bridge-history")
+echo "$r" | grep -q 'review_approve' && { echo "PASS: bridge history has the approve"; pass=$((pass+1)); } || { echo "FAIL: bridge history: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/webhook-log"); c=$(code "$r")
+t "webhook delivery log" 200 "$c"
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/webhook/test" $J -d '{}'); c=$(code "$r")
+t "webhook test without URL -> 400" 400 "$c"
+echo "$(body "$r")" | grep -q WEBHOOK_NOT_CONFIGURED && { echo "PASS: WEBHOOK_NOT_CONFIGURED code"; pass=$((pass+1)); } || { echo "FAIL: webhook code"; fail=$((fail+1)); }
+
+# announcements (697) + broadcasts (779-782)
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/announcements" $J -d '{"title":"Smoke announcement","body":"This is a test announcement for the smoke suite."}'); c=$(code "$r")
+t "create announcement" 201 "$c"
+ANN_ID=$(body "$r" | jget "['id']")
+r=$(curl -s "$B/announcements")
+echo "$r" | grep -q 'Smoke announcement' && { echo "PASS: public announcements list"; pass=$((pass+1)); } || { echo "FAIL: announcements: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X DELETE "$B/admin/announcements/$ANN_ID"); c=$(code "$r")
+t "delete announcement" 200 "$c"
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/broadcasts/preview?audienceType=all")
+echo "$r" | grep -q '"recipientCount":4' && { echo "PASS: broadcast preview counts 4 users"; pass=$((pass+1)); } || { echo "FAIL: broadcast preview: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" -X POST "$B/admin/broadcasts" $J -d '{"title":"Smoke broadcast","body":"This is a test broadcast for the smoke suite.","audience":{"type":"all"}}'); c=$(code "$r")
+t "send broadcast" 201 "$c"
+echo "$(body "$r")" | grep -q '"sent":4' && { echo "PASS: broadcast sent to 4"; pass=$((pass+1)); } || { echo "FAIL: broadcast sent: $(body "$r")"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-poster.txt" "$B/notifications?kind=account")
+echo "$r" | grep -q 'Smoke broadcast' && { echo "PASS: broadcast arrived as notification"; pass=$((pass+1)); } || { echo "FAIL: broadcast notification: $r"; fail=$((fail+1)); }
+
+# weekly report (799), leaderboard audit (787), audit filters/CSV/verify (718/719/721), metrics alerts (715/755/764)
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/weekly-report")
+echo "$r" | grep -q '"reviews"' && { echo "PASS: weekly moderation report"; pass=$((pass+1)); } || { echo "FAIL: weekly report: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/leaderboard-audit")
+echo "$r" | grep -q 'Test Helper' && { echo "PASS: leaderboard audit recomputes"; pass=$((pass+1)); } || { echo "FAIL: leaderboard audit: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/audit?action=admin_login")
+echo "$r" | grep -q 'admin_login' && { echo "PASS: audit action filter"; pass=$((pass+1)); } || { echo "FAIL: audit filter: $r"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/audit/verify")
+echo "$r" | grep -q '"ok":true' && { echo "PASS: audit hash chain verifies"; pass=$((pass+1)); } || { echo "FAIL: audit verify: $r"; fail=$((fail+1)); }
+r=$(curl -s -w '\n%{http_code}' -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/audit/export"); c=$(code "$r")
+t "audit CSV export" 200 "$c"
+echo "$(body "$r")" | grep -q 'id,created_at' && { echo "PASS: audit CSV header"; pass=$((pass+1)); } || { echo "FAIL: audit CSV"; fail=$((fail+1)); }
+r=$(curl -s -b "$TMPD/c-admin.txt" -H "X-CSRF-Token: $T_ADMIN" "$B/admin/metrics")
+echo "$r" | grep -q 'overdueReviewPackets' && echo "$r" | grep -q 'stuckGifts' && echo "$r" | grep -q 'overdueReports' && echo "$r" | grep -q 'openAppeals' && echo "$r" | grep -q 'openDisputes' && { echo "PASS: metrics include SLA alerts"; pass=$((pass+1)); } || { echo "FAIL: metrics alerts: $r"; fail=$((fail+1)); }
 
 # --- DB-backed rate limiting: 429 + Retry-After (LAST: burns the admin-login bucket) ---
-# admin-login hits so far: before-setup(1) + wrong(1) + correct(1) + re-login(1) = 4 of 10.
+# admin-login hits so far: before-setup(1) + wrong(1) + correct(1) + re-login(1) = 4 of 5 (item 777).
 for i in 1 2 3 4 5 6 7 8; do curl -s -o /dev/null -X POST "$B/admin/login" $J -d '{"pin":"wrongpin"}'; done
 r=$(curl -s -i -X POST "$B/admin/login" $J -d '{"pin":"wrongpin"}')
 echo "$r" | grep -qi '429' && { echo "PASS: 13th admin login -> 429"; pass=$((pass+1)); } || { echo "FAIL: expected 429"; fail=$((fail+1)); }

@@ -30,6 +30,34 @@ const ADMIN_IDLE_MINUTES = 30;
 const ADMIN_ELEVATED_MINUTES = 10; // item 808: PIN re-auth elevation window
 const RENEW_WITHIN_MS = 7 * 24 * 60 * 60 * 1000; // renew when < 7 days left
 
+// Item 788: security settings (admin-configurable, stored in settings).
+// Defaults match the current behaviour; the admin console can change them.
+const DEFAULT_SECURITY_SETTINGS = {
+  pinMinLength: 6,
+  adminIdleMinutes: 30,
+  lockoutAttempts: 5,
+  lockoutMinutes: 15,
+};
+
+async function getSecuritySettings() {
+  const stored = await db.getSettingJson('security_settings', null);
+  if (!stored || typeof stored !== 'object') return { ...DEFAULT_SECURITY_SETTINGS };
+  const out = { ...DEFAULT_SECURITY_SETTINGS };
+  if (Number.isInteger(stored.pinMinLength) && stored.pinMinLength >= 4 && stored.pinMinLength <= 32) {
+    out.pinMinLength = stored.pinMinLength;
+  }
+  if (Number.isInteger(stored.adminIdleMinutes) && stored.adminIdleMinutes >= 5 && stored.adminIdleMinutes <= 480) {
+    out.adminIdleMinutes = stored.adminIdleMinutes;
+  }
+  if (Number.isInteger(stored.lockoutAttempts) && stored.lockoutAttempts >= 3 && stored.lockoutAttempts <= 20) {
+    out.lockoutAttempts = stored.lockoutAttempts;
+  }
+  if (Number.isInteger(stored.lockoutMinutes) && stored.lockoutMinutes >= 5 && stored.lockoutMinutes <= 1440) {
+    out.lockoutMinutes = stored.lockoutMinutes;
+  }
+  return out;
+}
+
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
@@ -145,7 +173,7 @@ async function lookupSession(token) {
   const row = await db.get(
     `SELECT s.*, u.id AS user_id, u.display_name, u.username, u.age, u.country,
             u.city, u.about, u.language, u.photo_url, u.prefs_json, u.suspended,
-            u.suspended_until,
+            u.suspended_until, u.banned,
             u.terms_accepted_version, u.privacy_accepted_version,
             u.terms_accepted_at, u.privacy_accepted_at,
             u.created_at AS user_created_at
@@ -166,7 +194,7 @@ async function lookupSession(token) {
   }
   // Lazy suspension expiry (Phase 2 item 384): a timed suspension ends on
   // its own the first time the account is used after the end date.
-  if (row.suspended === 1 && row.suspended_until && new Date(row.suspended_until).getTime() <= Date.now()) {
+  if (row.suspended === 1 && row.suspended_until && row.banned !== 1 && new Date(row.suspended_until).getTime() <= Date.now()) {
     await db.run(
       `UPDATE users SET suspended = 0, suspended_reason = '', suspended_until = NULL, suspended_at = NULL WHERE id = $1`,
       [row.user_id]
@@ -289,8 +317,33 @@ async function attachUser(req, res, next) {
         notifyPrefs: p.notifyPrefs || prefs.notifyPrefs,
         showTotals: p.showTotals !== false,
         anonDefault: p.anonDefault === true,
+        // Phase 2 §7 notification preferences (612–618, 655, 680).
+        notifyTypes: p.notifyTypes || {},
+        pauseUntil: p.pauseUntil || null,
+        quietHours: p.quietHours || null,
+        tzOffsetMinutes: Number.isInteger(p.tzOffsetMinutes) ? p.tzOffsetMinutes : null,
+        notifyLang: p.notifyLang || null,
+        digestOptOut: p.digestOptOut === true,
+        referralOptOut: p.referralOptOut === true,
+        soundEnabled: p.soundEnabled === true,
       };
     } catch { /* keep defaults */ }
+    // Item 727: temporary suspension auto-restores on expiry, checked
+    // lazily on auth (no scheduler exists). Banned accounts never restore.
+    let suspended = row.suspended === 1;
+    if (suspended && row.suspended_until && row.banned !== 1 && Date.parse(row.suspended_until) <= Date.now()) {
+      try {
+        await db.run(
+          `UPDATE users SET suspended = 0, suspended_until = NULL, suspended_reason = '', suspended_at = NULL
+           WHERE id = $1`,
+          [row.user_id]
+        );
+        await logAudit('system', 'auto-restore', 'user_auto_restored', 'user', row.user_id, {
+          suspendedUntil: row.suspended_until,
+        });
+        suspended = false;
+      } catch { /* keep suspended on failure — fail closed */ }
+    }
     req.user = {
       id: row.user_id,
       displayName: row.display_name,
@@ -301,7 +354,7 @@ async function attachUser(req, res, next) {
       about: row.about,
       language: row.language,
       photoUrl: row.photo_url,
-      suspended: row.suspended === 1,
+      suspended,
       prefs,
       createdAt: row.user_created_at,
       consentCurrent: consentIsCurrent(row),
@@ -378,8 +431,9 @@ async function isPinSet() {
 // Setup is only possible while no PIN exists. Returns {ok} or {ok:false, error}.
 async function setupPin(pin) {
   if (await isPinSet()) return { ok: false, error: 'An admin PIN is already set. Use change-pin instead.' };
-  if (typeof pin !== 'string' || pin.length < 6 || pin.length > 64) {
-    return { ok: false, error: 'PIN must be 6–64 characters.' };
+  const { pinMinLength } = await getSecuritySettings();
+  if (typeof pin !== 'string' || pin.length < pinMinLength || pin.length > 64) {
+    return { ok: false, error: `PIN must be ${pinMinLength}–64 characters.` };
   }
   await db.setSetting('admin_pin_hash', hashPin(pin));
   await logAudit('admin', 'owner', 'admin_pin_set', 'settings', 'admin_pin_hash', {});
@@ -397,28 +451,30 @@ async function changePin(oldPin, newPin) {
   const stored = await db.getSetting('admin_pin_hash');
   if (!stored) return { ok: false, error: 'No admin PIN is set yet. Use setup-pin first.' };
   if (!verifyPin(oldPin, stored)) return { ok: false, error: 'Current PIN is incorrect.' };
-  if (typeof newPin !== 'string' || newPin.length < 6 || newPin.length > 64) {
-    return { ok: false, error: 'New PIN must be 6–64 characters.' };
+  const { pinMinLength } = await getSecuritySettings();
+  if (typeof newPin !== 'string' || newPin.length < pinMinLength || newPin.length > 64) {
+    return { ok: false, error: `New PIN must be ${pinMinLength}–64 characters.` };
   }
   await db.setSetting('admin_pin_hash', hashPin(newPin));
   await logAudit('admin', 'owner', 'admin_pin_changed', 'settings', 'admin_pin_hash', {});
   return { ok: true };
 }
 
-async function createAdminSession() {
+async function createAdminSession(adminUserId = null, userAgent = '') {
   const token = randomToken();
   const csrfToken = randomToken(24);
   const now = new Date();
   const expires = new Date(now.getTime() + ADMIN_SESSION_HOURS * 60 * 60 * 1000);
   await db.run(
-    'INSERT INTO admin_sessions (token_hash, created_at, expires_at, csrf_token, last_seen_at) VALUES ($1, $2, $3, $4, $5)',
-    [hashToken(token), now.toISOString(), expires.toISOString(), csrfToken, now.toISOString()]
+    'INSERT INTO admin_sessions (token_hash, admin_user_id, user_agent, created_at, expires_at, csrf_token, last_seen_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+    [hashToken(token), adminUserId, String(userAgent || '').slice(0, 500), now.toISOString(), expires.toISOString(), csrfToken, now.toISOString()]
   );
   return { token, csrfToken, expiresAt: expires.toISOString() };
 }
 
-// Enforces BOTH the 24h absolute expiry and the 30-minute idle timeout
-// (checklist item 239). Any successful lookup counts as activity.
+// Enforces BOTH the 24h absolute expiry and the idle timeout (checklist
+// item 239; idle minutes come from the security settings, item 788).
+// Any successful lookup counts as activity.
 async function lookupAdminSession(token) {
   if (!token) return null;
   const row = await db.get('SELECT * FROM admin_sessions WHERE token_hash = $1', [hashToken(token)]);
@@ -427,9 +483,10 @@ async function lookupAdminSession(token) {
     await db.run('DELETE FROM admin_sessions WHERE token_hash = $1', [hashToken(token)]);
     return null;
   }
+  const { adminIdleMinutes } = await getSecuritySettings();
   if (row.last_seen_at) {
     const idleMs = Date.now() - Date.parse(row.last_seen_at);
-    if (idleMs > ADMIN_IDLE_MINUTES * 60 * 1000) {
+    if (idleMs > adminIdleMinutes * 60 * 1000) {
       await db.run('DELETE FROM admin_sessions WHERE token_hash = $1', [hashToken(token)]);
       return null;
     }
@@ -454,7 +511,22 @@ async function requireAdmin(req, res, next) {
     if (!row) {
       return res.status(401).json({ error: { code: 'ADMIN_UNAUTHENTICATED', message: 'Admin login required.' } });
     }
-    req.admin = { actor: 'owner' };
+    // Items 771/772: per-admin accounts with roles. A session with no
+    // admin_user_id is the owner's shared-PIN session (role 'owner').
+    // Anything else resolves its role from admin_users.
+    let role = 'owner';
+    let displayName = 'Owner';
+    let adminUserId = null;
+    if (row.admin_user_id) {
+      const adminUser = await db.get('SELECT * FROM admin_users WHERE id = $1', [row.admin_user_id]);
+      if (!adminUser) {
+        return res.status(401).json({ error: { code: 'ADMIN_UNAUTHENTICATED', message: 'Admin account no longer exists.' } });
+      }
+      role = adminUser.role;
+      displayName = adminUser.display_name;
+      adminUserId = adminUser.id;
+    }
+    req.admin = { actor: adminUserId || 'owner', role, displayName, adminUserId };
     req.adminSessionRow = row;
     next();
   } catch (err) {
@@ -496,6 +568,166 @@ async function requireElevated(req, res, next) {
   } catch (err) {
     next(err);
   }
+}
+
+// Require one of the given admin roles (owner > moderator > viewer).
+// Use after requireAdmin.
+function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.admin || !roles.includes(req.admin.role)) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Your admin role does not allow this action.' } });
+    }
+    next();
+  };
+}
+
+// Viewers are read-only (item 772): block every non-GET admin request
+// for them, wherever this middleware is mounted.
+function blockViewerWrites(req, res, next) {
+  if (req.admin?.role === 'viewer' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Viewer accounts are read-only.' } });
+  }
+  next();
+}
+
+// ---- Per-admin accounts (items 771–773) ----
+// The owner's shared PIN (settings.admin_pin_hash) remains the owner
+// account. Additional admins have individual PINs in admin_users and are
+// created by redeeming a one-time invite code the owner generates in-app
+// (no email exists in this product, so the owner passes the code on
+// himself — item 773's swap).
+
+const ADMIN_ROLES = ['owner', 'moderator', 'viewer'];
+
+async function listAdminUsers() {
+  const { rows } = await db.query(
+    `SELECT id, display_name, role, failed_attempts, locked_until, created_at, last_login_at
+     FROM admin_users ORDER BY created_at ASC`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    displayName: r.display_name,
+    role: r.role,
+    lockedUntil: r.locked_until,
+    createdAt: r.created_at,
+    lastLoginAt: r.last_login_at,
+  }));
+}
+
+async function getAdminUser(id) {
+  const row = await db.get('SELECT * FROM admin_users WHERE id = $1', [id]);
+  if (!row) return null;
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    role: row.role,
+    lockedUntil: row.locked_until,
+    createdAt: row.created_at,
+    lastLoginAt: row.last_login_at,
+  };
+}
+
+async function createAdminUser(displayName, role, pin) {
+  if (!ADMIN_ROLES.includes(role)) return { ok: false, error: 'Role must be owner, moderator or viewer.' };
+  const name = String(displayName || '').trim();
+  if (name.length < 2 || name.length > 60) return { ok: false, error: 'Display name must be 2–60 characters.' };
+  const { pinMinLength } = await getSecuritySettings();
+  if (typeof pin !== 'string' || pin.length < pinMinLength || pin.length > 64) {
+    return { ok: false, error: `PIN must be ${pinMinLength}–64 characters.` };
+  }
+  const id = crypto.randomUUID();
+  await db.run(
+    `INSERT INTO admin_users (id, display_name, role, pin_hash, failed_attempts, locked_until, created_at, last_login_at)
+     VALUES ($1, $2, $3, $4, 0, NULL, $5, NULL)`,
+    [id, name, role, hashPin(pin), nowIso()]
+  );
+  await logAudit('admin', 'owner', 'admin_user_created', 'admin', id, { role, displayName: name });
+  return { ok: true, adminUser: { id, displayName: name, role } };
+}
+
+// Verify a per-admin PIN, enforcing the per-account lockout (item 777:
+// lockoutAttempts wrong attempts -> lockoutMinutes lock).
+async function verifyAdminUserPin(adminId, pin) {
+  const row = await db.get('SELECT * FROM admin_users WHERE id = $1', [adminId]);
+  if (!row) return { ok: false, error: 'Admin account not found.' };
+  const { lockoutAttempts, lockoutMinutes } = await getSecuritySettings();
+  if (row.locked_until && Date.parse(row.locked_until) > Date.now()) {
+    return { ok: false, locked: true, lockedUntil: row.locked_until, error: 'This admin account is locked. Try again later.' };
+  }
+  if (typeof pin === 'string' && pin && verifyPin(pin, row.pin_hash)) {
+    await db.run(
+      'UPDATE admin_users SET failed_attempts = 0, locked_until = NULL, last_login_at = $1 WHERE id = $2',
+      [nowIso(), row.id]
+    );
+    return { ok: true, adminUser: row };
+  }
+  const failed = (Number(row.failed_attempts) || 0) + 1;
+  const lockedUntil = failed >= lockoutAttempts
+    ? new Date(Date.now() + lockoutMinutes * 60 * 1000).toISOString()
+    : null;
+  await db.run(
+    'UPDATE admin_users SET failed_attempts = $1, locked_until = $2 WHERE id = $3',
+    [failed, lockedUntil, row.id]
+  );
+  if (lockedUntil) {
+    await logAudit('admin', row.id, 'admin_account_locked', 'admin', row.id, { failedAttempts: failed });
+  }
+  return {
+    ok: false,
+    locked: Boolean(lockedUntil),
+    lockedUntil,
+    remaining: Math.max(0, lockoutAttempts - failed),
+    error: 'Incorrect PIN.',
+  };
+}
+
+// One-time invite code: 16 chars from the recovery-code alphabet (shown
+// once to the owner; only the SHA-256 hash is stored).
+function generateInviteCode() {
+  const bytes = crypto.randomBytes(16);
+  let raw = '';
+  for (let i = 0; i < 16; i++) raw += RECOVERY_ALPHABET[bytes[i] % RECOVERY_ALPHABET.length];
+  return `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}`;
+}
+
+async function createAdminInvite(role, createdBy = 'owner') {
+  if (!['moderator', 'viewer'].includes(role)) {
+    return { ok: false, error: 'Invites can only create moderator or viewer accounts.' };
+  }
+  const code = generateInviteCode();
+  const id = crypto.randomUUID();
+  await db.run(
+    `INSERT INTO admin_invites (id, code_hash, role, created_by, created_at, used_at, used_by)
+     VALUES ($1, $2, $3, $4, $5, NULL, NULL)`,
+    [id, crypto.createHash('sha256').update(code.replace(/-/g, '')).digest('hex'), role, createdBy, nowIso()]
+  );
+  await logAudit('admin', createdBy, 'admin_invite_created', 'admin', id, { role });
+  return { ok: true, invite: { id, code, role } };
+}
+
+async function redeemAdminInvite(code, displayName, pin) {
+  const normalised = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (normalised.length !== 16) return { ok: false, error: 'That invite code does not look right.' };
+  const codeHash = crypto.createHash('sha256').update(normalised).digest('hex');
+  const invite = await db.get('SELECT * FROM admin_invites WHERE code_hash = $1', [codeHash]);
+  if (!invite) return { ok: false, error: 'Invite code not found.' };
+  if (invite.used_at) return { ok: false, error: 'This invite code has already been used.' };
+  const created = await createAdminUser(displayName, invite.role, pin);
+  if (!created.ok) return created;
+  await db.run(
+    'UPDATE admin_invites SET used_at = $1, used_by = $2 WHERE id = $3',
+    [nowIso(), created.adminUser.id, invite.id]
+  );
+  return { ok: true, adminUser: created.adminUser };
+}
+
+async function deleteAdminUser(id) {
+  const row = await db.get('SELECT * FROM admin_users WHERE id = $1', [id]);
+  if (!row) return { ok: false, error: 'Admin account not found.' };
+  await db.run('DELETE FROM admin_users WHERE id = $1', [id]);
+  await db.run('DELETE FROM admin_sessions WHERE admin_user_id = $1', [id]);
+  await logAudit('admin', 'owner', 'admin_user_deleted', 'admin', id, { role: row.role });
+  return { ok: true };
 }
 
 // ---- Account recovery codes ----
@@ -727,6 +959,17 @@ module.exports = {
   elevateAdminSession,
   isAdminElevated,
   requireElevated,
+  requireRole,
+  blockViewerWrites,
+  listAdminUsers,
+  getAdminUser,
+  createAdminUser,
+  verifyAdminUserPin,
+  createAdminInvite,
+  redeemAdminInvite,
+  deleteAdminUser,
+  getSecuritySettings,
+  DEFAULT_SECURITY_SETTINGS,
   generateRecoveryCode,
   normalizeRecoveryCode,
   recoveryLookupKey,

@@ -37,6 +37,7 @@ const {
 } = require('../lib/security');
 const { runGiftMaintenanceSafe } = require('../lib/gift-maintenance');
 const { awardAchievements } = require('../lib/achievements');
+const { maybeNotifyReferralMilestone } = require('../lib/referrals');
 
 const router = express.Router();
 
@@ -239,6 +240,13 @@ router.post('/', requireActive, rateLimit('gift-create', 20, 60 * 60 * 1000), as
     );
     const gift = await db.get('SELECT * FROM gifts WHERE id = $1', [id]);
     await logAudit('user', req.user.id, 'gift_created', 'gift', id, { billId: bill.id, amountMinor, directPay: isDirect });
+    // Item 645: alert the poster that someone started helping (before any
+    // money moves — distinct from the confirm / reported-sent alerts).
+    await createNotification(
+      bill.user_id, 'gift_started', 'Someone started helping',
+      `${req.user.displayName} started helping with "${bill.title}" (${amountMinor / 100} ${bill.currency}).`,
+      `#/mybills`
+    );
     // First-gift celebration (item 480): the client celebrates when this
     // is the supporter's first-ever gift.
     const priorGifts = Number((await db.get(
@@ -501,6 +509,7 @@ router.post('/:id/confirm', requireActive, rateLimitAccount('gift-confirm', 20, 
       return res.status(409).json({ error: { code: 'INVALID_STATE', message: `Only a donor-reported gift can be confirmed (current: ${gift.status}).` } });
     }
     const now = nowIso();
+    const coveredBefore = Number(bill.covered_minor || 0);
     const credit = Math.min(gift.amount_minor, Math.max(0, bill.amount_minor - bill.covered_minor));
     // First confirmed gift? (item 480 — first-gift celebration.)
     const priorConfirmed = Number((await db.get(
@@ -539,6 +548,74 @@ router.post('/:id/confirm', requireActive, rateLimitAccount('gift-confirm', 20, 
     // Best-effort — a failure here must never fail the confirmation.
     let newAchievements = [];
     try { newAchievements = await awardAchievements(gift.supporter_id); } catch { /* best-effort */ }
+    // --- Phase 2 §7 gift milestones (647–651, 648 first-gift, 674 referral) ---
+    const billUrl = `#/bill/${bill.id}`;
+    const coveredAfter = Number(updatedBill.covered_minor || 0);
+    const total = Number(bill.amount_minor || 0);
+    const pctBefore = total > 0 ? (coveredBefore / total) * 100 : 0;
+    const pctAfter = total > 0 ? (coveredAfter / total) * 100 : 0;
+    // 647: 50% / 75% progress alerts to the poster (crossing each threshold
+    // fires exactly once — the before/after comparison is the dedupe).
+    if (pctBefore < 50 && pctAfter >= 50 && pctAfter < 100) {
+      await createNotification(bill.user_id, 'gift_progress', 'Halfway there!',
+        `"${bill.title}" is now ${Math.round(pctAfter)}% funded.`, billUrl);
+    } else if (pctBefore < 75 && pctAfter >= 75 && pctAfter < 100) {
+      await createNotification(bill.user_id, 'gift_progress', 'Almost there!',
+        `"${bill.title}" is now ${Math.round(pctAfter)}% funded.`, billUrl);
+    }
+    // 648: first-gift alert (first CONFIRMED gift on this bill).
+    const confirmedCount = await db.get(
+      `SELECT COUNT(*) AS c FROM gifts WHERE bill_id = $1 AND status = 'confirmed'`,
+      [bill.id]
+    );
+    if (Number(confirmedCount?.c || 0) === 1) {
+      await createNotification(bill.user_id, 'first_gift', 'Your first help arrived!',
+        `${req.user.displayName} confirmed the first help on "${bill.title}".`, billUrl);
+    }
+    // 651: fully-funded alert to the poster and every confirmed giver.
+    if (pctAfter >= 100 && total > 0) {
+      await createNotification(bill.user_id, 'gift_fully_funded', 'Fully funded!',
+        `"${bill.title}" is fully funded. Thank you to everyone who helped.`, billUrl);
+      const { rows: givers } = await db.query(
+        `SELECT DISTINCT supporter_id FROM gifts WHERE bill_id = $1 AND status = 'confirmed'`,
+        [bill.id]
+      );
+      for (const g of givers) {
+        await createNotification(g.supporter_id, 'gift_fully_funded', 'Fully funded!',
+          `"${bill.title}" — a bill you helped — is fully funded.`, billUrl);
+      }
+    }
+    // 649/650: giver milestones (lifetime confirmed total per currency;
+    // thresholds 1,000 / 5,000 / 10,000 — same numbers in NPR and INR).
+    const giverTotals = await db.get(
+      `SELECT COALESCE(SUM(amount_minor), 0) AS total,
+              COUNT(DISTINCT bill_id) AS bills
+       FROM gifts WHERE supporter_id = $1 AND status = 'confirmed' AND currency = $2`,
+      [gift.supporter_id, gift.currency]
+    );
+    const giverTotalMinor = Number(giverTotals?.total || 0);
+    const totalBeforeMinor = giverTotalMinor - gift.amount_minor;
+    for (const threshold of [100000, 500000, 1000000]) {
+      if (totalBeforeMinor < threshold && giverTotalMinor >= threshold) {
+        await createNotification(
+          gift.supporter_id, 'milestone_giver', 'Milestone reached!',
+          `You have now given ${threshold / 100} ${gift.currency} in total on Sahay Pay. Thank you.`,
+          '#/leaderboard'
+        );
+        break;
+      }
+    }
+    // 650: distinct-bills-helped milestones (5 / 10 / 25 bills).
+    const billsHelped = Number(giverTotals?.bills || 0);
+    if ([5, 10, 25].includes(billsHelped)) {
+      await createNotification(
+        gift.supporter_id, 'milestone_helper', `You helped ${billsHelped} bills!`,
+        `You have now helped ${billsHelped} different bills on Sahay Pay.`, '#/leaderboard'
+      );
+    }
+    // 674: this supporter's first confirmed gift counts as a referral
+    // milestone for whoever invited them (and vice-versa for a first bill).
+    await maybeNotifyReferralMilestone(gift.supporter_id, 'first_gift');
     const updated = await db.get('SELECT * FROM gifts WHERE id = $1', [gift.id]);
     res.json({
       gift: publicGift(updated), creditedMinor: credit, billCoveredMinor: updatedBill.covered_minor,
@@ -880,10 +957,10 @@ router.get('/bill/:billId', requireAuth, async (req, res, next) => {
   }
 });
 
-// GET /api/gifts/:id/dispute-status — item 938 (standalone part): both
-// parties can see the state of a reported payment problem. The admin
-// dispute queue itself is §8.754 (outside this workstream) — until it
-// lands, disputes show as "waiting for owner review".
+// GET /api/gifts/:id/dispute-status — item 938: both parties can see the
+// state of a reported payment problem. The timeline includes the §8.754
+// admin dispute-queue actions (resolve-confirm / resolve-fail /
+// refund-guidance / escalate), so a queue decision shows up here.
 router.get('/:id/dispute-status', requireAuth, async (req, res, next) => {
   try {
     const gift = await db.get('SELECT * FROM gifts WHERE id = $1', [req.params.id]);
@@ -895,7 +972,9 @@ router.get('/:id/dispute-status', requireAuth, async (req, res, next) => {
       `SELECT action, actor_id, created_at FROM audit_logs
        WHERE target_type = 'gift' AND target_id = $1
          AND action IN ('gift_created', 'payout_revealed', 'gift_reported_sent',
-                        'gift_confirmed', 'gift_not_received', 'gift_disputed')
+                        'gift_confirmed', 'gift_not_received', 'gift_disputed',
+                        'gift_admin_confirmed', 'dispute_resolved_failed',
+                        'dispute_refund_guidance', 'dispute_escalated')
        ORDER BY created_at ASC`,
       [gift.id]
     );

@@ -30,6 +30,15 @@ function parsePrefs(row) {
       hideLiveAsks: p.hideLiveAsks === true,
       hideFollowers: p.hideFollowers === true,
       hideFromSupporterWall: p.hideFromSupporterWall === true,
+      // Phase 2 §7 notification preferences (612–618, 655, 680).
+      notifyTypes: p.notifyTypes || {},
+      pauseUntil: p.pauseUntil || null,
+      quietHours: p.quietHours || null,
+      tzOffsetMinutes: Number.isInteger(p.tzOffsetMinutes) ? p.tzOffsetMinutes : null,
+      notifyLang: p.notifyLang || null,
+      digestOptOut: p.digestOptOut === true,
+      referralOptOut: p.referralOptOut === true,
+      soundEnabled: p.soundEnabled === true,
     };
   } catch {
     return { notifyPrefs: { posts: true, gifts: true, brands: true }, showTotals: true, anonDefault: false };
@@ -158,7 +167,8 @@ router.patch('/me', requireAuth, async (req, res, next) => {
     }
 
     // Notification + privacy preferences live in prefs_json (merged, not replaced).
-    const prefKeys = ['notifyPrefs', 'showTotals', 'anonDefault', 'hideGiftHistory', 'hideLiveAsks', 'hideFollowers', 'hideFromSupporterWall'];
+    const prefKeys = ['notifyPrefs', 'showTotals', 'anonDefault', 'hideGiftHistory', 'hideLiveAsks', 'hideFollowers', 'hideFromSupporterWall',
+      'notifyTypes', 'pauseUntil', 'quietHours', 'tzOffsetMinutes', 'notifyLang', 'digestOptOut', 'referralOptOut', 'soundEnabled'];
     if (prefKeys.some((k) => body[k] !== undefined)) {
       const current = await db.get('SELECT prefs_json FROM users WHERE id = $1', [req.user.id]);
       let prefs = {};
@@ -173,6 +183,36 @@ router.patch('/me', requireAuth, async (req, res, next) => {
       for (const k of ['showTotals', 'anonDefault', 'hideGiftHistory', 'hideLiveAsks', 'hideFollowers', 'hideFromSupporterWall']) {
         if (body[k] !== undefined) prefs[k] = body[k] === true;
       }
+      // Phase 2 §7: per-event toggles (612–615), pause-all (614), quiet
+      // hours (617), notification language (618), digest opt-out (655),
+      // referral opt-out (680), notification sound (610).
+      if (body.notifyTypes !== undefined && typeof body.notifyTypes === 'object' && !Array.isArray(body.notifyTypes)) {
+        prefs.notifyTypes = { ...(prefs.notifyTypes || {}) };
+        for (const [k, v] of Object.entries(body.notifyTypes)) {
+          if (typeof v === 'boolean') prefs.notifyTypes[String(k).slice(0, 40)] = v;
+        }
+      }
+      if (body.pauseUntil !== undefined) {
+        prefs.pauseUntil = body.pauseUntil === null ? null
+          : (Number.isFinite(Date.parse(body.pauseUntil)) ? new Date(body.pauseUntil).toISOString() : prefs.pauseUntil);
+      }
+      if (body.quietHours !== undefined) {
+        prefs.quietHours = body.quietHours === null ? null
+          : (Number.isInteger(body.quietHours?.start) && Number.isInteger(body.quietHours?.end)
+            && body.quietHours.start >= 0 && body.quietHours.start <= 23
+            && body.quietHours.end >= 0 && body.quietHours.end <= 23
+            ? { start: body.quietHours.start, end: body.quietHours.end } : prefs.quietHours);
+      }
+      if (body.tzOffsetMinutes !== undefined && Number.isInteger(body.tzOffsetMinutes)
+        && body.tzOffsetMinutes >= -720 && body.tzOffsetMinutes <= 840) {
+        prefs.tzOffsetMinutes = body.tzOffsetMinutes;
+      }
+      if (body.notifyLang !== undefined && ['en', 'ne', 'hi'].includes(body.notifyLang)) {
+        prefs.notifyLang = body.notifyLang;
+      }
+      if (body.digestOptOut !== undefined) prefs.digestOptOut = body.digestOptOut === true;
+      if (body.referralOptOut !== undefined) prefs.referralOptOut = body.referralOptOut === true;
+      if (body.soundEnabled !== undefined) prefs.soundEnabled = body.soundEnabled === true;
       await db.run('UPDATE users SET prefs_json = $1 WHERE id = $2', [JSON.stringify(prefs), req.user.id]);
     }
 
@@ -257,6 +297,33 @@ router.get('/export', requireAuth, async (req, res, next) => {
       `SELECT key, awarded_at FROM achievements WHERE user_id = $1 ORDER BY awarded_at ASC`,
       [userId]
     );
+    // Phase 2 §7 (item 691): messages, thank-you notes and referrals join
+    // the export. Payout accounts are still NEVER included.
+    const threads = await db.query(
+      `SELECT id, bill_id, supporter_id, poster_id, created_at, updated_at
+       FROM gift_threads WHERE supporter_id = $1 OR poster_id = $1 ORDER BY updated_at DESC`,
+      [userId]
+    );
+    const threadIds = threads.rows.map((t) => t.id);
+    let messages = [];
+    if (threadIds.length) {
+      const ph = threadIds.map((_, i) => `$${i + 1}`).join(',');
+      const msgs = await db.query(
+        `SELECT id, thread_id, sender_id, body, is_read, hidden, created_at
+         FROM gift_thread_messages WHERE thread_id IN (${ph}) ORDER BY created_at ASC`,
+        threadIds
+      );
+      messages = msgs.rows;
+    }
+    const thankYouNotes = await db.query(
+      `SELECT id, bill_id, gift_id, sender_id, recipient_id, body, is_public, created_at
+       FROM thank_you_notes WHERE sender_id = $1 OR recipient_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    const referrals = await db.query(
+      `SELECT id, display_name, username, created_at FROM users WHERE referred_by = $1 ORDER BY created_at ASC`,
+      [userId]
+    );
     res.set('Content-Disposition', 'attachment; filename="sahay-pay-my-data.json"');
     res.json({
       exportedAt: nowIso(),
@@ -272,6 +339,10 @@ router.get('/export', requireAuth, async (req, res, next) => {
       following: following.rows,
       followers: followers.rows,
       achievements: achievements.rows,
+      messageThreads: threads.rows,
+      messages,
+      thankYouNotes: thankYouNotes.rows,
+      referrals: referrals.rows,
     });
   } catch (err) {
     next(err);

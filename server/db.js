@@ -281,6 +281,27 @@ const EXTRA_COLUMNS = [
   ['reports', 'decision', "TEXT DEFAULT ''"],
   ['reports', 'decision_reason', "TEXT DEFAULT ''"],
   ['reports', 'decided_at', 'TEXT'],
+  // Phase 2 (sections 7–8): referrals + moderation flags on users,
+  // notification delivery/broadcast columns, case severity/assignment,
+  // audit hash chain, per-admin session identity.
+  ['users', 'referral_code', 'TEXT'],
+  ['users', 'referred_by', 'TEXT'],
+  ['users', 'admin_notes', "TEXT DEFAULT ''"],
+  ['users', 'trusted_poster', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'watchlist', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'banned', 'INTEGER NOT NULL DEFAULT 0'],
+  ['notifications', 'deliver_at', 'TEXT'],
+  ['notifications', 'broadcast_id', 'TEXT'],
+  ['reports', 'severity', "TEXT DEFAULT 'low'"],
+  ['reports', 'assigned_to', "TEXT DEFAULT ''"],
+  ['reports', 'needs_legal', 'INTEGER NOT NULL DEFAULT 0'],
+  ['gifts', 'severity', "TEXT DEFAULT 'low'"],
+  ['gifts', 'assigned_to', "TEXT DEFAULT ''"],
+  ['gifts', 'needs_legal', 'INTEGER NOT NULL DEFAULT 0'],
+  ['audit_logs', 'prev_hash', 'TEXT'],
+  ['audit_logs', 'entry_hash', 'TEXT'],
+  ['admin_sessions', 'admin_user_id', 'TEXT'],
+  ['admin_sessions', 'user_agent', 'TEXT'],
 ];
 
 // Cold-start mitigation (checklist priority fix (g)): the full migrate is
@@ -383,6 +404,9 @@ async function migrate() {
   // trip either way.
   await execBatch(`
     CREATE INDEX IF NOT EXISTS idx_users_recovery ON users(recovery_code_lookup);
+    CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code);
+    CREATE INDEX IF NOT EXISTS idx_notifications_broadcast ON notifications(broadcast_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_hash ON audit_logs(entry_hash);
     CREATE TABLE IF NOT EXISTS bill_edits (
       id TEXT PRIMARY KEY,
       bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
